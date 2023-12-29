@@ -1,4 +1,4 @@
-# Chisel workbench
+# Chisel workbench for NPU design
 
 This is a chisel workbench designed for someone who like docker containers and vscode dev container plugin.
 
