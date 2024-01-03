@@ -11,3 +11,6 @@ We expect this implementation supports:
 - Transformer Optimized
 - And more coming...
 
+## Components
+
+- [Processing Element (PE)](components/ProcessingElement.md)
