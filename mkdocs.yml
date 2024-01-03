@@ -1,0 +1,21 @@
+site_name: Chisel OpenNPU Docs
+repo_name: Chisel NPU
+
+theme:
+  name: material
+
+
+markdown_extensions:
+  - admonition
+  - markdown_wavedrom
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+extra_javascript:
+  - https://cdnjs.cloudflare.com/ajax/libs/wavedrom/2.6.8/wavedrom.min.js
+  - https://cdnjs.cloudflare.com/ajax/libs/wavedrom/2.6.8/skins/default.js
+  - js/wavedrom_loader.js

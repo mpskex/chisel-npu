@@ -1,3 +1,5 @@
+.PHONY: docs
+
 # export ARCH=`uname -m`
 # Currently the image does not support arm64, 
 # We have to hard code the arch into amd64 as a workaround
@@ -39,3 +41,7 @@ push-image-amd64:
 push-image-arm64:
 	docker push fangruil/chisel-dev:arm64 
 	docker push fangruil/chisel-dev:arm64-${VER}
+
+docs:
+	pip3 install markdown-wavedrom mkdocs mkdocs-material
+	mkdocs serve

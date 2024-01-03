@@ -13,6 +13,8 @@ make container
 make test
 # Build verilog design from chisel
 make build
+# Build docs, visit http://localhost:8000 to see the documentation
+make docs
 ```
 
 Then you can use [vscode dev container plugin](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers) to connect this container. Happy coding (for chip)

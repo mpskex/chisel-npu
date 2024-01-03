@@ -15,10 +15,13 @@ class PE(val nbits: Int = 8) extends Module {
     val left_in     = Input(UInt(nbits.W))
     val bottom_out  = Output(UInt((nbits*2).W))
     val right_out   = Output(UInt((nbits*2).W))
-    val out         = Output(UInt((nbits*2).W))
+    //  The register bandwith is optimized for large transformer 
+    //  The lower bound of max cap matrix size is:
+    //    2^12 x 2^12 = (4096 x 4096)
+    val out         = Output(UInt((nbits*2 + 12).W))
   })
 
-  val res = RegInit(0.U((nbits*2).W))
+  val res = RegInit(0.U((nbits*2 + 12).W))
   val reg_h = RegInit(0.U(nbits.W))
   val reg_v = RegInit(0.U(nbits.W))
 
