@@ -1,4 +1,6 @@
-# Chisel workbench for NPU design
+# Chisel workbench for Open NPU design
+
+[![Documentation Status](https://readthedocs.org/projects/chisel-opennpu/badge/?version=latest)](https://chisel-opennpu.readthedocs.io/en/latest/?badge=latest)
 
 This is a chisel workbench designed for someone who like docker containers and vscode dev container plugin.
 
