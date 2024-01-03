@@ -1,0 +1,3 @@
+markdown-wavedrom
+mkdocs
+mkdocs-material
