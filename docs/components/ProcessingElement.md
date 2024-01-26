@@ -32,7 +32,7 @@ We should also design a configurable design. For some simple implementation for 
 
 > **NOTE**: below is not implemented
 
-Our NPU should suport multiple functionality including `MUL`, `ADD` and other ops. As we are combining [VLIW](https://en.wikipedia.org/wiki/Very_long_instruction_word) with systolic array, we need to expand our control bit length to support independent control to those detachable ALU design.
+Our NPU should support multiple functionality including `MUL`, `ADD` and other ops. As we are combining [VLIW](https://en.wikipedia.org/wiki/Very_long_instruction_word) with systolic array, we need to expand our control bit length to support independent control to those detachable ALU design.
 
 For each 1-way ALU pass, the control will look like this:
 
@@ -114,7 +114,7 @@ This value will be written to NVRAM / other storages. It will represent the actu
 
 > **NOTE**: below is not implemented
 
-We borrow the basic idea from (VLIW)[https://en.wikipedia.org/wiki/Very_long_instruction_word] architecture and try to combine it with systolic arrays. Thus, we will have different layouts for different data length setup. This is designated for dynamic scheduling and improved FP32/16 performance.
+We borrow the basic idea from [VLIW](https://en.wikipedia.org/wiki/Very_long_instruction_word) architecture and try to combine it with systolic arrays. Thus, we will have different layouts for different data length setup. This is designated for dynamic scheduling and improved FP32/16 performance.
 
 When setting `DLEN` to `0`, then the 32-bit input will be treated as below:
 
