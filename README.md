@@ -21,6 +21,11 @@ make docs
 
 Then you can use [vscode dev container plugin](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers) to connect this container. Happy coding (for chip)
 
+## Reference
+
+1. [Chisel Matmul](https://github.com/kazutomo/Chisel-MatMul)
+2. [Patmos VLIW processor](https://github.com/t-crest/patmos/tree/master/hardware)
+
 ## Useful Links
 
 1. [Chisel project template](https://github.com/freechipsproject/chisel-template/tree/main#chisel-project-template)

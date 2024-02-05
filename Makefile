@@ -43,5 +43,5 @@ push-image-arm64:
 	docker push fangruil/chisel-dev:arm64-${VER}
 
 docs:
-	pip3 install markdown-wavedrom mkdocs mkdocs-material
+	pip3 install markdown-wavedrom mkdocs mkdocs-material python-markdown-math
 	mkdocs serve

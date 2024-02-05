@@ -73,5 +73,5 @@ RUN sbt "unipublish / publishLocal"
 # clean up chisel sources
 WORKDIR /workspace/
 RUN rm -rf /workspace/chisel
-
+ENV COURSIER_CACHE="/workspace/.cache/coursier/v1"
 CMD ["bash"]

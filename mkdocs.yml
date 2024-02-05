@@ -14,8 +14,13 @@ markdown_extensions:
         - name: mermaid
           class: mermaid
           format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.arithmatex:
+      generic: true
 
 extra_javascript:
   - https://cdnjs.cloudflare.com/ajax/libs/wavedrom/2.6.8/wavedrom.min.js
   - https://cdnjs.cloudflare.com/ajax/libs/wavedrom/2.6.8/skins/default.js
   - js/wavedrom_loader.js
+  - js/mathjax_helper.js
+  - https://polyfill.io/v3/polyfill.min.js?features=es6
+  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js

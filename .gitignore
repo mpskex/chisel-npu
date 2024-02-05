@@ -8,3 +8,4 @@ test*/
 *.anno.json
 site/
 .DS_Store
+.cache
