@@ -13,4 +13,4 @@ For overall chip design, you may find [the FullChipDesign website](https://www.f
 
 ## Implementation Details
 
-- [Processing Element (PE)](components/ProcessingElement.md)
+- [Processing Element (PE)](implementations/ProcessingElement.md)

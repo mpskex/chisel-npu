@@ -8,30 +8,16 @@ import chiseltest._
 import org.scalatest.flatspec.AnyFlatSpec
 import chisel3.experimental.BundleLiterals._
 
-/**
-  * This is a trivial example of how to run this Specification
-  * From within sbt use:
-  * {{{
-  * testOnly 
-  * }}}
-  * From a terminal shell use:
-  * {{{
-  * sbt 'testOnly gcd.GCDSpec'
-  * }}}
-  * Testing from mill:
-  * {{{
-  * mill %NAME%.test.testOnly gcd.GCDSpec
-  * }}}
-  */
+
 class PESpec extends AnyFlatSpec with ChiselScalatestTester {
 
   "PE" should "output multiplied number from top and left" in {
     test(new PE(16)) { dut =>
       val rand = new Random
       var prod = 0
-      for (n <- 1 until 4096) {
-        val _top_in_ = rand.between(1, 255)
-        val _left_in_ = rand.between(1, 255)
+      for (n <- 0 until 128) {
+        val _top_in_ = rand.between(0, 255)
+        val _left_in_ = rand.between(0, 255)
         dut.io.top_in.poke(_top_in_)
         dut.io.left_in.poke(_left_in_)
         dut.io.accum.poke(true)

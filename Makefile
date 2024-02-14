@@ -45,3 +45,9 @@ push-image-arm64:
 docs:
 	pip3 install markdown-wavedrom mkdocs mkdocs-material python-markdown-math
 	mkdocs serve
+
+clean:
+	rm -rf project/target project/project/target target *.v *.anno.json
+
+clean-cache:
+	rm -rf .cache

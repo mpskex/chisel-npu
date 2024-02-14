@@ -1,6 +1,6 @@
 *.log
 target/
-test*/
+test_run_dir/
 .vscode
 .metals
 .scalafmt.conf

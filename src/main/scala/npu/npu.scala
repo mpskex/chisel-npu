@@ -1,4 +1,4 @@
-package top
+package npu
 
 import chisel3._
 import java.nio.file.{Paths, Files}
@@ -6,7 +6,7 @@ import java.nio.charset.StandardCharsets
 import circt.stage.ChiselStage
 import procElem.PE
 
-class Top extends Module {
+class NPU extends Module {
 
   val nbits: Int = 8
   val io = IO(new Bundle {
@@ -33,8 +33,8 @@ object Main extends App {
   // These lines generate the Verilog output
 
   val hdl = ChiselStage.emitSystemVerilog(
-    new Top(),
+    new NPU(),
     firtoolOpts = Array("-disable-all-randomization", "-strip-debug-info")
   )
-  Files.write(Paths.get("top.v"), hdl.getBytes(StandardCharsets.UTF_8))
+  Files.write(Paths.get("npu.v"), hdl.getBytes(StandardCharsets.UTF_8))
 }

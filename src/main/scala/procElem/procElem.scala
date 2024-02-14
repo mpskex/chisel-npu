@@ -9,16 +9,17 @@ import chisel3._
   * This is the core compute unit .
   */
 class PE(val nbits: Int = 8) extends Module {
-  val io = IO(new Bundle {
-    val accum       = Input(Bool())
-    val top_in      = Input(UInt(nbits.W))
-    val left_in     = Input(UInt(nbits.W))
-    val bottom_out  = Output(UInt((nbits).W))
-    val right_out   = Output(UInt((nbits).W))
-    //  The register bandwith is optimized for large transformer 
-    //  The lower bound of max cap matrix size is:
-    //    2^12 x 2^12 = (4096 x 4096)
-    val out         = Output(UInt((nbits*2 + 12).W))
+  val io = IO(
+    new Bundle {
+      val accum       = Input(Bool())
+      val top_in      = Input(UInt(nbits.W))
+      val left_in     = Input(UInt(nbits.W))
+      val bottom_out  = Output(UInt((nbits).W))
+      val right_out   = Output(UInt((nbits).W))
+      //  The register bandwith is optimized for large transformer 
+      //  The lower bound of max cap matrix size is:
+      //    2^12 x 2^12 = (4096 x 4096)
+      val out         = Output(UInt((nbits * 2 + 12).W))
   })
 
   val res = RegInit(0.U((nbits*2 + 12).W))
