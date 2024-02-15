@@ -13,9 +13,7 @@
                BOTTOM   OUT (to TLB mapped memory)
 ```
 
-Processing Element is the fundamental element in systolic array. This is a basic implementation of a 2D PE for 2D systolic array.
-
-![Processing Elements Execution](../images/systolic.jpeg)
+Processing Element is the fundamental element in systolic array. This is a basic implementation of a 2D PE for 2D systolic array or DSP grid.
 
 ## Timing
 

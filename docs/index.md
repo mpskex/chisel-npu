@@ -14,3 +14,4 @@ For overall chip design, you may find [the FullChipDesign website](https://www.f
 ## Implementation Details
 
 - [Processing Element (PE)](implementations/ProcessingElement.md)
+- [Systolic Array (SA)](implementations/SystolicArray.md)
