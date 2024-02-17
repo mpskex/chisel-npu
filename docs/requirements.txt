@@ -1,3 +1,5 @@
 markdown-wavedrom
 mkdocs
 mkdocs-material
+python-markdown-math
+mkdocs-mermaid2-plugin
