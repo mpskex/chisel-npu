@@ -1,72 +1,26 @@
 //// See README.md for license details.
 
-package systolicArray
+package ncore
 
+import testUtil._
 import scala.util.Random
 import chisel3._
 import chiseltest._
 import org.scalatest.flatspec.AnyFlatSpec
 import chisel3.experimental.BundleLiterals._
 
-class SASpec extends AnyFlatSpec with ChiselScalatestTester {
+class CoreSpec extends AnyFlatSpec with ChiselScalatestTester {
 
-    def printMatrix(mat: Array[Int], n: Int): Unit = {
-        println("[")
-        for (i <- 0 until n) {
-            var _row = ""
-            for (j <- 0 until n) {
-                _row += mat(i * n + j).toString() + ", "
-            }
-            println("[" + _row + "],")
-        }
-        println("]")
-    }
-
-    def printMatrixChisel(mat: chisel3.Vec[chisel3.UInt], n: Int): Unit = {
-        println("[")
-        for (i <- 0 until n) {
-            var _row = ""
-            for (j <- 0 until n) {
-                _row += mat(i * n + j).peekInt().toString() + ", "
-            }
-            println("[" + _row + "],")
-        }
-        println("]")
-    }
-
-    "SA" should "control with a systolic array" in {
-        test(new _ControlArray(4)) { dut =>
-            val _n = 4
-            val rand = new Random
-            var history = new Array[Int](2 * _n - 1)
-            var prod = 0
-            for (n <- 0 until 16) {
-                val _cbus_in = rand.between(0, 255)
-                history +:= _cbus_in
-                dut.io.cbus_in.poke(_cbus_in)
-                dut.clock.step()
-                history = history.slice(0, 2 * _n - 1)
-                println("Input tick @ " + n + ": " + _cbus_in)
-                for(i: Int <- 0 until _n){
-                    for(j:Int <- 0 until _n) {
-                        dut.io.cbus_out(_n * i + j).expect(history(i + j))
-                    }
-                }
-                println("Control tick @ " + n + " : ")
-                this.printMatrixChisel(dut.io.cbus_out, _n)
-            }
-        }
-    }
-
-    "SA" should "do a normal matrix multiplication" in {
-        test(new SystolicArray(4, 8)) { dut =>
+    "NeuralCore" should "do a normal matrix multiplication" in {
+        test(new NeuralCore(4, 8)) { dut =>
+            val print_helper = new testUtil.PrintHelper()
             val _n = 4
             val rand = new Random
             val _mat_a = new Array[Int](_n * _n)
             val _mat_b = new Array[Int](_n * _n)
             val _expected = new Array[Int](_n * _n)
             var _res = new Array[Int](_n * _n)
-            
+
             // random initialize the
             for (i <- 0 until _n * _n) {
                 _mat_a(i) = rand.between(0, 255)
@@ -84,11 +38,11 @@ class SASpec extends AnyFlatSpec with ChiselScalatestTester {
 
             // print the expected results
             println("===== MAT A =====")
-            this.printMatrix(_mat_a, _n)
+            print_helper.printMatrix(_mat_a, _n)
             println("===== MAT B =====")
-            this.printMatrix(_mat_b, _n)
+            print_helper.printMatrix(_mat_b, _n)
             println("+++++ MAT C +++++")
-            this.printMatrix(_expected, _n)
+            print_helper.printMatrix(_expected, _n)
 
             // systolic arrays has latency of 3 * _n - 2
             for (i_tick <- 0 until 3 * _n - 2) {
@@ -146,7 +100,7 @@ class SASpec extends AnyFlatSpec with ChiselScalatestTester {
                 }
             }
             println("+++++ MAT C from HW ++++")
-            this.printMatrix(_res, _n)
+            print_helper.printMatrix(_res, _n)
         }
     }   
 }

@@ -2,6 +2,8 @@
 
 [![Documentation Status](https://readthedocs.org/projects/chisel-opennpu/badge/?version=latest)](https://chisel-opennpu.readthedocs.io/en/latest/?badge=latest)
 
+Docs: https://chisel-opennpu.readthedocs.io
+
 This is a chisel workbench designed for someone who like docker containers and vscode dev container plugin.
 
 DEVELOP IN PROGRESS. COMMERCIAL USE IS NOT ALLOWED.

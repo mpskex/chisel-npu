@@ -4,6 +4,9 @@ repo_name: Chisel NPU
 theme:
   name: material
 
+plugins:
+    - search
+    - mermaid2
 
 markdown_extensions:
   - admonition
