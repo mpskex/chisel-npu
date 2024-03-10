@@ -14,7 +14,7 @@ class CoreSpec extends AnyFlatSpec with ChiselScalatestTester {
     "NeuralCore" should "do a normal matrix multiplication" in {
         test(new NeuralCore(4, 8)) { dut =>
             val print_helper = new testUtil.PrintHelper()
-            val _n = 4
+            val _n = dut.n
             val rand = new Random
             val _mat_a = new Array[Int](_n * _n)
             val _mat_b = new Array[Int](_n * _n)

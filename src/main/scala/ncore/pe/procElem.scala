@@ -12,8 +12,8 @@ class PE(val nbits: Int = 8) extends Module {
   val io = IO(
     new Bundle {
       val accum       = Input(Bool())
-      val in_a      = Input(UInt(nbits.W))
-      val in_b     = Input(UInt(nbits.W))
+      val in_a        = Input(UInt(nbits.W))
+      val in_b        = Input(UInt(nbits.W))
       //  The register bandwith is optimized for large transformer 
       //  The lower bound of max cap matrix size is:
       //    2^12 x 2^12 = (4096 x 4096)

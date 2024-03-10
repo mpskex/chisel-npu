@@ -14,7 +14,7 @@ class CUSpec extends AnyFlatSpec with ChiselScalatestTester {
     "CU" should "send control to 2D systolic array" in {
         test(new ControlUnit(4)) { dut =>
             val print_helper = new testUtil.PrintHelper()
-            val _n = 4
+            val _n = dut.n
             val rand = new Random
             var history = new Array[Int](2 * _n - 1)
             var prod = 0
