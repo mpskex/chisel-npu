@@ -6,7 +6,7 @@ import chisel3._
 /**
  * This is the neural core design
  */
- class NeuralCore(val n: Int = 8, val nbits: Int = 8, val ctrl_width: Int = 8) extends Module {
+ class NeuralCoreforTest(val n: Int = 8, val nbits: Int = 8, val ctrl_width: Int = 8) extends Module {
     val io = IO(new Bundle {
         val vec_a   = Input(Vec(n, UInt(nbits.W)))  // vector `a` is the left input
         val vec_b   = Input(Vec(n, UInt(nbits.W)))  // vector `b` is the top input

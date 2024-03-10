@@ -4,7 +4,6 @@ package ncore.tcm
 
 import chisel3._
 import chisel3.util._
-import chisel3.util.experimental.decode
 
 class TCMCell(val nbits: Int = 8) extends Module {
     val io = IO(

@@ -53,7 +53,6 @@ class TCMSpec extends AnyFlatSpec with ChiselScalatestTester {
         }
         println("Result tick @ " + _i + ": ")
         print_helper.printMatrix(_in_data, _n)
-        // print_helper.printMatrix(_in_addr, _n)
         print_helper.printMatrixChisel(dut.io.d_out, _n)
       }
     }
