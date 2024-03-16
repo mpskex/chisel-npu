@@ -4,6 +4,7 @@ package ncore.tcm
 
 import chisel3._
 import chisel3.util._
+import isa._
 
 class TCMCell(val nbits: Int = 8) extends Module {
     val io = IO(
@@ -55,4 +56,38 @@ class TCMBlock(val n: Int = 8,
             cells_io(io.w_addr(i)).d_in := io.d_in(i)
         }
     }
+}
+
+
+class DetachableTCM(
+    val n: Int = 8, 
+    val size: Int = 4096,
+    val r_addr_width: Int = 12,
+    val w_addr_width: Int = 12,
+    val mlayout_width: Int = 6,
+) extends Module {
+    val io = IO(new Bundle {
+        val d_in    = Input(Vec(n * n, UInt(32.W)))
+        val d_out   = Output(Vec(n * n, UInt(32.W)))
+        // read address will have channel selection for last 2 bits
+        val r_addr  = Input(Vec(n * n, UInt((r_addr_width + 2).W)))
+        // write address will have channel selection for last 2 bits
+        val w_addr  = Input(Vec(n * n, UInt((w_addr_width + 2).W)))
+        val mem_ch  = Input(MemChannel())
+        val mem_lo  = Input(MemLayout())
+        val en_wr   = Input(Bool())
+    })
+
+    switch (io.mem_lo) {
+        is (MemLayout.bit8) {
+            
+        }
+        is (MemLayout.bit16) {
+
+        }
+        is (MemLayout.bit32) {
+
+        }
+    }
+    
 }
