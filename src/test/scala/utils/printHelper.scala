@@ -28,4 +28,12 @@ class PrintHelper(){
         }
         println("]")
     }
+
+    def printVectorChisel(vec: chisel3.Vec[chisel3.UInt], n: Int): Unit = {
+        var _row = ""
+        for (i <- 0 until n) {
+            _row += vec(i).peekInt().toString() + ", "
+        }
+        println("[" + _row + "]")
+    }
 }

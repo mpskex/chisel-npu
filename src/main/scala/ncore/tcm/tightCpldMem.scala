@@ -4,7 +4,6 @@ package ncore.tcm
 
 import chisel3._
 import chisel3.util._
-import isa._
 
 class TCMCell(val nbits: Int = 8) extends Module {
     val io = IO(
@@ -25,16 +24,15 @@ class TCMCell(val nbits: Int = 8) extends Module {
 
 class TCMBlock(val n: Int = 8, 
                val size: Int = 4096,
-               val r_addr_width: Int = 12,
-               val w_addr_width: Int = 12,
+               val rd_ch_num: Int = 2,
                val nbits: Int = 8
 ) extends Module {
     val io = IO(
         new Bundle {
             val d_in    = Input(Vec(n * n, UInt(nbits.W)))
-            val d_out   = Output(Vec(n * n, UInt(nbits.W)))
-            val r_addr  = Input(Vec(n * n, UInt(r_addr_width.W)))
-            val w_addr  = Input(Vec(n * n, UInt(w_addr_width.W)))
+            val d_out   = Output(Vec(rd_ch_num, Vec(n * n, UInt(nbits.W))))
+            val r_addr  = Input(Vec(rd_ch_num, Vec(n * n, UInt(log2Ceil(size).W))))
+            val w_addr  = Input(Vec(n * n, UInt(log2Ceil(size).W)))
             val en_wr   = Input(Bool())
         }
     )
@@ -50,7 +48,9 @@ class TCMBlock(val n: Int = 8,
     //TODO: add read & write conflict check
 
     for (i <- 0 until n * n) {
-        io.d_out(i) := cells_io(io.r_addr(i)).d_out
+        for (k <- 0 until rd_ch_num) {
+            io.d_out(k)(i) := cells_io(io.r_addr(k)(i)).d_out
+        }
         when (io.en_wr) {
             cells_io(io.w_addr(i)).en_wr := io.en_wr
             cells_io(io.w_addr(i)).d_in := io.d_in(i)
@@ -60,33 +60,31 @@ class TCMBlock(val n: Int = 8,
 
 
 class DetachableTCM(
-    val n: Int = 8, 
+    val n: Int = 8,
+    val nblocks: Int = 4,
     val size: Int = 4096,
-    val r_addr_width: Int = 12,
-    val w_addr_width: Int = 12,
-    val mlayout_width: Int = 6,
+    val rd_ch_num: Int = 2,
 ) extends Module {
     val io = IO(new Bundle {
-        val d_in    = Input(Vec(n * n, UInt(32.W)))
-        val d_out   = Output(Vec(n * n, UInt(32.W)))
-        // read address will have channel selection for last 2 bits
-        val r_addr  = Input(Vec(n * n, UInt((r_addr_width + 2).W)))
-        // write address will have channel selection for last 2 bits
-        val w_addr  = Input(Vec(n * n, UInt((w_addr_width + 2).W)))
-        val mem_ch  = Input(MemChannel())
-        val mem_lo  = Input(MemLayout())
-        val en_wr   = Input(Bool())
+        val d_in        = Input(Vec(n * n, Vec(nblocks, UInt(8.W))))
+        val d_out       = Output(Vec(rd_ch_num, Vec(n * n, Vec(nblocks, UInt(8.W)))))
+        val r_addr      = Input(Vec(rd_ch_num, Vec(n * n, UInt(log2Ceil(size).W))))
+        val w_addr      = Input(Vec(n * n, UInt(log2Ceil(size).W)))
+        val en_wr       = Input(Bool())
     })
 
-    switch (io.mem_lo) {
-        is (MemLayout.bit8) {
-            
-        }
-        is (MemLayout.bit16) {
-
-        }
-        is (MemLayout.bit32) {
-
+    val tcm_blocks_io  = VecInit(Seq.fill(nblocks) {
+        Module(new TCMBlock(n, size, rd_ch_num, 8)).io})
+    
+    for (i <- 0 until nblocks) {
+        tcm_blocks_io(i).en_wr := io.en_wr
+        for (j <- 0 until n) {
+            for (k <- 0 until rd_ch_num) {
+                tcm_blocks_io(i).r_addr(k)(j) := io.r_addr(k)(j)
+            }
+            tcm_blocks_io(i).w_addr(j) := io.w_addr(j)
+            tcm_blocks_io(i).d_in(j) := io.d_in(j)(i)
+            io.d_out(j)(i) := tcm_blocks_io(i).d_out(j)
         }
     }
     

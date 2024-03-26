@@ -9,3 +9,11 @@ object NeuralISA extends ChiselEnum {
     val mma = Value(0x3.U(4.W))
     val ip = Value (0x4.U(4.W))
 }
+
+object DType extends ChiselEnum {
+    val uint    = Value(0x0.U)
+    val int     = Value(0x1.U)
+    val fp      = Value(0x2.U)
+    // no bfp32c0
+    val bfp     = Value(0x3.U)
+}
