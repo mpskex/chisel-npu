@@ -1,6 +1,6 @@
 // See README.md for license details.
 
-package ncore.tcm
+package sram
 
 import scala.util.Random
 import chisel3._
@@ -10,10 +10,10 @@ import org.scalatest.flatspec.AnyFlatSpec
 import chisel3.experimental.BundleLiterals._
 
 
-class TCMSpec extends AnyFlatSpec with ChiselScalatestTester {
+class SRAMSpec extends AnyFlatSpec with ChiselScalatestTester {
 
-  "TCM Cells" should "write on signal" in {
-    test(new TCMCell(8)) { dut =>
+  "SRAM Cells" should "write on signal" in {
+    test(new SRAMCell(8)) { dut =>
       val rand = new Random
       var _prev = 0
       for (i <- 0 until 10) {
@@ -29,8 +29,8 @@ class TCMSpec extends AnyFlatSpec with ChiselScalatestTester {
     }
   }
 
-  "TCM Block" should "write on signal and read anytime" in {
-    test(new TCMBlock(3, 192, 1)) { dut =>
+  "SRAM Block" should "write on signal and read anytime" in {
+    test(new SRAMBlock(3, 192, 1)) { dut =>
       val _n = dut.n
       val _cells = dut.size
       val rand = new Random
@@ -58,8 +58,8 @@ class TCMSpec extends AnyFlatSpec with ChiselScalatestTester {
     }
   }
 
-  "TCM Block" should "read anytime" in {
-    test(new TCMBlock(2, 64, 1)) { dut =>
+  "SRAM Block" should "read anytime" in {
+    test(new SRAMBlock(2, 64, 1)) { dut =>
       val _n = dut.n
       val _cells = dut.size
       val rand = new Random
@@ -96,8 +96,8 @@ class TCMSpec extends AnyFlatSpec with ChiselScalatestTester {
     }
   }
 
-  "TCM Block" should "read anytime on different channels" in {
-    test(new TCMBlock(2, 64, 2)) { dut =>
+  "SRAM Block" should "read anytime on different channels" in {
+    test(new SRAMBlock(2, 64, 2)) { dut =>
       val _n = dut.n
       val _cells = dut.size
       val _rd_ch_num = dut.rd_ch_num

@@ -1,11 +1,11 @@
 // See README.md for license details.
 
-package ncore.tcm
+package sram
 
 import chisel3._
 import chisel3.util._
 
-class TCMCell(val nbits: Int = 8) extends Module {
+class SRAMCell(val nbits: Int = 8) extends Module {
     val io = IO(
         new Bundle {
             val d_in    = Input(UInt(nbits.W))
@@ -22,7 +22,7 @@ class TCMCell(val nbits: Int = 8) extends Module {
     }
 }
 
-class TCMBlock(val n: Int = 8, 
+class SRAMBlock(val n: Int = 8, 
                val size: Int = 4096,
                val rd_ch_num: Int = 2,
                val nbits: Int = 8
@@ -36,7 +36,7 @@ class TCMBlock(val n: Int = 8,
             val en_wr   = Input(Bool())
         }
     )
-    val cells_io = VecInit(Seq.fill(size) {Module(new TCMCell(nbits)).io})
+    val cells_io = VecInit(Seq.fill(size) {Module(new SRAMCell(nbits)).io})
 
     for (i <- 0 until size) {
         cells_io(i).en_wr := false.B.asTypeOf(cells_io(i).en_wr)
@@ -59,7 +59,7 @@ class TCMBlock(val n: Int = 8,
 }
 
 
-class DetachableTCM(
+class SRAM(
     val n: Int = 8,
     val nblocks: Int = 4,
     val size: Int = 4096,
@@ -73,18 +73,18 @@ class DetachableTCM(
         val en_wr       = Input(Bool())
     })
 
-    val tcm_blocks_io  = VecInit(Seq.fill(nblocks) {
-        Module(new TCMBlock(n, size, rd_ch_num, 8)).io})
+    val sram_blocks_io  = VecInit(Seq.fill(nblocks) {
+        Module(new SRAMBlock(n, size, rd_ch_num, 8)).io})
     
     for (i <- 0 until nblocks) {
-        tcm_blocks_io(i).en_wr := io.en_wr
+        sram_blocks_io(i).en_wr := io.en_wr
         for (j <- 0 until n) {
             for (k <- 0 until rd_ch_num) {
-                tcm_blocks_io(i).r_addr(k)(j) := io.r_addr(k)(j)
+                sram_blocks_io(i).r_addr(k)(j) := io.r_addr(k)(j)
             }
-            tcm_blocks_io(i).w_addr(j) := io.w_addr(j)
-            tcm_blocks_io(i).d_in(j) := io.d_in(j)(i)
-            io.d_out(j)(i) := tcm_blocks_io(i).d_out(j)
+            sram_blocks_io(i).w_addr(j) := io.w_addr(j)
+            sram_blocks_io(i).d_in(j) := io.d_in(j)(i)
+            io.d_out(j)(i) := sram_blocks_io(i).d_out(j)
         }
     }
     

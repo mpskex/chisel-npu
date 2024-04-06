@@ -19,3 +19,10 @@ object MemChannel extends ChiselEnum {
     // 16/32 bits will have no ch3
     val ch3     = Value(0x3.U)
 }
+
+class MMUCtrlBundle (val n: Int = 8, val size: Int = 4096) extends Bundle {
+    val offset_keep     = Bool()
+    val h_only          = Bool()
+    val in_addr         = Vec(n * n, UInt(log2Ceil(size).W))
+    val out_addr        = Vec(n * n, UInt(log2Ceil(size).W))
+}

@@ -1,8 +1,9 @@
 // See README.md for license details.
 
-package ncore.pe
+package pe
 
 import chisel3._
+import isa.backend._
 
 /**
   * processing element unit in npu design. 
@@ -11,7 +12,7 @@ import chisel3._
 class PE(val nbits: Int = 8) extends Module {
   val io = IO(
     new Bundle {
-      val accum       = Input(Bool())
+      val ctrl        = Input(new NCoreCUBundle())
       val in_a        = Input(UInt(nbits.W))
       val in_b        = Input(UInt(nbits.W))
       //  The register bandwith is optimized for large transformer 
@@ -22,7 +23,7 @@ class PE(val nbits: Int = 8) extends Module {
 
   val res = RegInit(0.U((nbits*2 + 12).W))
 
-  when (io.accum) {
+  when (io.ctrl.accum) {
     res := res + (io.in_a * io.in_b)
   } .otherwise {
     res := (io.in_a * io.in_b)

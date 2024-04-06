@@ -11,8 +11,8 @@ import chisel3.experimental.BundleLiterals._
 
 class CoreSpec extends AnyFlatSpec with ChiselScalatestTester {
 
-    "NeuralCoreforTest" should "do a normal matrix multiplication" in {
-        test(new NeuralCoreforTest(4, 8)) { dut =>
+    "NeuralCore" should "do a normal matrix multiplication" in {
+        test(new NeuralCore(4, 8)) { dut =>
             val print_helper = new testUtil.PrintHelper()
             val _n = dut.n
             val rand = new Random
@@ -78,9 +78,9 @@ class CoreSpec extends AnyFlatSpec with ChiselScalatestTester {
                 // The rest of the control signal will hand over
                 // to a dedicated systolic-ish control bus
                 if (i_tick < _n && i_tick >= 0)
-                    dut.io.ctrl.poke(0x1)
+                    dut.io.ctrl.accum.poke(0x1)
                 else
-                    dut.io.ctrl.poke(0x0)
+                    dut.io.ctrl.accum.poke(0x0)
 
                 // ideally, the array will give _n (diagnal) results per tick
                 dut.clock.step()
