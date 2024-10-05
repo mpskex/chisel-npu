@@ -7,8 +7,7 @@ FROM --platform=$TARGETPLATFORM ubuntu:22.04 AS base
 ARG TARGETARCH
 USER root
 
-RUN apt-get update && apt-get upgrade -y
-RUN apt install ca-certificates -y
+RUN apt-get update && apt-get upgrade -y && apt install ca-certificates -y
 
 FROM base AS base-amd64
 RUN echo "deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ jammy main restricted universe multiverse\n" > /etc/apt/sources.list; \
@@ -26,52 +25,32 @@ FROM base-${TARGETARCH} AS env
 RUN apt-get update && apt-get install default-jdk sudo git make autoconf g++ flex bison curl wget gnupg -y && apt-get clean -y
 
 # install firtool
-RUN wget -q -O - https://github.com/llvm/circt/releases/download/firtool-1.38.0/firrtl-bin-ubuntu-20.04.tar.gz | tar -zx
-RUN mv firtool-1.38.0/bin/firtool /usr/local/bin/
+RUN wget -q -O - https://github.com/llvm/circt/releases/download/firtool-1.38.0/firrtl-bin-ubuntu-20.04.tar.gz | tar -zx && mv firtool-1.38.0/bin/firtool /usr/local/bin/
 
 WORKDIR /workspace/
 
-RUN git clone https://github.com/verilator/verilator
-
-WORKDIR /workspace/verilator/
-RUN git pull && git checkout v4.226
-RUN autoconf && ./configure
-RUN make -j8 && make install && make clean
+RUN git clone https://github.com/verilator/verilator && cd /workspace/verilator && git pull && git checkout v4.226 && autoconf && ./configure && make -j8 && make install && make clean && rm -rf /workspace/verilator
 
 WORKDIR /workspace/
-RUN rm -rf /workspace/verilator
-
-# add user
-RUN groupadd -r chisel -g 1001 && useradd -u 1001 -r -g chisel -s /bin/bash -c "Docker image user" chisel && usermod -aG sudo chisel
-RUN echo "chisel:chisel" | chpasswd
 
 # accessibility
-RUN apt install net-tools -y
-RUN mkdir -p /home/chisel && chown -R chisel /workspace /home/chisel
-RUN apt clean -y
+RUN apt install net-tools -y && apt clean -y
 
-USER chisel
 FROM env AS scala-amd64
 # install sbt
 # Reference: https://www.scala-sbt.org/download.html
-RUN curl -fL https://github.com/coursier/coursier/releases/latest/download/cs-x86_64-pc-linux.gz | gzip -d > cs && chmod +x cs && ./cs setup -y
-RUN rm -rf cs-x86_64-pc-linux.gz
+RUN curl -fL https://github.com/coursier/coursier/releases/latest/download/cs-x86_64-pc-linux.gz | gzip -d > cs && chmod +x cs && ./cs setup -y && rm -rf cs-x86_64-pc-linux.gz
+
 # if arm64
 FROM env AS scala-arm64
-RUN curl -fL https://github.com/VirtusLab/coursier-m1/releases/latest/download/cs-aarch64-pc-linux.gz | gzip -d > cs && chmod +x cs && ./cs setup -y
-RUN rm -rf cs-aarch64-pc-linux.gz
+RUN curl -fL https://github.com/VirtusLab/coursier-m1/releases/latest/download/cs-aarch64-pc-linux.gz | gzip -d > cs && chmod +x cs && ./cs setup -y && rm -rf cs-aarch64-pc-linux.gz
 
 # build chisel
 FROM scala-${TARGETARCH}
-RUN git clone https://github.com/chipsalliance/chisel.git
-WORKDIR /workspace/chisel
-RUN git checkout v5.1.0
-ENV PATH="${PATH}:/home/chisel/.local/share/coursier/bin/"
-RUN sbt compile 
-RUN sbt "unipublish / publishLocal"
+ENV PATH="${PATH}:/root/.local/share/coursier/bin/"
+RUN git clone https://github.com/chipsalliance/chisel.git && cd /workspace/chisel/ && git checkout v5.1.0 && sbt compile && sbt "unipublish / publishLocal" && rm -rf /workspace/chisel
 
 # clean up chisel sources
 WORKDIR /workspace/
-RUN rm -rf /workspace/chisel
 ENV COURSIER_CACHE="/workspace/.cache/coursier/v1"
 CMD ["bash"]
