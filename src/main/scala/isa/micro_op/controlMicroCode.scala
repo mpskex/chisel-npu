@@ -1,6 +1,6 @@
 // See README.md for license details.
 
-package isa.backend
+package isa.micro_op
 import chisel3._
 import chisel3.util._
 

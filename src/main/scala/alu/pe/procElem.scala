@@ -1,9 +1,9 @@
 // See README.md for license details.
 
-package pe
+package alu.pe
 
 import chisel3._
-import isa.backend._
+import isa.micro_op._
 
 /**
   * processing element unit in npu design. 

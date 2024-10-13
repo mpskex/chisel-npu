@@ -1,6 +1,6 @@
 //// See README.md for license details.
 
-package ncore.cu
+package alu.mma.cu
 
 import testUtil._
 import scala.util.Random

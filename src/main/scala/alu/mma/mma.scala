@@ -1,7 +1,7 @@
 // See README.md for license details
-package ncore
-import isa.backend._
-import pe._
+package alu.mma
+import isa.micro_op._
+import alu.pe._
 
 import chisel3._
 
@@ -9,7 +9,7 @@ import chisel3._
 /**
  * This is the neural core design
  */
- class NeuralCore(val n: Int = 8, val nbits: Int = 8, val sram_size: Int = 4096) extends Module {
+ class MMALU(val n: Int = 8, val nbits: Int = 8, val sram_size: Int = 4096) extends Module {
     val io = IO(new Bundle {
         val vec_a   = Input(Vec(n, UInt(nbits.W)))  // vector `a` is the left input
         val vec_b   = Input(Vec(n, UInt(nbits.W)))  // vector `b` is the top input
@@ -18,7 +18,7 @@ import chisel3._
     })
 
     // Create n x n pe blocks
-    val pe_io = VecInit(Seq.fill(n * n) {Module(new pe.PE(nbits)).io})
+    val pe_io = VecInit(Seq.fill(n * n) {Module(new PE(nbits)).io})
 
     // we use systolic array to pipeline the instructions
     // this will avoid bubble and inst complexity 

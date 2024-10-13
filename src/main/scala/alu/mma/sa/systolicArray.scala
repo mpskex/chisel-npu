@@ -1,5 +1,5 @@
 // See README.md for license details
-package ncore.sa
+package alu.mma.sa
 
 import chisel3._
 

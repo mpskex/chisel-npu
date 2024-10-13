@@ -1,8 +1,8 @@
 // See README.md for license details
-package ncore.cu
+package alu.mma.cu
 
 import chisel3._
-import isa.backend._
+import isa.micro_op._
 
 /**
  * Control unit also uses systolic array to pass instructions

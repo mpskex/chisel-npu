@@ -1,6 +1,6 @@
 //// See README.md for license details.
 
-package ncore
+package alu.mma
 
 import testUtil._
 import scala.util.Random
@@ -9,10 +9,10 @@ import chiseltest._
 import org.scalatest.flatspec.AnyFlatSpec
 import chisel3.experimental.BundleLiterals._
 
-class CoreSpec extends AnyFlatSpec with ChiselScalatestTester {
+class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
 
-    "NeuralCore" should "do a normal matrix multiplication" in {
-        test(new NeuralCore(4, 8)) { dut =>
+    "MMALU" should "do a normal matrix multiplication" in {
+        test(new MMALU(4, 8)) { dut =>
             val print_helper = new testUtil.PrintHelper()
             val _n = dut.n
             val rand = new Random

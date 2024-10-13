@@ -1,9 +1,9 @@
 .PHONY: docs
 
-# export ARCH=`uname -m`
+export ARCH=`uname -m`
 # Currently the image does not support arm64, 
 # We have to hard code the arch into amd64 as a workaround
-export ARCH=amd64
+# export ARCH=amd64
 export VER=0.2
 
 image:

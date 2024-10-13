@@ -1,6 +1,6 @@
 // See README.md for license details.
 
-package pe
+package alu.pe
 
 import scala.util.Random
 import chisel3._
