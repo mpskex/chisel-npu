@@ -9,11 +9,11 @@ import chisel3._
 /**
  * This is the neural core design
  */
- class MMALU(val n: Int = 8, val nbits: Int = 8, val sram_size: Int = 4096) extends Module {
+ class MMALU(val n: Int = 8, val nbits: Int = 8) extends Module {
     val io = IO(new Bundle {
         val vec_a   = Input(Vec(n, UInt(nbits.W)))  // vector `a` is the left input
         val vec_b   = Input(Vec(n, UInt(nbits.W)))  // vector `b` is the top input
-        val ctrl    = Input(new NCoreCUBundle())
+        val ctrl    = Input(new NCoreMMALUBundle())
         val out     = Output(Vec(n * n, UInt((2 * nbits + 12).W)))
     })
 
@@ -23,7 +23,7 @@ import chisel3._
     // we use systolic array to pipeline the instructions
     // this will avoid bubble and inst complexity 
     // while simplifying design with higher efficiency
-    val ctrl_array = Module(new cu.ControlUnit(n, sram_size))
+    val ctrl_array = Module(new cu.ControlUnit(n))
     ctrl_array.io.cbus_in := io.ctrl
 
     val sarray = Module(new sa.SystolicArray2D(n, nbits))

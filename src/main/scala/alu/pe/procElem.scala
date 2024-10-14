@@ -12,7 +12,7 @@ import isa.micro_op._
 class PE(val nbits: Int = 8) extends Module {
   val io = IO(
     new Bundle {
-      val ctrl        = Input(new NCoreCUBundle())
+      val ctrl        = Input(new NCoreMMALUBundle())
       val in_a        = Input(UInt(nbits.W))
       val in_b        = Input(UInt(nbits.W))
       //  The register bandwith is optimized for large transformer 
