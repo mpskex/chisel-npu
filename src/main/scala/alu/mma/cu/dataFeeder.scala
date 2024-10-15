@@ -17,13 +17,13 @@ class DataFeeder(val n: Int = 8, val nbits: Int = 8) extends Module {
         val reg_b_out       = Output(Vec(n, UInt(nbits.W)))
     })
 
-    val buffer_a = (1 until n map(x => Module(new Queue(UInt(nbits.W), x+1))))
-    val buffer_b = (1 until n map(x => Module(new Queue(UInt(nbits.W), x+1))))
+    val buffer_a = (1 until n map(x => Module(new Pipe(UInt(nbits.W), x))))
+    val buffer_b = (1 until n map(x => Module(new Pipe(UInt(nbits.W), x))))
     val (cnt, counterWrap) = Counter(io.cbus_in.dat_ena, n)
 
     for (i <- 0 until n - 1) {
-        buffer_a(i).io.deq.ready := true.B
-        buffer_b(i).io.deq.ready := true.B
+        // buffer_a(i).io.deq.ready := true.B
+        // buffer_b(i).io.deq.ready := true.B
         buffer_a(i).io.enq.valid := true.B
         buffer_b(i).io.enq.valid := true.B
     }
@@ -35,16 +35,10 @@ class DataFeeder(val n: Int = 8, val nbits: Int = 8) extends Module {
         ind := i.U * n.U + cnt
         ind_trans := n.U * cnt + i.U
         if (i == 0) {
-            when (io.cbus_in.dat_trans_a === true.B) {
-                io.reg_a_out(i) := io.reg_a_in(ind)
-            } .otherwise {
-                io.reg_a_out(i) := io.reg_a_in(ind_trans)
-            }
-            when (io.cbus_in.dat_trans_a === true.B) {
-                io.reg_b_out(i) := io.reg_b_in(ind)
-            } .otherwise {
-                io.reg_b_out(i) := io.reg_b_in(ind_trans)
-            }
+            io.reg_a_out(i) := Mux(io.cbus_in.dat_trans_a, 
+                io.reg_a_in(ind_trans), io.reg_a_in(ind))
+            io.reg_b_out(i) := Mux(io.cbus_in.dat_trans_b, 
+                io.reg_b_in(ind_trans), io.reg_b_in(ind))
         } else {
             io.reg_a_out(i) := buffer_a(i-1).io.deq.bits
             io.reg_b_out(i) := buffer_b(i-1).io.deq.bits
