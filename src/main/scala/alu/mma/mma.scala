@@ -11,14 +11,20 @@ import chisel3._
  */
  class MMALU(val n: Int = 8, val nbits: Int = 8) extends Module {
     val io = IO(new Bundle {
-        val vec_a   = Input(Vec(n, UInt(nbits.W)))  // vector `a` is the left input
-        val vec_b   = Input(Vec(n, UInt(nbits.W)))  // vector `b` is the top input
-        val ctrl    = Input(new NCoreMMALUBundle())
-        val out     = Output(Vec(n * n, UInt((2 * nbits + 12).W)))
+        val in_a        = Input(Vec(n * n, UInt(nbits.W)))
+        val in_b        = Input(Vec(n * n, UInt(nbits.W)))
+        val ctrl        = Input(new NCoreMMALUBundle())
+        val out         = Output(Vec(n * n, UInt((2 * nbits + 12).W)))
+        val accum_out   = Output(Vec(n*n, Bool()))
     })
 
     // Create n x n pe blocks
     val pe_io = VecInit(Seq.fill(n * n) {Module(new PE(nbits)).io})
+    val dfeed = Module(new cu.DataFeeder(n, nbits))
+    dfeed.io.reg_a_in <> io.in_a
+    dfeed.io.reg_b_in <> io.in_b
+    dfeed.io.cbus_in <> io.ctrl
+
 
     // we use systolic array to pipeline the instructions
     // this will avoid bubble and inst complexity 
@@ -27,14 +33,15 @@ import chisel3._
     ctrl_array.io.cbus_in := io.ctrl
 
     val sarray = Module(new sa.SystolicArray2D(n, nbits))
-    sarray.io.vec_a := io.vec_a
-    sarray.io.vec_b := io.vec_b
+    sarray.io.vec_a := dfeed.io.reg_a_out
+    sarray.io.vec_b := dfeed.io.reg_b_out
 
     for (i <- 0 until n){
         for (j <- 0 until n) {
             pe_io(n * i + j).in_a := sarray.io.out_a(n * i + j)
             pe_io(n * i + j).in_b := sarray.io.out_b(n * i + j)
             pe_io(n * i + j).ctrl := ctrl_array.io.cbus_out(n * i + j)
+            io.accum_out(n * i + j) := ctrl_array.io.cbus_out(n * i + j).accum
             io.out(n * i + j) := pe_io(n * i + j).out
         }
     }

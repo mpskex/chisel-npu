@@ -13,7 +13,6 @@ import chisel3._
         val vec_b       = Input(Vec(n, UInt(nbits.W)))  // vector `b` is the top input
         val out_a       = Output(Vec(n * n, UInt(nbits.W)))
         val out_b       = Output(Vec(n * n, UInt(nbits.W)))
-
     })
 
     // Create 2d register for horizontal & vertical
