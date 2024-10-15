@@ -6,7 +6,7 @@ import chisel3.util._
 import isa.micro_op._
 
 /**
- * Data Feeder needs N tickst to boot up
+ * Data Feeder takes N ticks to consume all data
  */
 class DataFeeder(val n: Int = 8, val nbits: Int = 8) extends Module {
     val io = IO(new Bundle {
@@ -19,7 +19,7 @@ class DataFeeder(val n: Int = 8, val nbits: Int = 8) extends Module {
 
     val buffer_a = (1 until n map(x => Module(new Pipe(UInt(nbits.W), x))))
     val buffer_b = (1 until n map(x => Module(new Pipe(UInt(nbits.W), x))))
-    val (cnt, counterWrap) = Counter(io.cbus_in.dat_ena, n)
+    val (cnt, counterWrap) = Counter(true.B, n)
 
     for (i <- 0 until n - 1) {
         // buffer_a(i).io.deq.ready := true.B

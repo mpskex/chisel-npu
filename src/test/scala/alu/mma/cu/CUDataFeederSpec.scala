@@ -9,7 +9,7 @@ import chiseltest._
 import org.scalatest.flatspec.AnyFlatSpec
 import chisel3.experimental.BundleLiterals._
 
-class CUDataSpec extends AnyFlatSpec with ChiselScalatestTester {
+class CUDataFeederSpec extends AnyFlatSpec with ChiselScalatestTester {
 
     "CU Data Feeder" should "generate correct matrix pattern" in {
         test(new DataFeeder(4)) { dut =>
@@ -55,7 +55,6 @@ class CUDataSpec extends AnyFlatSpec with ChiselScalatestTester {
                     println("Expect Vector B tick @ " + i_tick + ": [" + _b_in_str + "]")
 
                     // poke the input vector
-                    dut.io.cbus_in.dat_ena.poke(true)
                     dut.io.cbus_in.accum.poke(true)
                     dut.io.cbus_in.dat_trans_a.poke(false)
                     dut.io.cbus_in.dat_trans_b.poke(true)
@@ -88,4 +87,6 @@ class CUDataSpec extends AnyFlatSpec with ChiselScalatestTester {
             }
         }
     }
+
+   
 }

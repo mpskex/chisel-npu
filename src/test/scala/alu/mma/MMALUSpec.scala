@@ -70,7 +70,6 @@ class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
                     dut.io.ctrl.accum.poke(0x1)
                 else
                     dut.io.ctrl.accum.poke(0x0)
-                dut.io.ctrl.dat_ena.poke(true)
                 dut.io.ctrl.dat_trans_a.poke(false)
                 dut.io.ctrl.dat_trans_b.poke(true)
 
@@ -177,7 +176,6 @@ class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
                     dut.io.ctrl.accum.poke(0x1)
                 else
                     dut.io.ctrl.accum.poke(0x0)
-                dut.io.ctrl.dat_ena.poke(true)
                 dut.io.ctrl.dat_trans_a.poke(false)
                 dut.io.ctrl.dat_trans_b.poke(true)
 

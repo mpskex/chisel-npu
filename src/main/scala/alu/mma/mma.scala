@@ -21,6 +21,7 @@ import chisel3._
     // Create n x n pe blocks
     val pe_io = VecInit(Seq.fill(n * n) {Module(new PE(nbits)).io})
     val dfeed = Module(new cu.DataFeeder(n, nbits))
+    // val dclct = Module(new cu.DataCollector(n, nbits))
     dfeed.io.reg_a_in <> io.in_a
     dfeed.io.reg_b_in <> io.in_b
     dfeed.io.cbus_in <> io.ctrl
