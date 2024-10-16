@@ -51,14 +51,14 @@ class CUDataCollectorSpec extends AnyFlatSpec with ChiselScalatestTester {
                 // show the output
                 var _in_str_out = ""
                 for (__i <- 0 until _n) {
-                    _in_str_out += dut.io.reg_out.bits(__i).peekInt().toInt.toString() + ","
+                    _in_str_out += dut.io.reg_out(__i).peekInt().toInt.toString() + ","
                 }
-                println("Output Vector A [" + dut.io.reg_out.valid.peekInt().toInt +  "] tick @ " + i_tick + ": [" + _in_str_out + "]")
+                println("Output Vector A tick @ " + i_tick + ": [" + _in_str_out + "]")
 
                 // evaluate output
-                if (dut.io.reg_out.valid.peekInt().toInt == 1) {
+                if (i_tick >= _n - 1) {
                     for (__i <- 0 until _n) {
-                        dut.io.reg_out.bits(__i).expect(_in_t(__i))
+                        dut.io.reg_out(__i).expect(_in_t(__i))
                     }
                     valid_cnt = (valid_cnt + 1) % _n
                 }
