@@ -5,8 +5,9 @@ on:
       - main
       - releases/**
   pull_request:
-    types:
-      - opened
+    branches:
+      - main
+      - 'releases/**'
 
 jobs:
   Lint:

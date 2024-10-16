@@ -1,18 +1,19 @@
 // See README.md for license details
-package ncore.cu
+package alu.mma.cu
 
 import chisel3._
+import isa.micro_op._
 
 /**
  * Control unit also uses systolic array to pass instructions
  */
-class ControlUnit(val n: Int = 8, val ctrl_width: Int = 8) extends Module {
+class ControlUnit(val n: Int = 8) extends Module {
     val io = IO(new Bundle {
-        val cbus_in     = Input(UInt(ctrl_width.W))
-        val cbus_out    = Output(Vec(n * n, UInt(ctrl_width.W)))
+        val cbus_in         = Input(new NCoreMMALUBundle())
+        val cbus_out        = Output(Vec(n * n, new NCoreMMALUBundle()))
     })
     // Assign each element with diagnal control signal
-    val reg = RegInit(VecInit(Seq.fill(2*n-1)(0.U(ctrl_width.W))))
+    val reg = RegInit(VecInit(Seq.fill(2*n-1)(0.U.asTypeOf(new NCoreMMALUBundle()))))
 
     // 1D systolic array for control
     reg(0) := io.cbus_in
