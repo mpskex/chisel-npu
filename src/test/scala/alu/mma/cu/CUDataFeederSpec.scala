@@ -40,8 +40,8 @@ class CUDataFeederSpec extends AnyFlatSpec with ChiselScalatestTester {
                         if (i_tick - _i >= 0 && i_tick - _i < _n){
                             // chainsaw layout
                             _a_in_t(_i) = _mat_a(_i * _n + i_tick - _i)
-                            // we need to transpose B for exact matmul
-                            _b_in_t(_i) = _mat_b((i_tick - _i) * _n + _i)
+                            // transpose will be done by ld/st module
+                            _b_in_t(_i) = _mat_b(_i * _n + i_tick - _i)
                         }
                     }
                     // print input layout for each tick
@@ -55,12 +55,9 @@ class CUDataFeederSpec extends AnyFlatSpec with ChiselScalatestTester {
                     println("Expect Vector B tick @ " + i_tick + ": [" + _b_in_str + "]")
 
                     // poke the input vector
-                    dut.io.cbus_in.accum.poke(true)
-                    dut.io.cbus_in.dat_trans_a.poke(false)
-                    dut.io.cbus_in.dat_trans_b.poke(true)
-                    for (_i <- 0 until (_n * _n)){
-                        dut.io.reg_a_in(_i).poke(_mat_a(_i))
-                        dut.io.reg_b_in(_i).poke(_mat_b(_i))
+                    for (_i <- 0 until (_n)){
+                        dut.io.reg_a_in(_i).poke(_mat_a(_i * _n + i_tick))
+                        dut.io.reg_b_in(_i).poke(_mat_b(_i * _n + i_tick))
                     }
                     
                     // show the output

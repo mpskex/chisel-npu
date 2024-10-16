@@ -32,7 +32,7 @@ class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
             for (_i <- 0 until _n) {
                 for (_j <- 0 until _n) {
                     for (_m <- 0 until _n) {
-                        _expected(_i * _n + _j) += _mat_a(_i * _n + _m) * _mat_b(_m * _n + _j)
+                        _expected(_i * _n + _j) += _mat_a(_i * _n + _m) * _mat_b(_j * _n + _m)
                     }
                 }
             }
@@ -53,12 +53,12 @@ class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
                 // after n ticks the mmalu will have no dependency 
                 // on the current register
                 if (i_tick < _n) {
-                    for (_i <- 0 until _n * _n){
-                        dut.io.in_a(_i).poke(_mat_a(_i))
-                        dut.io.in_b(_i).poke(_mat_b(_i))
+                    for (_i <- 0 until _n){
+                        dut.io.in_a(_i).poke(_mat_a(_i * _n + i_tick))
+                        dut.io.in_b(_i).poke(_mat_b(_i * _n + i_tick))
                     }
                 } else {
-                    for (_i <- 0 until _n * _n){
+                    for (_i <- 0 until _n){
                         dut.io.in_a(_i).poke(0)
                         dut.io.in_b(_i).poke(0)
                     }
@@ -74,8 +74,6 @@ class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
                 if (i_tick > _n - 1) {
                     dut.io.ctrl.dat_collect.poke(true)
                 }
-                dut.io.ctrl.dat_trans_a.poke(false)
-                dut.io.ctrl.dat_trans_b.poke(true)
 
                 // ideally, the array will give _n (diagnal) results per tick
                 dut.clock.step()
@@ -122,8 +120,8 @@ class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
             for (_i <- 0 until _n) {
                 for (_j <- 0 until _n) {
                     for (_m <- 0 until _n) {
-                        _expected_c(_i * _n + _j) += _mat_a(_i * _n + _m) * _mat_b(_m * _n + _j)
-                        _expected_f(_i * _n + _j) += _mat_d(_i * _n + _m) * _mat_e(_m * _n + _j)
+                        _expected_c(_i * _n + _j) += _mat_a(_i * _n + _m) * _mat_b(_j * _n + _m)
+                        _expected_f(_i * _n + _j) += _mat_d(_i * _n + _m) * _mat_e(_j * _n + _m)
                     }
                 }
             }
@@ -152,18 +150,18 @@ class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
                 // on the current register
                 if (i_tick < _n) {
                     // println("Tick @ " + i_tick + " Reading Reg A & B")
-                    for (_i <- 0 until _n * _n){
-                        dut.io.in_a(_i).poke(_mat_a(_i))
-                        dut.io.in_b(_i).poke(_mat_b(_i))
+                    for (_i <- 0 until _n){
+                        dut.io.in_a(_i).poke(_mat_a(_i * _n + i_tick))
+                        dut.io.in_b(_i).poke(_mat_b(_i * _n + i_tick))
                     }
                 } else if (i_tick < 2 * _n) {
                     // println("Tick @ " + i_tick + " Reading Reg C & D")
-                    for (_i <- 0 until _n * _n){
-                        dut.io.in_a(_i).poke(_mat_d(_i))
-                        dut.io.in_b(_i).poke(_mat_e(_i))
+                    for (_i <- 0 until _n){
+                        dut.io.in_a(_i).poke(_mat_d(_i * _n + i_tick % _n))
+                        dut.io.in_b(_i).poke(_mat_e(_i * _n + i_tick % _n))
                     }
                 } else {
-                    for (_i <- 0 until _n * _n){
+                    for (_i <- 0 until _n){
                         dut.io.in_a(_i).poke(0)
                         dut.io.in_b(_i).poke(0)
                     }
@@ -180,8 +178,6 @@ class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
                     dut.io.ctrl.dat_collect.poke(true)
                 else
                     dut.io.ctrl.dat_collect.poke(false)
-                dut.io.ctrl.dat_trans_a.poke(false)
-                dut.io.ctrl.dat_trans_b.poke(true)
 
                 // ideally, the array will give _n (diagnal) results per tick
                 dut.clock.step()

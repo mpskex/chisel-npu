@@ -12,8 +12,8 @@ import chisel3._
  */
  class MMALU(val n: Int = 8, val nbits: Int = 8) extends Module {
     val io = IO(new Bundle {
-        val in_a        = Input(Vec(n * n, UInt(nbits.W)))
-        val in_b        = Input(Vec(n * n, UInt(nbits.W)))
+        val in_a        = Input(Vec(n, UInt(nbits.W)))
+        val in_b        = Input(Vec(n, UInt(nbits.W)))
         val ctrl        = Input(new NCoreMMALUBundle())
         val out         = Output(Vec(n, UInt((2 * nbits + 12).W)))
     })
@@ -24,7 +24,6 @@ import chisel3._
     val dclct = Module(new cu.DataCollector(n, 2 * nbits + 12))
     dfeed.io.reg_a_in <> io.in_a
     dfeed.io.reg_b_in <> io.in_b
-    dfeed.io.cbus_in <> io.ctrl
     dclct.io.cbus_in <> io.ctrl
 
 
