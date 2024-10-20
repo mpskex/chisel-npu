@@ -5,7 +5,7 @@ package sram
 import chisel3._
 import chisel3.util._
 
-class SRAMCell(val nbits: Int = 8) extends Module {
+class RegisterCell(val nbits: Int = 8) extends Module {
     val io = IO(
         new Bundle {
             val d_in    = Input(UInt(nbits.W))
@@ -22,21 +22,22 @@ class SRAMCell(val nbits: Int = 8) extends Module {
     }
 }
 
-class SRAMBlock(val n: Int = 8, 
-               val size: Int = 4096,
-               val rd_ch_num: Int = 2,
-               val nbits: Int = 8
+class RegisterBlock(
+    val rd_banks: Int = 8,
+    val wr_banks: Int = 4,
+    val size: Int = 4096,
+    val nbits: Int = 8
 ) extends Module {
     val io = IO(
         new Bundle {
-            val d_in    = Input(Vec(n * n, UInt(nbits.W)))
-            val d_out   = Output(Vec(rd_ch_num, Vec(n * n, UInt(nbits.W))))
-            val r_addr  = Input(Vec(rd_ch_num, Vec(n * n, UInt(log2Ceil(size).W))))
-            val w_addr  = Input(Vec(n * n, UInt(log2Ceil(size).W)))
-            val en_wr   = Input(Bool())
+            val d_in    = Input(Vec(wr_banks, UInt(nbits.W)))
+            val d_out   = Output(Vec(rd_banks, UInt(nbits.W)))
+            val r_addr  = Input(Vec(rd_banks, UInt(log2Ceil(size).W)))
+            val w_addr  = Input(Vec(rd_banks, UInt(log2Ceil(size).W)))
+            val en_wr   = Input(Vec(wr_banks, Bool()))
         }
     )
-    val cells_io = VecInit(Seq.fill(size) {Module(new SRAMCell(nbits)).io})
+    val cells_io = VecInit(Seq.fill(size) {Module(new RegisterCell(nbits)).io})
 
     for (i <- 0 until size) {
         cells_io(i).en_wr := false.B.asTypeOf(cells_io(i).en_wr)
@@ -46,46 +47,12 @@ class SRAMBlock(val n: Int = 8,
 
     //TODO: add range check
     //TODO: add read & write conflict check
-
-    for (i <- 0 until n * n) {
-        for (k <- 0 until rd_ch_num) {
-            io.d_out(k)(i) := cells_io(io.r_addr(k)(i)).d_out
-        }
-        when (io.en_wr) {
-            cells_io(io.w_addr(i)).en_wr := io.en_wr
-            cells_io(io.w_addr(i)).d_in := io.d_in(i)
-        }
+    for (i <- 0 until rd_banks) {
+        io.d_out(i) := cells_io(io.r_addr(i)).d_out
     }
-}
 
-
-class SRAM(
-    val n: Int = 8,
-    val nblocks: Int = 4,
-    val size: Int = 4096,
-    val rd_ch_num: Int = 2,
-) extends Module {
-    val io = IO(new Bundle {
-        val d_in        = Input(Vec(n * n, Vec(nblocks, UInt(8.W))))
-        val d_out       = Output(Vec(rd_ch_num, Vec(n * n, Vec(nblocks, UInt(8.W)))))
-        val r_addr      = Input(Vec(rd_ch_num, Vec(n * n, UInt(log2Ceil(size).W))))
-        val w_addr      = Input(Vec(n * n, UInt(log2Ceil(size).W)))
-        val en_wr       = Input(Bool())
-    })
-
-    val sram_blocks_io  = VecInit(Seq.fill(nblocks) {
-        Module(new SRAMBlock(n, size, rd_ch_num, 8)).io})
-    
-    for (i <- 0 until nblocks) {
-        sram_blocks_io(i).en_wr := io.en_wr
-        for (j <- 0 until n) {
-            for (k <- 0 until rd_ch_num) {
-                sram_blocks_io(i).r_addr(k)(j) := io.r_addr(k)(j)
-            }
-            sram_blocks_io(i).w_addr(j) := io.w_addr(j)
-            sram_blocks_io(i).d_in(j) := io.d_in(j)(i)
-            io.d_out(j)(i) := sram_blocks_io(i).d_out(j)
-        }
+    for (i <- 0 until wr_banks) {
+        cells_io(io.w_addr(i)).en_wr := io.en_wr(i)
+        cells_io(io.w_addr(i)).d_in := io.d_in(i)
     }
-    
 }

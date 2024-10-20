@@ -10,10 +10,10 @@ import org.scalatest.flatspec.AnyFlatSpec
 import chisel3.experimental.BundleLiterals._
 
 
-class SRAMSpec extends AnyFlatSpec with ChiselScalatestTester {
+class RegisterSpec extends AnyFlatSpec with ChiselScalatestTester {
 
-  "SRAM Cells" should "write on signal" in {
-    test(new SRAMCell(8)) { dut =>
+  "Register Cells" should "write on signal" in {
+    test(new RegisterCell(8)) { dut =>
       val rand = new Random
       var _prev = 0
       for (i <- 0 until 10) {
@@ -29,112 +29,106 @@ class SRAMSpec extends AnyFlatSpec with ChiselScalatestTester {
     }
   }
 
-  "SRAM Block" should "write on signal and read anytime" in {
-    test(new SRAMBlock(3, 192, 1)) { dut =>
-      val _n = dut.n
+  "Register Block" should "write on signal and read anytime" in {
+    test(new RegisterBlock(5, 5, 192, 8)) { dut =>
+      val _rd_banks = dut.rd_banks
+      val _wr_banks = dut.wr_banks
       val _cells = dut.size
       val rand = new Random
       val print_helper = new testUtil.PrintHelper()
-      val _in_data = new Array[Int](_n * _n)
+      val _in_data = new Array[Int](_wr_banks)
       for(_i <- 0 until 10){
-        val _in_addr = rand.shuffle((0 until _cells).toList).take(_n * _n)
-        for (i <- 0 until _n * _n) {
+        val _in_addr = rand.shuffle((0 until _cells).toList).take(_wr_banks)
+        for (i <- 0 until _wr_banks) {
           _in_data(i) = rand.between(0, 255)
           dut.io.d_in(i).poke(_in_data(i))
           dut.io.w_addr(i).poke(_in_addr(i))
+          dut.io.en_wr(i).poke(true)
         }
-        dut.io.en_wr.poke(true)
         dut.clock.step()
-        for (i <- 0 until _n * _n) {
-          dut.io.r_addr(0)(i).poke(_in_addr(i))
+        for (i <- 0 until _wr_banks) {
+          dut.io.r_addr(i).poke(_in_addr(i))
         }
-        for (i <- 0 until _n * _n){
-          dut.io.d_out(0)(i).expect(_in_data(i))
+        for (i <- 0 until _wr_banks){
+          dut.io.d_out(i).expect(_in_data(i))
         }
         println("Result tick @ " + _i + ": ")
-        print_helper.printMatrix(_in_data, _n)
-        print_helper.printMatrixChisel(dut.io.d_out(0), _n)
+        print_helper.printVectorChisel(dut.io.d_out, _rd_banks)
       }
     }
   }
 
-  "SRAM Block" should "read anytime" in {
-    test(new SRAMBlock(2, 64, 1)) { dut =>
-      val _n = dut.n
+  "Register Block" should "read anytime" in {
+    test(new RegisterBlock(5, 5, 64, 8)) { dut =>
+      val _rd_banks = dut.rd_banks
+      val _wr_banks = dut.wr_banks
       val _cells = dut.size
       val rand = new Random
       val print_helper = new testUtil.PrintHelper()
       val _data = new Array[Int](_cells)
-      for (_i <- 0 until 10) {
-        val _in_data = new Array[Int](_n * _n)
-        val _in_addr = rand.shuffle((0 until _cells).toList).take(_n * _n)
-        for (i <- 0 until _n * _n) {
+      // write random data
+      for (_i <- 0 until 100) {
+        val _in_data = new Array[Int](_wr_banks)
+        val _in_addr = rand.shuffle((0 until _cells).toList).take(_wr_banks)
+        for (i <- 0 until _wr_banks) {
           _in_data(i) = rand.between(0, 255)
           dut.io.d_in(i).poke(_in_data(i))
           dut.io.w_addr(i).poke(_in_addr(i))
           _data(_in_addr(i)) = _in_data(i)
+          dut.io.en_wr(i).poke(true)
         }
-        dut.io.en_wr.poke(true)
         dut.clock.step()
       }
+      // read random data
       for(_i <- 0 until 10){
-        val _r_addr = rand.shuffle((0 until _cells).toList).take(_n * _n)
-        val _expected = new Array[Int](_n * _n)
-        for (i <- 0 until _n * _n) {
-          dut.io.r_addr(0)(i).poke(_r_addr(i))
+        val _r_addr = rand.shuffle((0 until _cells).toList).take(_rd_banks)
+        val _expected = new Array[Int](_rd_banks)
+        for (i <- 0 until _rd_banks) {
+          dut.io.r_addr(i).poke(_r_addr(i))
         }
-        for (i <- 0 until _n * _n) {
+        for (i <- 0 until _rd_banks) {
           _expected(i) = _data(_r_addr(i))
         }
         println("Result tick @ " + _i + ": ")
-        print_helper.printMatrix(_expected, _n)
-        print_helper.printMatrixChisel(dut.io.d_out(0), _n)
-        for (i <- 0 until _n * _n){
-          dut.io.d_out(0)(i).expect(_data(_r_addr(i)))
+        print_helper.printVectorChisel(dut.io.d_out, _rd_banks)
+        for (i <- 0 until _rd_banks){
+          dut.io.d_out(i).expect(_data(_r_addr(i)))
+          println("bit: " + i + " Addr: " + _r_addr(i) + " out: " + dut.io.d_out(i).peekInt().toInt + " expected: " + _data(_r_addr(i)))
         }
       }
     }
   }
 
-  "SRAM Block" should "read anytime on different channels" in {
-    test(new SRAMBlock(2, 64, 2)) { dut =>
-      val _n = dut.n
+  "Register Block" should "read anytime on different channels" in {
+    test(new RegisterBlock(2, 2, 64, 8)) { dut =>
+      val _rd_banks = dut.rd_banks
+      val _wr_banks = dut.wr_banks
       val _cells = dut.size
-      val _rd_ch_num = dut.rd_ch_num
       val rand = new Random
       val print_helper = new testUtil.PrintHelper()
       val _data = new Array[Int](_cells)
       for (_i <- 0 until 10) {
-        val _in_data = new Array[Int](_rd_ch_num * _n * _n)
-        val _in_addr = rand.shuffle((0 until _cells).toList).take(_rd_ch_num * _n * _n)
-        for (k <- 0 until _rd_ch_num){
-          for (i <- 0 until _n * _n) {
-            val _ind = k * _n * _n + i
-            _in_data(_ind) = rand.between(0, 255)
-            dut.io.d_in(i).poke(_in_data(_ind))
-            dut.io.w_addr(i).poke(_in_addr(_ind))
-            _data(_in_addr(_ind)) = _in_data(_ind)
-          }
-          dut.io.en_wr.poke(true)
-          dut.clock.step()
+        val _in_data = new Array[Int](_wr_banks)
+        val _in_addr = rand.shuffle((0 until _cells).toList).take(_wr_banks)
+        for (i <- 0 until _wr_banks) {
+          _in_data(i) = rand.between(0, 255)
+          dut.io.d_in(i).poke(_in_data(i))
+          dut.io.w_addr(i).poke(_in_addr(i))
+          _data(_in_addr(i)) = _in_data(i)
+          dut.io.en_wr(i).poke(true)
         }
+        dut.clock.step()
       }
       for(_i <- 0 until 10){
-        val _r_addr = rand.shuffle((0 until _cells).toList).take(_rd_ch_num * _n * _n)
-        val _expected = new Array[Int](_rd_ch_num * _n * _n)
-        for (k <- 0 until _rd_ch_num){
-          for (i <- 0 until _n * _n) {
-            val _ind = k * _n * _n + i
-            dut.io.r_addr(k)(i).poke(_r_addr(_ind))
-            _expected(_ind) = _data(_r_addr(_ind))
-          }
+        val _r_addr = rand.shuffle((0 until _cells).toList).take(_rd_banks)
+        val _expected = new Array[Int](_rd_banks)
+        for (i <- 0 until _rd_banks) {
+          dut.io.r_addr(i).poke(_r_addr(i))
+          _expected(i) = _data(_r_addr(i))
         }
         println("Result tick @ " + _i + ": ")
-        for (k <- 0 until _rd_ch_num){
-          for (i <- 0 until _n * _n){
-            val _ind = k * _n * _n + i
-            dut.io.d_out(k)(i).expect(_data(_r_addr(_ind)))
-          }
+        for (i <- 0 until _rd_banks){
+          dut.io.d_out(i).expect(_data(_r_addr(i)))
         }
       }
     }
