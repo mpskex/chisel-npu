@@ -46,7 +46,7 @@ class RegisterBlock(
     }
 
     //TODO: add range check
-    //TODO: add read & write conflict check
+    //TODO: add write conflict check
     for (i <- 0 until rd_banks) {
         io.d_out(i) := cells_io(io.r_addr(i)).d_out
     }

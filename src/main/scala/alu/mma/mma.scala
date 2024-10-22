@@ -19,7 +19,7 @@ import chisel3._
     })
 
     // Create n x n pe blocks
-    val pe_io = VecInit(Seq.fill(n * n) {Module(new PE(nbits)).io})
+    val pe_io = VecInit(Seq.fill(n * n) {Module(new MMPE(nbits)).io})
     val dfeed = Module(new cu.DataFeeder(n, nbits))
     val dclct = Module(new cu.DataCollector(n, 2 * nbits + 12))
     dfeed.io.reg_a_in <> io.in_a
@@ -45,7 +45,6 @@ import chisel3._
             pe_io(n * i + j).in_a := sarray.io.out_a(n * i + j)
             pe_io(n * i + j).in_b := sarray.io.out_b(n * i + j)
             pe_io(n * i + j).ctrl := ctrl_array.io.cbus_out(n * i + j)
-            // io.out(n * i + j) := pe_io(n * i + j).out
             dclct.io.reg_in(n * i + j) <> pe_io(n * i + j).out
         }
     }

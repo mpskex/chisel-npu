@@ -9,7 +9,7 @@ import isa.micro_op._
   * processing element unit in npu design. 
   * This is the core compute unit .
   */
-class PE(val nbits: Int = 8) extends Module {
+class MMPE(val nbits: Int = 8) extends Module {
   val io = IO(
     new Bundle {
       val ctrl        = Input(new NCoreMMALUBundle())
@@ -21,7 +21,7 @@ class PE(val nbits: Int = 8) extends Module {
       val out         = Output(UInt((nbits * 2 + 12).W))
   })
 
-  val res = RegInit(0.U((nbits*2 + 12).W))
+  val res = RegInit(0.U((nbits * 2 + 12).W))
 
   when (io.ctrl.accum) {
     res := res + (io.in_a * io.in_b)

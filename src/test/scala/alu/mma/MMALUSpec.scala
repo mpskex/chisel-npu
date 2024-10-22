@@ -12,7 +12,7 @@ import chisel3.experimental.BundleLiterals._
 class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
 
     "MMALU" should "do a normal matrix multiplication" in {
-        test(new MMALU(4, 8)) { dut =>
+        test(new MMALU(8, 8)) { dut =>
             val print_helper = new testUtil.PrintHelper()
             val _n = dut.n
             val rand = new Random
@@ -24,8 +24,8 @@ class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
 
             // random initialize the
             for (i <- 0 until _n * _n) {
-                _mat_a(i) = rand.between(0, 255)
-                _mat_b(i) = rand.between(0, 255)
+                _mat_a(i) = rand.between(255, 256)
+                _mat_b(i) = rand.between(255, 256)
             }
 
             // expected matrix multiplication result

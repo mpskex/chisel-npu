@@ -9,10 +9,10 @@ import org.scalatest.flatspec.AnyFlatSpec
 import chisel3.experimental.BundleLiterals._
 
 
-class PESpec extends AnyFlatSpec with ChiselScalatestTester {
+class MMPESpec extends AnyFlatSpec with ChiselScalatestTester {
 
-  "PE" should "output multiplied number from top and left" in {
-    test(new PE(8)) { dut =>
+  "MMPE" should "output multiplied number from top and left" in {
+    test(new MMPE(8)) { dut =>
       val rand = new Random
       var prod = 0
       for (n <- 0 until 128) {

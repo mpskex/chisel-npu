@@ -99,7 +99,7 @@ class RegisterSpec extends AnyFlatSpec with ChiselScalatestTester {
     }
   }
 
-  "Register Block" should "read anytime on different channels" in {
+  "Register Block" should "read anytime on different read banks" in {
     test(new RegisterBlock(2, 2, 64, 8)) { dut =>
       val _rd_banks = dut.rd_banks
       val _wr_banks = dut.wr_banks
