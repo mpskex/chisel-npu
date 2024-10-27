@@ -12,11 +12,11 @@ import isa.micro_op._
 class DataCollector(val n: Int = 8, val nbits: Int = 8) extends Module {
     val io = IO(new Bundle {
         val cbus_in         = Input(new NCoreMMALUBundle())
-        val reg_in          = Input(Vec(n * n, UInt(nbits.W)))
-        val reg_out         = Output(Vec(n, UInt(nbits.W)))
+        val reg_in          = Input(Vec(n * n, SInt(nbits.W)))
+        val reg_out         = Output(Vec(n, SInt(nbits.W)))
     })
 
-    val buffer = (0 until n - 1 map(x => Module(new Pipe(UInt(nbits.W), (n - x - 1)))))
+    val buffer = (0 until n - 1 map(x => Module(new Pipe(SInt(nbits.W), (n - x - 1)))))
     val (cnt, counterWrap) = Counter(0 until n, true.B, !io.cbus_in.dat_collect)
 
     // chainsaw layout

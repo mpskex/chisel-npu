@@ -10,14 +10,14 @@ import isa.micro_op._
  */
 class DataFeeder(val n: Int = 8, val nbits: Int = 8) extends Module {
     val io = IO(new Bundle {
-        val reg_a_in        = Input(Vec(n, UInt(nbits.W)))
-        val reg_b_in        = Input(Vec(n, UInt(nbits.W)))
-        val reg_a_out       = Output(Vec(n, UInt(nbits.W)))
-        val reg_b_out       = Output(Vec(n, UInt(nbits.W)))
+        val reg_a_in        = Input(Vec(n, SInt(nbits.W)))
+        val reg_b_in        = Input(Vec(n, SInt(nbits.W)))
+        val reg_a_out       = Output(Vec(n, SInt(nbits.W)))
+        val reg_b_out       = Output(Vec(n, SInt(nbits.W)))
     })
 
-    val buffer_a = (1 until n map(x => Module(new Pipe(UInt(nbits.W), x))))
-    val buffer_b = (1 until n map(x => Module(new Pipe(UInt(nbits.W), x))))
+    val buffer_a = (1 until n map(x => Module(new Pipe(SInt(nbits.W), x))))
+    val buffer_b = (1 until n map(x => Module(new Pipe(SInt(nbits.W), x))))
 
     for (i <- 0 until n - 1) {
         buffer_a(i).io.enq.valid := true.B

@@ -24,8 +24,8 @@ class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
 
             // random initialize the
             for (i <- 0 until _n * _n) {
-                _mat_a(i) = rand.between(255, 256)
-                _mat_b(i) = rand.between(255, 256)
+                _mat_a(i) = rand.between(-64, 64)
+                _mat_b(i) = rand.between(-64, 64)
             }
 
             // expected matrix multiplication result
@@ -110,10 +110,10 @@ class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
 
             // random initialize the
             for (i <- 0 until _n * _n) {
-                _mat_a(i) = rand.between(0, 255)
-                _mat_b(i) = rand.between(0, 255)
-                _mat_d(i) = rand.between(0, 255)
-                _mat_e(i) = rand.between(0, 255)
+                _mat_a(i) = rand.between(-64, 64)
+                _mat_b(i) = rand.between(-64, 64)
+                _mat_d(i) = rand.between(-64, 64)
+                _mat_e(i) = rand.between(-64, 64)
             }
 
             // expected matrix multiplication result

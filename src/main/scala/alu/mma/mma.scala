@@ -12,16 +12,16 @@ import chisel3._
  */
  class MMALU(val n: Int = 8, val nbits: Int = 8) extends Module {
     val io = IO(new Bundle {
-        val in_a        = Input(Vec(n, UInt(nbits.W)))
-        val in_b        = Input(Vec(n, UInt(nbits.W)))
+        val in_a        = Input(Vec(n, SInt(nbits.W)))
+        val in_b        = Input(Vec(n, SInt(nbits.W)))
         val ctrl        = Input(new NCoreMMALUBundle())
-        val out         = Output(Vec(n, UInt((2 * nbits + 12).W)))
+        val out         = Output(Vec(n, SInt((2 * nbits).W)))
     })
 
     // Create n x n pe blocks
     val pe_io = VecInit(Seq.fill(n * n) {Module(new MMPE(nbits)).io})
-    val dfeed = Module(new cu.DataFeeder(n, nbits))
-    val dclct = Module(new cu.DataCollector(n, 2 * nbits + 12))
+    val dfeed = Module(new cu.DataFeeder(n, 2 * nbits))
+    val dclct = Module(new cu.DataCollector(n, 2 * nbits))
     dfeed.io.reg_a_in <> io.in_a
     dfeed.io.reg_b_in <> io.in_b
     dclct.io.cbus_in <> io.ctrl

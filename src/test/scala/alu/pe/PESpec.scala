@@ -16,8 +16,8 @@ class MMPESpec extends AnyFlatSpec with ChiselScalatestTester {
       val rand = new Random
       var prod = 0
       for (n <- 0 until 128) {
-        val _top_in_ = rand.between(0, 255)
-        val _left_in_ = rand.between(0, 255)
+        val _top_in_ = rand.between(-64, 64)
+        val _left_in_ = rand.between(-64, 64)
         dut.io.in_a.poke(_top_in_)
         dut.io.in_b.poke(_left_in_)
         dut.io.ctrl.accum.poke(true)
@@ -28,8 +28,8 @@ class MMPESpec extends AnyFlatSpec with ChiselScalatestTester {
       }
 
       prod = 0
-      var _top_in_ = rand.between(1, 255)
-      var _left_in_ = rand.between(1, 255)
+      var _top_in_ = rand.between(-64, 64)
+      var _left_in_ = rand.between(-64, 64)
       dut.io.in_a.poke(_top_in_)
       dut.io.in_b.poke(_left_in_)
       dut.io.ctrl.accum.poke(false)
@@ -38,8 +38,8 @@ class MMPESpec extends AnyFlatSpec with ChiselScalatestTester {
       dut.io.out.expect(prod)
       println("Result tick @ new: " + dut.io.out.peekInt() + " with input top: " + _top_in_ + " and left: " + _left_in_)
 
-      _top_in_ = rand.between(1, 255)
-      _left_in_ = rand.between(1, 255)
+      _top_in_ = rand.between(-64, 64)
+      _left_in_ = rand.between(-64, 64)
       dut.io.in_a.poke(_top_in_)
       dut.io.in_b.poke(_left_in_)
       dut.io.ctrl.accum.poke(true)

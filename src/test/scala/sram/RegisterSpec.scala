@@ -1,6 +1,6 @@
 // See README.md for license details.
 
-package sram
+package sram.register
 
 import scala.util.Random
 import chisel3._

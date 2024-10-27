@@ -25,8 +25,8 @@ class CUDataFeederSpec extends AnyFlatSpec with ChiselScalatestTester {
                 
                 // random initialize the
                 for (i <- 0 until _n * _n) {
-                    _mat_a(i) = rand.between(0, 255)
-                    _mat_b(i) = rand.between(0, 255)
+                    _mat_a(i) = rand.between(-128, 128)
+                    _mat_b(i) = rand.between(-128, 128)
                 }
     
                 println("===== MAT A =====")

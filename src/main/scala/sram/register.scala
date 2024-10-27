@@ -1,6 +1,6 @@
 // See README.md for license details.
 
-package sram
+package sram.register
 
 import chisel3._
 import chisel3.util._
