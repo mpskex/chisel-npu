@@ -41,7 +41,7 @@ class CUDataCollectorSpec extends AnyFlatSpec with ChiselScalatestTester {
                 println("Expect Vector A tick @ " + i_tick + ": [" + _in_str + "]")
 
                 // poke the input vector
-                dut.io.cbus_in.dat_collect.poke(true)
+                dut.io.dat_clct.poke(true)
                 for (_i <- 0 until (_n * _n)){
                     dut.io.reg_in(_i).poke(_mat(_i))
                 }

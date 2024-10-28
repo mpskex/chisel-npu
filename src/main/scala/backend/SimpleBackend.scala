@@ -24,6 +24,6 @@ class NCoreBackend(
     mmalu_1.io.in_b <> reg_files.io.d_out(1)
     reg_files.io.d_in(0) <> mmalu_1.io.out 
     when (io.micro_op.opcode === _OpCode.mma) {
-
+         
     }
 }

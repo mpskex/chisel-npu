@@ -12,7 +12,7 @@ import chisel3.experimental.BundleLiterals._
 class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
 
     "MMALU" should "do a normal matrix multiplication" in {
-        test(new MMALU(8, 8)) { dut =>
+        test(new MMALU(4, 8)) { dut =>
             val print_helper = new testUtil.PrintHelper()
             val _n = dut.n
             val rand = new Random
@@ -71,9 +71,11 @@ class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
                     dut.io.ctrl.accum.poke(true)
                 else
                     dut.io.ctrl.accum.poke(false)
-                if (i_tick > _n - 1) {
-                    dut.io.ctrl.dat_collect.poke(true)
-                }
+                // if (i_tick >= _n) {
+                //     println("Tick @ " + i_tick + " clct signal expect true")
+                //     dut.io.ctrl.dat_collect.poke(true)
+                // }
+                // println("Tick @ " + i_tick + " clct signal " + dut.io.clct.peekInt().toInt)
 
                 // ideally, the array will give _n (diagnal) results per tick
                 dut.clock.step()
@@ -174,20 +176,21 @@ class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
                     dut.io.ctrl.accum.poke(true)
                 else
                     dut.io.ctrl.accum.poke(false)
-                if (i_tick > _n - 1)
-                    dut.io.ctrl.dat_collect.poke(true)
-                else
-                    dut.io.ctrl.dat_collect.poke(false)
+                // if (i_tick >= _n)
+                //     dut.io.ctrl.dat_collect.poke(true)
+                // else
+                //     dut.io.ctrl.dat_collect.poke(false)
 
                 // ideally, the array will give _n (diagnal) results per tick
                 dut.clock.step()
 
                 // systolic array will start to spit out after _n - 1 ticks for mat_c
+                println("Tick @ " + i_tick + " clct signal " + dut.io.clct.peekInt().toInt)
                 if (i_tick >= 2 * _n - 2 && i_tick < 3 * _n - 2) {
                     for (_i <- 0 until _n) {
                         _res_c(_i * _n + step) = dut.io.out(_i).peekInt().toInt
                         println("Tick @ " + i_tick + " Mat C producing at location (" + _i + ", " + step + "): " + _res_c(_i * _n + step))
-                        // dut.io.out(_i).expect(_expected_c(_i * _n + step))
+                        dut.io.out(_i).expect(_expected_c(_i * _n + step))
                     }
                     step = step + 1
                 } 

@@ -19,6 +19,5 @@ object VecDType extends ChiselEnum {
 
 class NCoreVALUBundle() extends Bundle {
     val accum = Bool()
-    val dat_collect = Bool()
     val op_code = VecDType()
 }

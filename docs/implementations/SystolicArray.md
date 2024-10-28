@@ -1,5 +1,7 @@
 # Systolic Array
 
+[TOC]
+
 Systolic arrays are often the fundamental execution unit in modern NPU implementations. They are efficient in matrix multiplication, which is widely adopted in neural networks. However, it is not flexible to execute high performance vector or scalar operations. In general, a systolic array will have latency of $3N-2$ (from the first element of input matrices to the final element of the output matrix). To maximize the gain from a systolic array architecture, most implementation will have around $64\times 64$ grid of [PEs](ProcessingElement.md). Larger size of the grid will suffer more from the memory wall. Hence hardware engineers need to battle with this multi-constrained problem and try to find a sweet point for the design.
 
 Improving IPC(Instruction per Cycle) of systolic arrays is quite straight forward. We will handle the pre-fetch and pipeline the stages for sure. We also need to design an appropriate control for the systolic array to make it exeuting instructions without bubbles in the array.
@@ -45,6 +47,12 @@ The systolic **will not receiver any input for the current matrix multiplication
 
 
 This is the what the final cycle will look like.
+
+## General Timing for $N\times N$ array
+
+<div style="text-align: center">
+<img src="../../images/sa_ticks_seq.png" width=80%/>
+</div>
 
 ## Summary
 
