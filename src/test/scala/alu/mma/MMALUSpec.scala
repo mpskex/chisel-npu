@@ -71,11 +71,6 @@ class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
                     dut.io.ctrl.accum.poke(true)
                 else
                     dut.io.ctrl.accum.poke(false)
-                // if (i_tick >= _n) {
-                //     println("Tick @ " + i_tick + " clct signal expect true")
-                //     dut.io.ctrl.dat_collect.poke(true)
-                // }
-                // println("Tick @ " + i_tick + " clct signal " + dut.io.clct.peekInt().toInt)
 
                 // ideally, the array will give _n (diagnal) results per tick
                 dut.clock.step()
@@ -176,10 +171,6 @@ class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
                     dut.io.ctrl.accum.poke(true)
                 else
                     dut.io.ctrl.accum.poke(false)
-                // if (i_tick >= _n)
-                //     dut.io.ctrl.dat_collect.poke(true)
-                // else
-                //     dut.io.ctrl.dat_collect.poke(false)
 
                 // ideally, the array will give _n (diagnal) results per tick
                 dut.clock.step()
