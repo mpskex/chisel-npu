@@ -12,7 +12,7 @@ import chisel3.experimental.BundleLiterals._
 class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
 
     "MMALU" should "do a normal matrix multiplication" in {
-        test(new MMALU(4, 8)) { dut =>
+        test(new MMALU(4, 8, 32)) { dut =>
             val print_helper = new testUtil.PrintHelper()
             val _n = dut.n
             val rand = new Random
@@ -56,11 +56,13 @@ class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
                     for (_i <- 0 until _n){
                         dut.io.in_a(_i).poke(_mat_a(_i * _n + i_tick))
                         dut.io.in_b(_i).poke(_mat_b(_i * _n + i_tick))
+                        dut.io.in_accum(_i).poke(0)
                     }
                 } else {
                     for (_i <- 0 until _n){
                         dut.io.in_a(_i).poke(0)
                         dut.io.in_b(_i).poke(0)
+                        dut.io.in_accum(_i).poke(0)
                     }
                 }
 
@@ -91,7 +93,7 @@ class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
     }   
 
     "MMALU" should "do a normal matrix multiplication in stream" in {
-        test(new MMALU(4, 8)) { dut =>
+        test(new MMALU(4, 8, 32)) { dut =>
             val print_helper = new testUtil.PrintHelper()
             val _n = dut.n
             val rand = new Random
@@ -150,17 +152,20 @@ class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
                     for (_i <- 0 until _n){
                         dut.io.in_a(_i).poke(_mat_a(_i * _n + i_tick))
                         dut.io.in_b(_i).poke(_mat_b(_i * _n + i_tick))
+                        dut.io.in_accum(_i).poke(0)
                     }
                 } else if (i_tick < 2 * _n) {
                     // println("Tick @ " + i_tick + " Reading Reg C & D")
                     for (_i <- 0 until _n){
                         dut.io.in_a(_i).poke(_mat_d(_i * _n + i_tick % _n))
                         dut.io.in_b(_i).poke(_mat_e(_i * _n + i_tick % _n))
+                        dut.io.in_accum(_i).poke(0)
                     }
                 } else {
                     for (_i <- 0 until _n){
                         dut.io.in_a(_i).poke(0)
                         dut.io.in_b(_i).poke(0)
+                        dut.io.in_accum(_i).poke(0)
                     }
                 }
 

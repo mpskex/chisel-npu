@@ -1,5 +1,5 @@
 // See README.md for license details
-package alu.mma.cu
+package alu.mma.sa
 
 import chisel3._
 import chisel3.util._

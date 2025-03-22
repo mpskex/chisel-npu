@@ -1,6 +1,6 @@
 //// See README.md for license details.
 
-package alu.mma.cu
+package alu.mma.sa
 
 import testUtil._
 import scala.util.Random
@@ -9,9 +9,9 @@ import chiseltest._
 import org.scalatest.flatspec.AnyFlatSpec
 import chisel3.experimental.BundleLiterals._
 
-class CUDataFeederSpec extends AnyFlatSpec with ChiselScalatestTester {
+class DataFeederSpec extends AnyFlatSpec with ChiselScalatestTester {
 
-    "CU Data Feeder" should "generate correct matrix pattern" in {
+    "SA Data Feeder" should "generate correct matrix pattern" in {
         test(new DataFeeder(4)) { dut =>
             val print_helper = new testUtil.PrintHelper()
             val _n = dut.n

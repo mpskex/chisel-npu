@@ -1,5 +1,7 @@
 # Chisel OpenNPU
 
+[TOC]
+
 This is an open-source neural processing unit implementation in Chisel3.
 
 Specifically, this NPU is targeted at to be integerated to a low-power and edge-oriented SoC systems. So all design choices are facing those demands.

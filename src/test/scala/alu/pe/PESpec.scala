@@ -12,7 +12,7 @@ import chisel3.experimental.BundleLiterals._
 class MMPESpec extends AnyFlatSpec with ChiselScalatestTester {
 
   "MMPE" should "output multiplied number from top and left" in {
-    test(new MMPE(8)) { dut =>
+    test(new MMPE(8, 32)) { dut =>
       val rand = new Random
       var prod = 0
       for (n <- 0 until 128) {

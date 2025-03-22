@@ -1,6 +1,6 @@
 //// See README.md for license details.
 
-package alu.mma.cu
+package alu.mma.sa
 
 import testUtil._
 import scala.util.Random
@@ -9,9 +9,9 @@ import chiseltest._
 import org.scalatest.flatspec.AnyFlatSpec
 import chisel3.experimental.BundleLiterals._
 
-class CUDataCollectorSpec extends AnyFlatSpec with ChiselScalatestTester {
+class DataCollectorSpec extends AnyFlatSpec with ChiselScalatestTester {
 
-    "CU Data Collector" should "collect correct matrix pattern" in {
+    "SA Data Collector" should "collect correct matrix pattern" in {
         test(new DataCollector(4)) { dut =>
             val print_helper = new testUtil.PrintHelper()
             val _n = dut.n

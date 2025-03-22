@@ -9,7 +9,7 @@ import isa.micro_op._
   * processing element unit in npu design. 
   * This is the core compute unit .
   */
-class MMPE(val nbits: Int = 8) extends Module {
+class MMPE(val nbits: Int = 8, val accum_nbits: Int = 32) extends Module {
   val io = IO(
     new Bundle {
       val ctrl        = Input(new NCoreMMALUCtrlBundle())
@@ -18,10 +18,10 @@ class MMPE(val nbits: Int = 8) extends Module {
       //  The register bandwith is optimized for large transformer 
       //  The lower bound of max cap matrix size is:
       //    2^12 x 2^12 = (4096 x 4096)
-      val out         = Output(SInt((nbits * 2).W))
+      val out         = Output(SInt(accum_nbits.W))
   })
 
-  val res = RegInit(0.S((nbits * 2).W))
+  val res = RegInit(0.S(accum_nbits.W))
 
   when (io.ctrl.accum) {
     res := res + (io.in_a * io.in_b)
