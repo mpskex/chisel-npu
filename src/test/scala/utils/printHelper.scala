@@ -17,6 +17,14 @@ class PrintHelper(){
         println("]")
     }
 
+    def printVector(vec: Array[Int], n: Int): Unit = {
+        var _row = ""
+        for (i <- 0 until n) {
+            _row += vec(i).toString() + ", "
+        }
+        println("[" + _row + "],")
+    }
+
     def printMatrixChisel(mat: chisel3.Vec[chisel3.UInt], n: Int): Unit = {
         println("[")
         for (i <- 0 until n) {

@@ -12,20 +12,16 @@ class DataFeeder(val n: Int = 8, val nbits: Int = 8, val accum_nbits: Int = 32) 
     val io = IO(new Bundle {
         val reg_a_in        = Input(Vec(n, SInt(nbits.W)))
         val reg_b_in        = Input(Vec(n, SInt(nbits.W)))
-        val reg_accum_in    = Input(Vec(n, SInt(accum_nbits.W)))
         val reg_a_out       = Output(Vec(n, SInt(nbits.W)))
         val reg_b_out       = Output(Vec(n, SInt(nbits.W)))
-        val reg_accum_out   = Output(Vec(n, SInt(accum_nbits.W)))
     })
 
     val buffer_a = (1 until n map(x => Module(new Pipe(SInt(nbits.W), x))))
     val buffer_b = (1 until n map(x => Module(new Pipe(SInt(nbits.W), x))))
-    val buffer_accum = (1 until n map(x => Module(new Pipe(SInt(accum_nbits.W), x))))
 
     for (i <- 0 until n - 1) {
         buffer_a(i).io.enq.valid := true.B
         buffer_b(i).io.enq.valid := true.B
-        buffer_accum(i).io.enq.valid := true.B
     }
 
     // chainsaw layout
@@ -33,15 +29,12 @@ class DataFeeder(val n: Int = 8, val nbits: Int = 8, val accum_nbits: Int = 32) 
         if (i == 0) {
             io.reg_a_out(i) := io.reg_a_in(i)
             io.reg_b_out(i) := io.reg_b_in(i)
-            io.reg_accum_out(i) := io.reg_accum_in(i)
         } else {
             io.reg_a_out(i) := buffer_a(i-1).io.deq.bits
             io.reg_b_out(i) := buffer_b(i-1).io.deq.bits
-            io.reg_accum_out(i) := buffer_accum(i-1).io.deq.bits
             
             buffer_a(i-1).io.enq.bits := io.reg_a_in(i)
             buffer_b(i-1).io.enq.bits := io.reg_b_in(i)
-            buffer_accum(i-1).io.enq.bits := io.reg_accum_in(i)
         }
     }
 
