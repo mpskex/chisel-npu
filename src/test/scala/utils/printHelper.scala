@@ -25,7 +25,7 @@ class PrintHelper(){
         println("[" + _row + "],")
     }
 
-    def printMatrixChisel(mat: chisel3.Vec[chisel3.UInt], n: Int): Unit = {
+    def printMatrixChisel(mat: chisel3.Vec[chisel3.SInt], n: Int): Unit = {
         println("[")
         for (i <- 0 until n) {
             var _row = ""
@@ -37,7 +37,7 @@ class PrintHelper(){
         println("]")
     }
 
-    def printVectorChisel(vec: chisel3.Vec[chisel3.UInt], n: Int): Unit = {
+    def printVectorChisel(vec: chisel3.Vec[chisel3.SInt], n: Int): Unit = {
         var _row = ""
         for (i <- 0 until n) {
             _row += vec(i).peekInt().toString() + ", "

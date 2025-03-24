@@ -24,8 +24,8 @@ class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
 
             // random initialize the
             for (i <- 0 until _n * _n) {
-                _mat_a(i) = rand.between(-64, 64)
-                _mat_b(i) = rand.between(-64, 64)
+                _mat_a(i) = rand.between(-128, 128)
+                _mat_b(i) = rand.between(-128, 128)
             }
 
             // expected matrix multiplication result
@@ -111,13 +111,13 @@ class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
 
             // random initialize the
             for (i <- 0 until _n * _n) {
-                _mat_a(i) = rand.between(-64, 64)
-                _mat_b(i) = rand.between(-64, 64)
-                _mat_d(i) = rand.between(-64, 64)
-                _mat_e(i) = rand.between(-64, 64)
+                _mat_a(i) = rand.between(-128, 128)
+                _mat_b(i) = rand.between(-128, 128)
+                _mat_d(i) = rand.between(-128, 128)
+                _mat_e(i) = rand.between(-128, 128)
             }
             for (i <- 0 until _n)
-                _vec(i) = rand.between(-64, 64)
+                _vec(i) = rand.between(-128, 128)
 
             // expected matrix multiplication result
             for (_i <- 0 until _n) {
@@ -227,11 +227,11 @@ class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
 
             // random initialize the
             for (i <- 0 until _n * _n) {
-                _mat_a(i) = rand.between(-64, 64)
-                _mat_b(i) = rand.between(-64, 64)
+                _mat_a(i) = rand.between(-128, 128)
+                _mat_b(i) = rand.between(-128, 128)
             }
             for (i <- 0 until _n)
-                _vec(i) = rand.between(-64, 64)
+                _vec(i) = rand.between(-128, 128)
 
             // expected matrix multiplication result
             for (_i <- 0 until _n) {
@@ -264,17 +264,13 @@ class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
                     for (_i <- 0 until _n){
                         dut.io.in_a(_i).poke(_mat_a(_i * _n + i_tick))
                         dut.io.in_b(_i).poke(_mat_b(_i * _n + i_tick))
-                        dut.io.in_accum(_i).poke(0)
+                        dut.io.in_accum(_i).poke(_vec(_i))
                     }
                 } else {
                     for (_i <- 0 until _n){
                         dut.io.in_a(_i).poke(0)
                         dut.io.in_b(_i).poke(0)
-                        if (i_tick >= 2 * _n - 2){
-                            dut.io.in_accum(_i).poke(_vec(_i))
-                        } else {
-                            dut.io.in_accum(_i).poke(0)
-                        }
+                        dut.io.in_accum(_i).poke(0)
                     }
                 }
 
@@ -285,7 +281,10 @@ class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
                     dut.io.ctrl.keep.poke(true)
                 else
                     dut.io.ctrl.keep.poke(false)
-                dut.io.ctrl.use_accum.poke(true)
+                if (i_tick < _n)
+                    dut.io.ctrl.use_accum.poke(true)
+                else
+                    dut.io.ctrl.use_accum.poke(false)
 
                 // ideally, the array will give _n (diagnal) results per tick
                 dut.clock.step()

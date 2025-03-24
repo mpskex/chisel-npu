@@ -25,7 +25,8 @@ import chisel3._
     val dclct = Module(new sa.DataCollector(n, accum_nbits))
     dfeed.io.reg_a_in <> io.in_a
     dfeed.io.reg_b_in <> io.in_b
-    dclct.io.accum_in <> io.in_accum
+    dfeed.io.reg_accum_in <> io.in_accum
+    dclct.io.accum_in <> dfeed.io.reg_accum_out
 
 
 

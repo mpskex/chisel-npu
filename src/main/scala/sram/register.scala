@@ -8,13 +8,13 @@ import chisel3.util._
 class RegisterCell(val nbits: Int = 8) extends Module {
     val io = IO(
         new Bundle {
-            val d_in    = Input(UInt(nbits.W))
-            val d_out   = Output(UInt(nbits.W))
+            val d_in    = Input(SInt(nbits.W))
+            val d_out   = Output(SInt(nbits.W))
             val en_wr   = Input(Bool())
         }
     )
 
-    val reg = RegInit(0.U(nbits.W))
+    val reg = RegInit(0.S(nbits.W))
     io.d_out := reg
 
     when (io.en_wr) {
@@ -30,8 +30,8 @@ class RegisterBlock(
 ) extends Module {
     val io = IO(
         new Bundle {
-            val d_in    = Input(Vec(wr_banks, UInt(nbits.W)))
-            val d_out   = Output(Vec(rd_banks, UInt(nbits.W)))
+            val d_in    = Input(Vec(wr_banks, SInt(nbits.W)))
+            val d_out   = Output(Vec(rd_banks, SInt(nbits.W)))
             val r_addr  = Input(Vec(rd_banks, UInt(log2Ceil(size).W)))
             val w_addr  = Input(Vec(rd_banks, UInt(log2Ceil(size).W)))
             val en_wr   = Input(Vec(wr_banks, Bool()))

@@ -17,7 +17,7 @@ class RegisterSpec extends AnyFlatSpec with ChiselScalatestTester {
       val rand = new Random
       var _prev = 0
       for (i <- 0 until 10) {
-        val _in = rand.between(0, 255)
+        val _in = rand.between(-128, 128)
         dut.io.d_out.expect(_prev)
         dut.io.d_in.poke(_in)
         dut.io.en_wr.poke(true)
@@ -40,7 +40,7 @@ class RegisterSpec extends AnyFlatSpec with ChiselScalatestTester {
       for(_i <- 0 until 10){
         val _in_addr = rand.shuffle((0 until _cells).toList).take(_wr_banks)
         for (i <- 0 until _wr_banks) {
-          _in_data(i) = rand.between(0, 255)
+          _in_data(i) = rand.between(-128, 128)
           dut.io.d_in(i).poke(_in_data(i))
           dut.io.w_addr(i).poke(_in_addr(i))
           dut.io.en_wr(i).poke(true)
@@ -71,7 +71,7 @@ class RegisterSpec extends AnyFlatSpec with ChiselScalatestTester {
         val _in_data = new Array[Int](_wr_banks)
         val _in_addr = rand.shuffle((0 until _cells).toList).take(_wr_banks)
         for (i <- 0 until _wr_banks) {
-          _in_data(i) = rand.between(0, 255)
+          _in_data(i) = rand.between(-128, 128)
           dut.io.d_in(i).poke(_in_data(i))
           dut.io.w_addr(i).poke(_in_addr(i))
           _data(_in_addr(i)) = _in_data(i)
@@ -111,7 +111,7 @@ class RegisterSpec extends AnyFlatSpec with ChiselScalatestTester {
         val _in_data = new Array[Int](_wr_banks)
         val _in_addr = rand.shuffle((0 until _cells).toList).take(_wr_banks)
         for (i <- 0 until _wr_banks) {
-          _in_data(i) = rand.between(0, 255)
+          _in_data(i) = rand.between(-128, 128)
           dut.io.d_in(i).poke(_in_data(i))
           dut.io.w_addr(i).poke(_in_addr(i))
           _data(_in_addr(i)) = _in_data(i)
