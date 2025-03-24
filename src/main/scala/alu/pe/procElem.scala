@@ -23,7 +23,7 @@ class MMPE(val nbits: Int = 8, val accum_nbits: Int = 32) extends Module {
 
   val res = RegInit(0.S(accum_nbits.W))
 
-  when (io.ctrl.accum) {
+  when (io.ctrl.keep) {
     res := res + (io.in_a * io.in_b)
   } .otherwise {
     res := (io.in_a * io.in_b)

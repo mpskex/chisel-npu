@@ -21,13 +21,13 @@ class CUSpec extends AnyFlatSpec with ChiselScalatestTester {
             for (n <- 0 until 16) {
                 val _cbus_in = rand.between(0, 2)
                 history +:= _cbus_in
-                dut.io.cbus_in.accum.poke(_cbus_in)
+                dut.io.cbus_in.keep.poke(_cbus_in)
                 dut.clock.step()
                 history = history.slice(0, 2 * _n - 1)
                 println("Input tick @ " + n + ": " + _cbus_in)
                 for(i: Int <- 0 until _n){
                     for(j:Int <- 0 until _n) {
-                        dut.io.cbus_out(_n * i + j).accum.expect(history(i + j))
+                        dut.io.cbus_out(_n * i + j).keep.expect(history(i + j))
                     }
                 }
                 println("Control tick @ " + n + " : ")

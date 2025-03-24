@@ -20,7 +20,7 @@ class MMPESpec extends AnyFlatSpec with ChiselScalatestTester {
         val _left_in_ = rand.between(-64, 64)
         dut.io.in_a.poke(_top_in_)
         dut.io.in_b.poke(_left_in_)
-        dut.io.ctrl.accum.poke(true)
+        dut.io.ctrl.keep.poke(true)
         dut.clock.step()
         prod = prod + _top_in_ * _left_in_
         dut.io.out.expect(prod)
@@ -32,7 +32,7 @@ class MMPESpec extends AnyFlatSpec with ChiselScalatestTester {
       var _left_in_ = rand.between(-64, 64)
       dut.io.in_a.poke(_top_in_)
       dut.io.in_b.poke(_left_in_)
-      dut.io.ctrl.accum.poke(false)
+      dut.io.ctrl.keep.poke(false)
       dut.clock.step()
       prod = prod + _top_in_ * _left_in_
       dut.io.out.expect(prod)
@@ -42,7 +42,7 @@ class MMPESpec extends AnyFlatSpec with ChiselScalatestTester {
       _left_in_ = rand.between(-64, 64)
       dut.io.in_a.poke(_top_in_)
       dut.io.in_b.poke(_left_in_)
-      dut.io.ctrl.accum.poke(true)
+      dut.io.ctrl.keep.poke(true)
       dut.clock.step()
       prod = prod + _top_in_ * _left_in_
       dut.io.out.expect(prod)

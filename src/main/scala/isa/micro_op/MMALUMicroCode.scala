@@ -5,5 +5,6 @@ import chisel3._
 import chisel3.util._
 
 class NCoreMMALUCtrlBundle () extends Bundle {
-    val accum = Bool()
+    val keep = Bool()
+    val use_accum = Bool()
 }

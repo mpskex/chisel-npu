@@ -70,9 +70,10 @@ class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
                 // The rest of the control signal will hand over
                 // to a dedicated systolic-ish control bus
                 if (i_tick != _n)
-                    dut.io.ctrl.accum.poke(true)
+                    dut.io.ctrl.keep.poke(true)
                 else
-                    dut.io.ctrl.accum.poke(false)
+                    dut.io.ctrl.keep.poke(false)
+                dut.io.ctrl.use_accum.poke(false)
 
                 // ideally, the array will give _n (diagnal) results per tick
                 dut.clock.step()
@@ -99,6 +100,7 @@ class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
             val rand = new Random
             val _mat_a = new Array[Int](_n * _n)
             val _mat_b = new Array[Int](_n * _n)
+            val _vec = new Array[Int](_n)
             val _mat_d = new Array[Int](_n * _n)
             val _mat_e = new Array[Int](_n * _n)
             val _expected_c = new Array[Int](_n * _n)
@@ -114,6 +116,8 @@ class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
                 _mat_d(i) = rand.between(-64, 64)
                 _mat_e(i) = rand.between(-64, 64)
             }
+            for (i <- 0 until _n)
+                _vec(i) = rand.between(-64, 64)
 
             // expected matrix multiplication result
             for (_i <- 0 until _n) {
@@ -173,9 +177,10 @@ class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
                 // The rest of the control signal will hand over
                 // to a dedicated systolic-ish control bus
                 if (i_tick != _n - 1 && i_tick != 2 * _n )
-                    dut.io.ctrl.accum.poke(true)
+                    dut.io.ctrl.keep.poke(true)
                 else
-                    dut.io.ctrl.accum.poke(false)
+                    dut.io.ctrl.keep.poke(false)
+                dut.io.ctrl.use_accum.poke(false)
 
                 // ideally, the array will give _n (diagnal) results per tick
                 dut.clock.step()
@@ -277,9 +282,10 @@ class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
                 // The rest of the control signal will hand over
                 // to a dedicated systolic-ish control bus
                 if (i_tick != _n)
-                    dut.io.ctrl.accum.poke(true)
+                    dut.io.ctrl.keep.poke(true)
                 else
-                    dut.io.ctrl.accum.poke(false)
+                    dut.io.ctrl.keep.poke(false)
+                dut.io.ctrl.use_accum.poke(true)
 
                 // ideally, the array will give _n (diagnal) results per tick
                 dut.clock.step()
