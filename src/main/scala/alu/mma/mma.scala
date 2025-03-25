@@ -6,25 +6,27 @@ import alu.pe._
 import chisel3.util._
 import chisel3._
 
-
 /**
  * This is the neural core design
  */
- class MMALU(val n: Int = 8, val nbits: Int = 8) extends Module {
+ class MMALU[T <: BasePE](pe_gen: => BasePE, val n: Int = 8, val nbits: Int = 8, val accum_nbits: Int = 32) extends Module {
     val io = IO(new Bundle {
-        val in_a        = Input(Vec(n, UInt(nbits.W)))
-        val in_b        = Input(Vec(n, UInt(nbits.W)))
-        val ctrl        = Input(new NCoreMMALUBundle())
-        val out         = Output(Vec(n, UInt((2 * nbits + 12).W)))
+        val in_a        = Input(Vec(n, SInt(nbits.W)))
+        val in_b        = Input(Vec(n, SInt(nbits.W)))
+        val in_accum    = Input(Vec(n, SInt(accum_nbits.W)))
+        val ctrl        = Input(new NCoreMMALUCtrlBundle())
+        val out         = Output(Vec(n, SInt(accum_nbits.W)))
+        val clct        = Output(Bool())
     })
 
     // Create n x n pe blocks
-    val pe_io = VecInit(Seq.fill(n * n) {Module(new PE(nbits)).io})
-    val dfeed = Module(new cu.DataFeeder(n, nbits))
-    val dclct = Module(new cu.DataCollector(n, 2 * nbits + 12))
+    val pe_io = VecInit(Seq.fill(n * n) {Module(pe_gen).io})
+    val dfeed = Module(new sa.DataFeeder(n, nbits, accum_nbits))
+    val dclct = Module(new sa.DataCollector(n, accum_nbits))
     dfeed.io.reg_a_in <> io.in_a
     dfeed.io.reg_b_in <> io.in_b
-    dclct.io.cbus_in <> io.ctrl
+    dfeed.io.reg_accum_in <> io.in_accum
+    dclct.io.accum_in <> dfeed.io.reg_accum_out
 
 
 
@@ -33,6 +35,9 @@ import chisel3._
     // while simplifying design with higher efficiency
     val ctrl_array = Module(new cu.ControlUnit(n))
     ctrl_array.io.cbus_in := io.ctrl
+    dclct.io.dat_clct <> ctrl_array.io.cbus_dat_clct
+    io.clct <> ctrl_array.io.cbus_dat_clct
+    dclct.io.use_accum <> ctrl_array.io.cbus_use_accum
 
     val sarray = Module(new sa.SystolicArray2D(n, nbits))
     sarray.io.vec_a := dfeed.io.reg_a_out
@@ -45,7 +50,6 @@ import chisel3._
             pe_io(n * i + j).in_a := sarray.io.out_a(n * i + j)
             pe_io(n * i + j).in_b := sarray.io.out_b(n * i + j)
             pe_io(n * i + j).ctrl := ctrl_array.io.cbus_out(n * i + j)
-            // io.out(n * i + j) := pe_io(n * i + j).out
             dclct.io.reg_in(n * i + j) <> pe_io(n * i + j).out
         }
     }

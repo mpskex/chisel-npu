@@ -9,15 +9,15 @@ import chisel3._
  */
  class SystolicArray2D(val n: Int = 8, val nbits: Int = 8) extends Module {
     val io = IO(new Bundle {
-        val vec_a       = Input(Vec(n, UInt(nbits.W)))  // vector `a` is the left input
-        val vec_b       = Input(Vec(n, UInt(nbits.W)))  // vector `b` is the top input
-        val out_a       = Output(Vec(n * n, UInt(nbits.W)))
-        val out_b       = Output(Vec(n * n, UInt(nbits.W)))
+        val vec_a       = Input(Vec(n, SInt(nbits.W)))  // vector `a` is the left input
+        val vec_b       = Input(Vec(n, SInt(nbits.W)))  // vector `b` is the top input
+        val out_a       = Output(Vec(n * n, SInt(nbits.W)))
+        val out_b       = Output(Vec(n * n, SInt(nbits.W)))
     })
 
     // Create 2d register for horizontal & vertical
-    val reg_h = RegInit(VecInit(Seq.fill((n - 1) * n)(0.U(nbits.W))))
-    val reg_v = RegInit(VecInit(Seq.fill((n - 1) * n)(0.U(nbits.W))))
+    val reg_h = RegInit(VecInit(Seq.fill((n - 1) * n)(0.S(nbits.W))))
+    val reg_v = RegInit(VecInit(Seq.fill((n - 1) * n)(0.S(nbits.W))))
 
     for (i <- 0 until n){
         for (j <- 0 until n) {

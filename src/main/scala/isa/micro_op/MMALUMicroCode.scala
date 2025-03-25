@@ -4,7 +4,7 @@ package isa.micro_op
 import chisel3._
 import chisel3.util._
 
-class NCoreMMALUBundle () extends Bundle {
-    val accum = Bool()
-    val dat_collect = Bool()
+class NCoreMMALUCtrlBundle () extends Bundle {
+    val keep = Bool()
+    val use_accum = Bool()
 }

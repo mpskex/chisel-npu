@@ -1,6 +1,6 @@
 //// See README.md for license details.
 
-package alu.mma.cu
+package alu.mma.sa
 
 import testUtil._
 import scala.util.Random
@@ -9,9 +9,9 @@ import chiseltest._
 import org.scalatest.flatspec.AnyFlatSpec
 import chisel3.experimental.BundleLiterals._
 
-class CUDataCollectorSpec extends AnyFlatSpec with ChiselScalatestTester {
+class DataCollectorSpec extends AnyFlatSpec with ChiselScalatestTester {
 
-    "CU Data Collector" should "collect correct matrix pattern" in {
+    "SA Data Collector" should "collect correct matrix pattern" in {
         test(new DataCollector(4)) { dut =>
             val print_helper = new testUtil.PrintHelper()
             val _n = dut.n
@@ -22,7 +22,7 @@ class CUDataCollectorSpec extends AnyFlatSpec with ChiselScalatestTester {
 
             // random initialize the
             for (i <- 0 until _n * _n) {
-                _mat(i) = rand.between(0, 255)
+                _mat(i) = rand.between(-128, 128)
             }
 
             println("===== MAT =====")
@@ -41,7 +41,7 @@ class CUDataCollectorSpec extends AnyFlatSpec with ChiselScalatestTester {
                 println("Expect Vector A tick @ " + i_tick + ": [" + _in_str + "]")
 
                 // poke the input vector
-                dut.io.cbus_in.dat_collect.poke(true)
+                dut.io.dat_clct.poke(true)
                 for (_i <- 0 until (_n * _n)){
                     dut.io.reg_in(_i).poke(_mat(_i))
                 }

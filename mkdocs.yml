@@ -12,6 +12,8 @@ markdown_extensions:
   - admonition
   - markdown_wavedrom
   - pymdownx.details
+  - toc:
+      permalink: true
   - pymdownx.superfences:
       custom_fences:
         - name: mermaid
