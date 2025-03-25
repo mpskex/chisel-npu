@@ -6,6 +6,10 @@ Systolic arrays are often the fundamental execution unit in modern NPU implement
 
 Improving IPC(Instruction per Cycle) of systolic arrays is quite straight forward. We will handle the pre-fetch and pipeline the stages for sure. We also need to design an appropriate control for the systolic array to make it exeuting instructions without bubbles in the array.
 
+## Functional Model
+
+$$Y=\text{Clip}_{[-2^{\text{accum\_nbits}}, 2^{\text{accum\_nbits}}]}\Big(\text{Clip}_{[-2^{\text{accum\_nbits}}, 2^{\text{accum\_nbits}}]}(B^TA)+C\Big)$$
+
 ## What is bubbles in a systolic array?
 
 We need to reshape the input matrix into a stair shaped vectors like below. And there will be some areas (marked in gray) where does not have any useful data in it. This is what we call bubbles here.
@@ -53,6 +57,42 @@ This is the what the final cycle will look like.
 <div style="text-align: center">
 <img src="../../images/sa_ticks_seq.png" width=80%/>
 </div>
+
+## Micro Operation Timing in Pseudo Assembly
+
+Taking $4\times 4$ SA as an example, an now a GEMM $Y=B^TA+C$ can be generated as below:
+
+```assembly
+.code
+main:
+    # prepare the registers for matrix A, bank0 - bank3 (vb0-vb3), 4x8bits per bank
+    # prepare the registers for matrix B, bank4 - bank7 (vb4-vb7), 4x8bits per bank
+    # prepare the registers for matrix C, bank8 - bank11 (vb8-vb11), 4x8bits per bank
+    # prepare the registers for matrix Y, bank12 - bank15 (vb12-vb15), 4x8bits per bank
+    mma         vb0, vb4, vb8, vb12
+    mma         vb1, vb5, vb9, vb13
+    mma         vb2, vb6, vb10, vb14
+    mma.last    vb3, vb7, vb11, vb15
+    nop
+```
+
+And a tiled GEMM can be generated as below:
+```assembly
+.code
+main:
+    # first round mma will have no C available
+    mma         vb0, vb4, 0, vb12
+    mma         vb1, vb5, 0, vb13
+    mma         vb2, vb6, 0, vb14
+    mma.last    vb3, vb7, 0, vb15
+    # second round mma will have the previous output as C
+    # pipelined register will enque the vector for control
+    mma         vb8, vb4, vb12, vb12
+    mma         vb9, vb5, vb13, vb13
+    mma         vb10, vb6, vb14, vb14
+    mma.last    vb11, vb7, vb15, vb15
+    nop
+```
 
 ## Summary
 

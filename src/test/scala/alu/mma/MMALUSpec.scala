@@ -2,6 +2,7 @@
 
 package alu.mma
 
+import alu.pe._
 import testUtil._
 import scala.util.Random
 import chisel3._
@@ -12,7 +13,7 @@ import chisel3.experimental.BundleLiterals._
 class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
 
     "MMALU" should "do a normal matrix multiplication" in {
-        test(new MMALU(4, 8, 32)) { dut =>
+        test(new MMALU(new MMPE(8, 32), 4, 8, 32)) { dut =>
             val print_helper = new testUtil.PrintHelper()
             val _n = dut.n
             val rand = new Random
@@ -32,7 +33,7 @@ class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
             for (_i <- 0 until _n) {
                 for (_j <- 0 until _n) {
                     for (_m <- 0 until _n) {
-                        _expected(_i * _n + _j) += _mat_a(_i * _n + _m) * _mat_b(_j * _n + _m)
+                        _expected(_i * _n + _j) += _mat_a(_m * _n + _j) * _mat_b(_m * _n + _i)
                     }
                 }
             }
@@ -54,8 +55,8 @@ class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
                 // on the current register
                 if (i_tick < _n) {
                     for (_i <- 0 until _n){
-                        dut.io.in_a(_i).poke(_mat_a(_i * _n + i_tick))
-                        dut.io.in_b(_i).poke(_mat_b(_i * _n + i_tick))
+                        dut.io.in_a(_i).poke(_mat_a(i_tick * _n + _i))
+                        dut.io.in_b(_i).poke(_mat_b(i_tick * _n + _i))
                         dut.io.in_accum(_i).poke(0)
                     }
                 } else {
@@ -81,9 +82,9 @@ class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
                 // systolic array will start to spit out after _n - 1 ticks
                 if (i_tick >= 2 * _n - 2) {
                     for (_i <- 0 until _n) {
-                        _res(_i * _n + step) = dut.io.out(_i).peekInt().toInt
-                        println("Tick @ " + i_tick + " producing at location (" + _i + ", " + step + "): " + _res(_i * _n + step))
-                        dut.io.out(_i).expect(_expected(_i * _n + step))
+                        _res(step * _n + _i) = dut.io.out(_i).peekInt().toInt
+                        println("Tick @ " + i_tick + " producing at location (" + _i + ", " + step + "): " + _res(step * _n + _i))
+                        dut.io.out(_i).expect(_expected(step * _n + _i))
                     }
                     step = step + 1
                 }
@@ -94,7 +95,7 @@ class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
     }   
 
     "MMALU" should "do a normal matrix multiplication in stream" in {
-        test(new MMALU(4, 8, 32)) { dut =>
+        test(new MMALU(new MMPE(8, 32), 4, 8, 32)) { dut =>
             val print_helper = new testUtil.PrintHelper()
             val _n = dut.n
             val rand = new Random
@@ -123,8 +124,8 @@ class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
             for (_i <- 0 until _n) {
                 for (_j <- 0 until _n) {
                     for (_m <- 0 until _n) {
-                        _expected_c(_i * _n + _j) += _mat_a(_i * _n + _m) * _mat_b(_j * _n + _m)
-                        _expected_f(_i * _n + _j) += _mat_d(_i * _n + _m) * _mat_e(_j * _n + _m)
+                        _expected_c(_i * _n + _j) += _mat_a(_m * _n + _j) * _mat_b(_m * _n + _i)
+                        _expected_f(_i * _n + _j) += _mat_d(_m * _n + _j) * _mat_e(_m * _n + _i)
                     }
                 }
             }
@@ -154,15 +155,15 @@ class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
                 if (i_tick < _n) {
                     // println("Tick @ " + i_tick + " Reading Reg A & B")
                     for (_i <- 0 until _n){
-                        dut.io.in_a(_i).poke(_mat_a(_i * _n + i_tick))
-                        dut.io.in_b(_i).poke(_mat_b(_i * _n + i_tick))
+                        dut.io.in_a(_i).poke(_mat_a(i_tick * _n + _i))
+                        dut.io.in_b(_i).poke(_mat_b(i_tick * _n + _i))
                         dut.io.in_accum(_i).poke(0)
                     }
                 } else if (i_tick < 2 * _n) {
                     // println("Tick @ " + i_tick + " Reading Reg C & D")
                     for (_i <- 0 until _n){
-                        dut.io.in_a(_i).poke(_mat_d(_i * _n + i_tick % _n))
-                        dut.io.in_b(_i).poke(_mat_e(_i * _n + i_tick % _n))
+                        dut.io.in_a(_i).poke(_mat_d((i_tick % _n) * _n + _i))
+                        dut.io.in_b(_i).poke(_mat_e((i_tick % _n) * _n + _i))
                         dut.io.in_accum(_i).poke(0)
                     }
                 } else {
@@ -189,18 +190,18 @@ class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
                 println("Tick @ " + i_tick + " clct signal " + dut.io.clct.peekInt().toInt)
                 if (i_tick >= 2 * _n - 2 && i_tick < 3 * _n - 2) {
                     for (_i <- 0 until _n) {
-                        _res_c(_i * _n + step) = dut.io.out(_i).peekInt().toInt
-                        println("Tick @ " + i_tick + " Mat C producing at location (" + _i + ", " + step + "): " + _res_c(_i * _n + step))
-                        dut.io.out(_i).expect(_expected_c(_i * _n + step))
+                        _res_c(step * _n + _i) = dut.io.out(_i).peekInt().toInt
+                        println("Tick @ " + i_tick + " Mat C producing at location (" + _i + ", " + step + "): " + _res_c(step * _n + _i))
+                        dut.io.out(_i).expect(_expected_c(step * _n + _i))
                     }
                     step = step + 1
                 } 
                 // systolic array will start to generate again after 3 * _n - 2 ticks
                 if (i_tick >= 3 * _n - 2 && i_tick < 4 * _n - 2){
                     for (_i <- 0 until _n) {
-                        _res_f(_i * _n + step % _n) = dut.io.out(_i).peekInt().toInt
-                        println("OUT Tick @ " + i_tick + " Mat F producing at location (" + _i + ", " + step % _n + "): " + _res_f(_i * _n + step % _n))
-                        dut.io.out(_i).expect(_expected_f(_i * _n + step % _n))
+                        _res_f((step % _n) * _n + _i) = dut.io.out(_i).peekInt().toInt
+                        println("OUT Tick @ " + i_tick + " Mat F producing at location (" + _i + ", " + step % _n + "): " + _res_f((step % _n) * _n + _i))
+                        dut.io.out(_i).expect(_expected_f((step % _n) * _n + _i))
                     }
                     step = step + 1
                 }
@@ -214,7 +215,7 @@ class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
     }   
 
     "MMALU" should "do a generic matrix multiplication" in {
-       test(new MMALU(4, 8, 32)) { dut =>
+       test(new MMALU(new MMPE(8, 32), 4, 8, 32)) { dut =>
             val print_helper = new testUtil.PrintHelper()
             val _n = dut.n
             val rand = new Random
@@ -237,9 +238,9 @@ class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
             for (_i <- 0 until _n) {
                 for (_j <- 0 until _n) {
                     for (_m <- 0 until _n) {
-                        _expected(_i * _n + _j) += _mat_a(_i * _n + _m) * _mat_b(_j * _n + _m)
+                        _expected(_i * _n + _j) += _mat_a(_m * _n + _j) * _mat_b(_m * _n + _i)
                     }
-                    _expected(_i * _n + _j) += _vec(_i)
+                    _expected(_i * _n + _j) += _vec(_j)
                 }
             }
 
@@ -262,8 +263,8 @@ class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
                 // on the current register
                 if (i_tick < _n) {
                     for (_i <- 0 until _n){
-                        dut.io.in_a(_i).poke(_mat_a(_i * _n + i_tick))
-                        dut.io.in_b(_i).poke(_mat_b(_i * _n + i_tick))
+                        dut.io.in_a(_i).poke(_mat_a(i_tick * _n + _i))
+                        dut.io.in_b(_i).poke(_mat_b(i_tick * _n + _i))
                         dut.io.in_accum(_i).poke(_vec(_i))
                     }
                 } else {
@@ -292,9 +293,9 @@ class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
                 // systolic array will start to spit out after _n - 1 ticks
                 if (i_tick >= 2 * _n - 2) {
                     for (_i <- 0 until _n) {
-                        _res(_i * _n + step) = dut.io.out(_i).peekInt().toInt
-                        println("Tick @ " + i_tick + " producing at location (" + _i + ", " + step + "): " + _res(_i * _n + step))
-                        dut.io.out(_i).expect(_expected(_i * _n + step))
+                        _res(step * _n + _i) = dut.io.out(_i).peekInt().toInt
+                        println("Tick @ " + i_tick + " producing at location (" + _i + ", " + step + "): " + _res(step * _n + _i))
+                        dut.io.out(_i).expect(_expected(step * _n + _i))
                     }
                     step = step + 1
                 }

@@ -9,7 +9,7 @@ import chisel3._
 /**
  * This is the neural core design
  */
- class MMALU(val n: Int = 8, val nbits: Int = 8, val accum_nbits: Int = 32) extends Module {
+ class MMALU[T <: BasePE](pe_gen: => BasePE, val n: Int = 8, val nbits: Int = 8, val accum_nbits: Int = 32) extends Module {
     val io = IO(new Bundle {
         val in_a        = Input(Vec(n, SInt(nbits.W)))
         val in_b        = Input(Vec(n, SInt(nbits.W)))
@@ -20,7 +20,7 @@ import chisel3._
     })
 
     // Create n x n pe blocks
-    val pe_io = VecInit(Seq.fill(n * n) {Module(new MMPE(nbits)).io})
+    val pe_io = VecInit(Seq.fill(n * n) {Module(pe_gen).io})
     val dfeed = Module(new sa.DataFeeder(n, nbits, accum_nbits))
     val dclct = Module(new sa.DataCollector(n, accum_nbits))
     dfeed.io.reg_a_in <> io.in_a
