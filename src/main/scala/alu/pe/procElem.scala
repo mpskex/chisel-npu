@@ -7,7 +7,7 @@ import isa.micro_op._
 
 /**
   * processing element unit in npu design. 
-  * This is the core compute unit .
+  * This is the core compute unit.
   */
 class MMPE(nbits: Int = 8, accum_nbits: Int = 32) extends BasePE(nbits, accum_nbits) {
   when (io.ctrl.keep) {

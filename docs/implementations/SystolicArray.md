@@ -94,6 +94,33 @@ main:
     nop
 ```
 
+## Data types
+
+Implemented items are checked below
+
+- [ ] s16
+- [x] s8
+- [ ] s4pack2
+- [ ] s2pack4
+
+**Matrix Multiplication will only have identical data types for both inputs and outputs**
+
 ## Summary
 
 Systolic array can support pipelining, but unlike traditional DSP architectures, a systolic pipeline is more gradual and continuous. So the control unit should be designed carefully to make use of this advantage.
+
+## Waveform
+
+For a $4\times4$ systolic array:
+
+wavedrom (
+    { signal: [
+      { name: "clk", wave:"P............", period: 2 },
+      { name: "in_a", wave: "x============", data:["a_1", "a_2", "a_3", "a_4", "d_1","d_2", "d_3", "d_4", "g_1", "g_2", "g_3", "g_4"], period: 2},
+      { name: "in_b", wave: "x============", data:["b_1", "b_2", "b_3", "b_4", "e_1", "e_2", "e_3", "e_4", "h_1", "h_2", "h_3", "h_4"], period: 2},
+      { name: "in_accum", wave: "xxxxx========", data:["accum_a1", "accum_a2", "accum_a3", "accum_a4", "accum_d1","accum_d2", "accum_d3", "accum_d4", "accum_g1", "accum_g2"], period: 2},
+      { name: "ctrl.keep", wave: "1...01..01..0", period: 2},
+      { name: "ctrl.use_accum", wave: "0....1.......", period: 2},
+      { name: "out", wave: "xxxxxxx======", data:["c1", "c2", "c3", "c4", "f_1", "f_2"], period: 2},
+      ] }
+)

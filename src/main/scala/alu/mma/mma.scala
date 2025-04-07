@@ -7,7 +7,8 @@ import chisel3.util._
 import chisel3._
 
 /**
- * This is the neural core design
+ * This is a general Matrix Multiplication ALU design
+ * You can always implement your own PE module here.
  */
  class MMALU[T <: BasePE](pe_gen: => BasePE, val n: Int = 8, val nbits: Int = 8, val accum_nbits: Int = 32) extends Module {
     val io = IO(new Bundle {

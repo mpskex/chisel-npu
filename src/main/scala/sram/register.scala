@@ -5,16 +5,16 @@ package sram.register
 import chisel3._
 import chisel3.util._
 
-class RegisterCell(val nbits: Int = 8) extends Module {
+class RegisterCell(val n: Int = 8, val nbits: Int = 8) extends Module {
     val io = IO(
         new Bundle {
-            val d_in    = Input(SInt(nbits.W))
-            val d_out   = Output(SInt(nbits.W))
+            val d_in    = Input(Vec(n, SInt(nbits.W)))
+            val d_out   = Output(Vec(n, SInt(nbits.W)))
             val en_wr   = Input(Bool())
         }
     )
 
-    val reg = RegInit(0.S(nbits.W))
+    val reg = RegInit(VecInit(Seq.fill(n)(0.S(nbits.W))))
     io.d_out := reg
 
     when (io.en_wr) {
@@ -23,26 +23,29 @@ class RegisterCell(val nbits: Int = 8) extends Module {
 }
 
 class RegisterBlock(
+    val n: Int = 8,
     val rd_banks: Int = 8,
     val wr_banks: Int = 4,
-    val size: Int = 4096,
+    val size: Int = 32,
     val nbits: Int = 8
 ) extends Module {
     val io = IO(
         new Bundle {
-            val d_in    = Input(Vec(wr_banks, SInt(nbits.W)))
-            val d_out   = Output(Vec(rd_banks, SInt(nbits.W)))
+            val d_in    = Input(Vec(wr_banks, Vec(n, SInt(nbits.W))))
+            val d_out   = Output(Vec(rd_banks, Vec(n, SInt(nbits.W))))
             val r_addr  = Input(Vec(rd_banks, UInt(log2Ceil(size).W)))
             val w_addr  = Input(Vec(rd_banks, UInt(log2Ceil(size).W)))
             val en_wr   = Input(Vec(wr_banks, Bool()))
         }
     )
-    val cells_io = VecInit(Seq.fill(size) {Module(new RegisterCell(nbits)).io})
+    val cells_io = VecInit(Seq.fill(size) {Module(new RegisterCell(n, nbits)).io})
 
     for (i <- 0 until size) {
         cells_io(i).en_wr := false.B.asTypeOf(cells_io(i).en_wr)
         // Need to initialize all wires just in case of not selected.
-        cells_io(i).d_in := 0.U.asTypeOf(cells_io(i).d_in)
+        for (_i <- 0 until n){
+          cells_io(i).d_in(_i) := 0.U.asTypeOf(cells_io(i).d_in(_i))
+        }
     }
 
     //TODO: add range check
