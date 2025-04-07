@@ -118,11 +118,6 @@ class RegisterSpec extends AnyFlatSpec with ChiselScalatestTester {
         for (b <- 0 until _rd_banks) {
           println("Result tick @ " + _i + " @ bank " + b + ": ")
           print_helper.printVectorChisel(dut.io.d_out(b), dut.n)
-          var _str = ""
-          for (__i <- 0 until dut.n) {
-            _str += _data(_r_addr(b) * dut.n + __i).toString() + ", "
-          }
-          println(_str)
         }
         for (i <- 0 until _rd_banks){
           for (__i <- 0 until dut.n) {
@@ -166,7 +161,6 @@ class RegisterSpec extends AnyFlatSpec with ChiselScalatestTester {
             _expected(i * dut.n + __i) = _data(_r_addr(i) * dut.n + __i)
           }
         }
-        println("Result tick @ " + _i + ": ")
         for (i <- 0 until _rd_banks){
           for (__i <- 0 until dut.n) {
             dut.io.d_out(i)(__i).expect(_data(_r_addr(i) * dut.n + __i))
