@@ -26,13 +26,13 @@ class DataCollector(val n: Int = 8, val nbits: Int = 8) extends Module {
         val col = (cnt - i.U) % n.U
         if (i == n - 1) {
             when (io.use_accum){
-                io.reg_out(i) := io.reg_in((i * n).U + col) +  io.accum_in(i)
+                io.reg_out(i) := io.reg_in((i * n).U(n.W) + col) +  io.accum_in(i)
             } .otherwise {
-                io.reg_out(i) := io.reg_in((i * n).U + col)
+                io.reg_out(i) := io.reg_in((i * n).U(n.W) + col)
             }
         } else {
             buffer(i).io.enq.valid := true.B
-            buffer(i).io.enq.bits := io.reg_in((i * n).U + col)
+            buffer(i).io.enq.bits := io.reg_in((i * n).U(n.W) + col)
             when (io.use_accum){
                 io.reg_out(i) := buffer(i).io.deq.bits +  io.accum_in(i)
             } .otherwise {

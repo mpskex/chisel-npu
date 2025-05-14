@@ -105,4 +105,5 @@ RUN git clone --progress https://github.com/chipsalliance/chisel.git && cd /work
 # clean up chisel sources
 WORKDIR /workspace/
 ENV COURSIER_CACHE="/workspace/.cache/coursier/v1"
+ENV CHISEL_FIRTOOL_PATH=/usr/local/bin
 CMD ["bash"]

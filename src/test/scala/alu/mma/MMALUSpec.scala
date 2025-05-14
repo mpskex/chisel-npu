@@ -6,14 +6,14 @@ import alu.pe._
 import testUtil._
 import scala.util.Random
 import chisel3._
-import chiseltest._
+import chisel3.simulator.EphemeralSimulator._
 import org.scalatest.flatspec.AnyFlatSpec
 import chisel3.experimental.BundleLiterals._
 
-class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
+class MMALUSpec extends AnyFlatSpec {
 
     "MMALU" should "do a normal matrix multiplication" in {
-        test(new MMALU(new MMPE(8, 32), 4, 8, 32)) { dut =>
+        simulate(new MMALU(new MMPE(8, 32), 4, 8, 32)) { dut =>
             val print_helper = new testUtil.PrintHelper()
             val _n = dut.n
             val rand = new Random
@@ -82,7 +82,7 @@ class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
                 // systolic array will start to spit out after _n - 1 ticks
                 if (i_tick >= 2 * _n - 2) {
                     for (_i <- 0 until _n) {
-                        _res(step * _n + _i) = dut.io.out(_i).peekInt().toInt
+                        _res(step * _n + _i) = dut.io.out(_i).peek().litValue.toInt
                         println("Tick @ " + i_tick + " producing at location (" + _i + ", " + step + "): " + _res(step * _n + _i))
                         dut.io.out(_i).expect(_expected(step * _n + _i))
                     }
@@ -95,7 +95,7 @@ class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
     }   
 
     "MMALU" should "do a normal matrix multiplication in stream" in {
-        test(new MMALU(new MMPE(8, 32), 4, 8, 32)) { dut =>
+        simulate(new MMALU(new MMPE(8, 32), 4, 8, 32)) { dut =>
             val print_helper = new testUtil.PrintHelper()
             val _n = dut.n
             val rand = new Random
@@ -187,10 +187,10 @@ class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
                 dut.clock.step()
 
                 // systolic array will start to spit out after _n - 1 ticks for mat_c
-                println("Tick @ " + i_tick + " clct signal " + dut.io.clct.peekInt().toInt)
+                println("Tick @ " + i_tick + " clct signal " + dut.io.clct.peek().litValue.toInt)
                 if (i_tick >= 2 * _n - 2 && i_tick < 3 * _n - 2) {
                     for (_i <- 0 until _n) {
-                        _res_c(step * _n + _i) = dut.io.out(_i).peekInt().toInt
+                        _res_c(step * _n + _i) = dut.io.out(_i).peek().litValue.toInt
                         println("Tick @ " + i_tick + " Mat C producing at location (" + _i + ", " + step + "): " + _res_c(step * _n + _i))
                         dut.io.out(_i).expect(_expected_c(step * _n + _i))
                     }
@@ -199,7 +199,7 @@ class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
                 // systolic array will start to generate again after 3 * _n - 2 ticks
                 if (i_tick >= 3 * _n - 2 && i_tick < 4 * _n - 2){
                     for (_i <- 0 until _n) {
-                        _res_f((step % _n) * _n + _i) = dut.io.out(_i).peekInt().toInt
+                        _res_f((step % _n) * _n + _i) = dut.io.out(_i).peek().litValue.toInt
                         println("OUT Tick @ " + i_tick + " Mat F producing at location (" + _i + ", " + step % _n + "): " + _res_f((step % _n) * _n + _i))
                         dut.io.out(_i).expect(_expected_f((step % _n) * _n + _i))
                     }
@@ -215,7 +215,7 @@ class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
     }   
 
     "MMALU" should "do a generic matrix multiplication" in {
-       test(new MMALU(new MMPE(8, 32), 4, 8, 32)) { dut =>
+       simulate(new MMALU(new MMPE(8, 32), 4, 8, 32)) { dut =>
             val print_helper = new testUtil.PrintHelper()
             val _n = dut.n
             val rand = new Random
@@ -293,7 +293,7 @@ class MMALUSpec extends AnyFlatSpec with ChiselScalatestTester {
                 // systolic array will start to spit out after _n - 1 ticks
                 if (i_tick >= 2 * _n - 2) {
                     for (_i <- 0 until _n) {
-                        _res(step * _n + _i) = dut.io.out(_i).peekInt().toInt
+                        _res(step * _n + _i) = dut.io.out(_i).peek().litValue.toInt
                         println("Tick @ " + i_tick + " producing at location (" + _i + ", " + step + "): " + _res(step * _n + _i))
                         dut.io.out(_i).expect(_expected(step * _n + _i))
                     }

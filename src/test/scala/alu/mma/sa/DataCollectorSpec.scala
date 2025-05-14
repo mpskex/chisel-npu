@@ -5,14 +5,14 @@ package alu.mma.sa
 import testUtil._
 import scala.util.Random
 import chisel3._
-import chiseltest._
+import chisel3.simulator.EphemeralSimulator._
 import org.scalatest.flatspec.AnyFlatSpec
 import chisel3.experimental.BundleLiterals._
 
-class DataCollectorSpec extends AnyFlatSpec with ChiselScalatestTester {
+class DataCollectorSpec extends AnyFlatSpec{
 
     "SA Data Collector" should "collect correct matrix pattern" in {
-        test(new DataCollector(4)) { dut =>
+        simulate(new DataCollector(4)) { dut =>
             val print_helper = new testUtil.PrintHelper()
             val _n = dut.n
             val rand = new Random
@@ -50,7 +50,7 @@ class DataCollectorSpec extends AnyFlatSpec with ChiselScalatestTester {
                 // show the output
                 var _in_str_out = ""
                 for (__i <- 0 until _n) {
-                    _in_str_out += dut.io.reg_out(__i).peekInt().toInt.toString() + ","
+                    _in_str_out += dut.io.reg_out(__i).peek().litValue.toInt.toString() + ","
                 }
                 println("Output Vector A tick @ " + i_tick + ": [" + _in_str_out + "]")
 
