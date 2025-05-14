@@ -9,3 +9,5 @@ test_run_dir/
 site/
 .DS_Store
 .cache
+*.fir
+obj_dir/
