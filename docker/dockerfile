@@ -98,12 +98,22 @@ FROM env AS scala-arm64
 RUN curl -fL https://github.com/VirtusLab/coursier-m1/releases/latest/download/cs-aarch64-pc-linux.gz | gzip -d > cs && chmod +x cs && ./cs setup -y && rm -rf cs-aarch64-pc-linux.gz
 
 # build chisel
-FROM scala-${TARGETARCH}
+FROM scala-${TARGETARCH} AS final
 ENV PATH="${PATH}:/root/.local/share/coursier/bin/:/usr/local/bin/"
 RUN git clone --progress https://github.com/chipsalliance/chisel.git && cd /workspace/chisel/ && git checkout v6.7.0 && sbt compile && sbt "unipublish / publishLocal" && rm -rf /workspace/chisel
+
+# install systemc 3.0.1
+FROM final
+WORKDIR /workspace
+RUN apt-get update && apt-get install libtool -y && apt-get clean -y
+RUN wget -O - https://github.com/accellera-official/systemc/archive/refs/tags/3.0.1.tar.gz | tar -xz && \
+    cd /workspace/systemc-3.0.1 && mkdir build && cd build && \
+    cmake -S .. -B .  -DCMAKE_INSTALL_PREFIX=/opt/systemc -DBUILD_SHARED_LIBS=OFF && make -j8 && make install && cd /workspace && rm -rf systemc-3.0.1
 
 # clean up chisel sources
 WORKDIR /workspace/
 ENV COURSIER_CACHE="/workspace/.cache/coursier/v1"
 ENV CHISEL_FIRTOOL_PATH=/usr/local/bin
+ENV SYSTEMC_INCLUDE=/opt/systemc/include
+ENV SYSTEMC_LIBDIR=/opt/systemc/lib
 CMD ["bash"]
