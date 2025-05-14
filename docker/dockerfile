@@ -15,8 +15,34 @@ RUN echo "deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ jammy main restricted
     echo "deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ jammy-backports main restricted universe multiverse\n" >> /etc/apt/sources.list; \
     echo "deb http://security.ubuntu.com/ubuntu/ jammy-security main restricted universe multiverse\n" >> /etc/apt/sources.list;
 RUN apt-get update && apt-get install default-jdk sudo git make autoconf g++ flex bison curl wget gnupg ninja-build cmake -y && apt-get clean -y
+WORKDIR /workspace/
 # install firtool
-RUN wget -q -O - https://github.com/llvm/circt/releases/download/firtool-1.38.0/firrtl-bin-ubuntu-20.04.tar.gz | tar -zx && mv firtool-1.38.0/bin/firtool /usr/local/bin/
+RUN mkdir circt && \
+    wget -O - https://github.com/llvm/circt/releases/download/firtool-1.38.0/circt-full-sources.tar.gz | tar -xz -C circt && \
+    cd /workspace/circt && \
+    mkdir -p llvm/build && cd llvm/build && \
+    cmake -G Ninja /workspace/circt/llvm/llvm \
+    -DLLVM_ENABLE_PROJECTS="mlir" \
+    -DLLVM_TARGETS_TO_BUILD="host" \
+    -DCMAKE_JOB_POOLS="compile=8;link=1" \
+    -DCMAKE_JOB_POOL_LINK="link" \
+    -DCMAKE_JOB_POOL_COMPILE="compile" \
+    -DLLVM_ENABLE_ASSERTIONS=ON \
+    -DCMAKE_BUILD_TYPE=RELEASE \
+    -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && ninja && \
+    mkdir -p /workspace/circt/build && cd /workspace/circt/build && \
+    sed -ie 's/"unknown git version"/"firtool-1.38.0"/g' /workspace/circt/cmake/modules/GenVersionFile.cmake && \
+    cmake -G Ninja /workspace/circt \
+    -DMLIR_DIR=/workspace/circt/llvm/build/lib/cmake/mlir \
+    -DLLVM_DIR=/workspace/circt/llvm/build/lib/cmake/llvm \
+    -DCMAKE_JOB_POOLS="compile=8;link=1" \
+    -DCMAKE_JOB_POOL_LINK="link" \
+    -DCMAKE_JOB_POOL_COMPILE="compile" \
+    -DLLVM_ENABLE_ASSERTIONS=ON \
+    -DCMAKE_BUILD_TYPE=RELEASE \
+    -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && ninja && \
+    mv /workspace/circt/build/bin/* /usr/local/bin/ && cd /workspace && rm -rf /workspace/circt
+
 
 FROM base AS base-arm64
 RUN echo "deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports/ jammy main restricted universe multiverse" > /etc/apt/sources.list; \ 
@@ -50,7 +76,7 @@ RUN mkdir circt && \
     -DLLVM_ENABLE_ASSERTIONS=ON \
     -DCMAKE_BUILD_TYPE=RELEASE \
     -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && ninja && \
-    mv /workspace/circt/build/bin/firtool /usr/local/bin/ && cd /workspace && rm -rf /workspace/circt
+    mv /workspace/circt/build/bin/* /usr/local/bin/ && cd /workspace && rm -rf /workspace/circt
 
 FROM base-${TARGETARCH} AS env
 
