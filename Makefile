@@ -36,7 +36,7 @@ build-sc: top.v
 push:
 	make push-image-${ARCH}
 
-push-x86_64:
+push-image-x86_64:
 	make push-image-amd64
 
 push-image-amd64:
