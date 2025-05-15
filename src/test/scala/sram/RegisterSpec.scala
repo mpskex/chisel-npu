@@ -5,16 +5,16 @@ package sram.register
 import scala.util.Random
 import chisel3._
 import testUtil._
-import chiseltest._
+import chisel3.simulator.EphemeralSimulator._
 import org.scalatest.flatspec.AnyFlatSpec
 import chisel3.experimental.BundleLiterals._
 import testUtil._
 
 
-class RegisterSpec extends AnyFlatSpec with ChiselScalatestTester {
+class RegisterSpec extends AnyFlatSpec {
 
   "Register Cells" should "write on signal" in {
-    test(new RegisterCell(2, 8)) { dut =>
+    simulate(new RegisterCell(2, 8)) { dut =>
       val print_helper = new testUtil.PrintHelper()
       val rand = new Random
       var _prev = new Array[Int](dut.n)
@@ -44,7 +44,7 @@ class RegisterSpec extends AnyFlatSpec with ChiselScalatestTester {
   }
 
   "Register Block" should "write on signal and read anytime" in {
-    test(new RegisterBlock(2, 3, 3, 32, 8)) { dut =>
+    simulate(new RegisterBlock(2, 3, 3, 32, 8)) { dut =>
       val _rd_banks = dut.rd_banks
       val _wr_banks = dut.wr_banks
       val _cells = dut.size
@@ -79,7 +79,7 @@ class RegisterSpec extends AnyFlatSpec with ChiselScalatestTester {
   }
 
   "Register Block" should "read anytime" in {
-    test(new RegisterBlock(2, 3, 3, 32, 8)) { dut =>
+    simulate(new RegisterBlock(2, 3, 3, 32, 8)) { dut =>
       val _rd_banks = dut.rd_banks
       val _wr_banks = dut.wr_banks
       val _cells = dut.size
@@ -129,7 +129,7 @@ class RegisterSpec extends AnyFlatSpec with ChiselScalatestTester {
   }
 
   "Register Block" should "read anytime on different read banks" in {
-    test(new RegisterBlock(2, 2, 2, 32, 8)) { dut =>
+    simulate(new RegisterBlock(2, 2, 2, 32, 8)) { dut =>
       val _rd_banks = dut.rd_banks
       val _wr_banks = dut.wr_banks
       val _cells = dut.size

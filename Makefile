@@ -4,7 +4,7 @@ export ARCH=`uname -m`
 # Currently the image does not support arm64, 
 # We have to hard code the arch into amd64 as a workaround
 # export ARCH=amd64
-export VER=0.2
+export VER=0.4
 
 image:
 	make image-${ARCH}
@@ -25,13 +25,18 @@ container:
 test:
 	if [ ${ARCH} = "arm64" ]; then docker run -u $(id -u):$(id -g) --rm -it -v ${PWD}:/workspace/ fangruil/chisel-dev:arm64 sbt test; else docker run -u $(id -u):$(id -g) --rm -it -v ${PWD}:/workspace/ fangruil/chisel-dev:amd64 sbt test; fi
 
-build:
+top.v:
 	if [ ${ARCH} = "arm64" ]; then docker run -u $(id -u):$(id -g) --rm -it -v ${PWD}:/workspace/ fangruil/chisel-dev:arm64 sbt run; else docker run -u $(id -u):$(id -g) --rm -it -v ${PWD}:/workspace/ fangruil/chisel-dev:amd64 sbt run; fi
+
+build: top.v
+
+build-sc: top.v
+	if [ ${ARCH} = "arm64" ]; then docker run -u $(id -u):$(id -g) --rm -it -v ${PWD}:/workspace/ fangruil/chisel-dev:arm64 verilator top.v -sc -Mdir systemc; else docker run -u $(id -u):$(id -g) --rm -it -v ${PWD}:/workspace/ fangruil/chisel-dev:amd64 verilator top.v -sc -Mdir systemc; fi
 
 push:
 	make push-image-${ARCH}
 
-push-x86_64:
+push-image-x86_64:
 	make push-image-amd64
 
 push-image-amd64:

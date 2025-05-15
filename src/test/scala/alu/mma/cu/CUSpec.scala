@@ -5,14 +5,14 @@ package alu.mma.cu
 import testUtil._
 import scala.util.Random
 import chisel3._
-import chiseltest._
+import chisel3.simulator.EphemeralSimulator._
 import org.scalatest.flatspec.AnyFlatSpec
 import chisel3.experimental.BundleLiterals._
 
-class CUSpec extends AnyFlatSpec with ChiselScalatestTester {
+class CUSpec extends AnyFlatSpec {
 
     "CU" should "send control to 2D systolic array" in {
-        test(new ControlUnit(4)) { dut =>
+        simulate(new ControlUnit(4)) { dut =>
             val print_helper = new testUtil.PrintHelper()
             val _n = dut.n
             val rand = new Random

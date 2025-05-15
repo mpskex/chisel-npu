@@ -23,6 +23,8 @@ make container
 make test
 # Build verilog design from chisel
 make build
+# Build systemc
+make build-sc
 # Build docs, visit http://localhost:8000 to see the documentation
 make docs
 ```

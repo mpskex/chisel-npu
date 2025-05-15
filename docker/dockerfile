@@ -1,4 +1,4 @@
-FROM --platform=$TARGETPLATFORM ubuntu:22.04 AS base
+FROM --platform=$TARGETPLATFORM ubuntu:24.04 AS base
 
 # Chisel 3 docker image for Chip Dev
 # ==========
@@ -10,24 +10,15 @@ USER root
 RUN apt-get update && apt-get upgrade -y && apt install ca-certificates -y
 
 FROM base AS base-amd64
-RUN echo "deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ jammy main restricted universe multiverse\n" > /etc/apt/sources.list; \
-    echo "deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ jammy-updates main restricted universe multiverse\n" >> /etc/apt/sources.list; \
-    echo "deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ jammy-backports main restricted universe multiverse\n" >> /etc/apt/sources.list; \
-    echo "deb http://security.ubuntu.com/ubuntu/ jammy-security main restricted universe multiverse\n" >> /etc/apt/sources.list;
-RUN apt-get update && apt-get install default-jdk sudo git make autoconf g++ flex bison curl wget gnupg ninja-build cmake -y && apt-get clean -y
-# install firtool
-RUN wget -q -O - https://github.com/llvm/circt/releases/download/firtool-1.38.0/firrtl-bin-ubuntu-20.04.tar.gz | tar -zx && mv firtool-1.38.0/bin/firtool /usr/local/bin/
-
-FROM base AS base-arm64
-RUN echo "deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports/ jammy main restricted universe multiverse" > /etc/apt/sources.list; \ 
-    echo "deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports/ jammy-updates main restricted universe multiverse" >> /etc/apt/sources.list; \ 
-    echo "deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports/ jammy-backports main restricted universe multiverse" >> /etc/apt/sources.list; \ 
-    echo "deb http://ports.ubuntu.com/ubuntu-ports/ jammy-security main restricted universe multiverse" >> /etc/apt/sources.list; 
-RUN apt-get update && apt-get install default-jdk sudo git make autoconf g++ flex bison curl wget gnupg ninja-build cmake -y && apt-get clean -y
+RUN echo "deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ noble main restricted universe multiverse\n" > /etc/apt/sources.list; \
+    echo "deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ noble-updates main restricted universe multiverse\n" >> /etc/apt/sources.list; \
+    echo "deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ noble-backports main restricted universe multiverse\n" >> /etc/apt/sources.list; \
+    echo "deb http://security.ubuntu.com/ubuntu/ noble-security main restricted universe multiverse\n" >> /etc/apt/sources.list;
+RUN apt-get update && apt-get install default-jdk sudo git make autoconf g++ flex bison curl wget gnupg ninja-build help2man cmake -y && apt-get clean -y
 WORKDIR /workspace/
 # install firtool
 RUN mkdir circt && \
-    wget -O - https://github.com/llvm/circt/releases/download/firtool-1.38.0/circt-full-sources.tar.gz | tar -xz -C circt && \
+    wget -O - https://github.com/llvm/circt/releases/download/firtool-1.62.1/circt-full-sources.tar.gz | tar -xz -C circt && \
     cd /workspace/circt && \
     mkdir -p llvm/build && cd llvm/build && \
     cmake -G Ninja /workspace/circt/llvm/llvm \
@@ -40,7 +31,7 @@ RUN mkdir circt && \
     -DCMAKE_BUILD_TYPE=RELEASE \
     -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && ninja && \
     mkdir -p /workspace/circt/build && cd /workspace/circt/build && \
-    sed -ie 's/"unknown git version"/"firtool-1.38.0"/g' /workspace/circt/cmake/modules/GenVersionFile.cmake && \
+    sed -ie 's/"unknown git version"/"firtool-1.62.1"/g' /workspace/circt/cmake/modules/GenVersionFile.cmake && \
     cmake -G Ninja /workspace/circt \
     -DMLIR_DIR=/workspace/circt/llvm/build/lib/cmake/mlir \
     -DLLVM_DIR=/workspace/circt/llvm/build/lib/cmake/llvm \
@@ -50,12 +41,47 @@ RUN mkdir circt && \
     -DLLVM_ENABLE_ASSERTIONS=ON \
     -DCMAKE_BUILD_TYPE=RELEASE \
     -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && ninja && \
-    mv /workspace/circt/build/bin/firtool /usr/local/bin/ && cd /workspace && rm -rf /workspace/circt
+    mv /workspace/circt/build/bin/* /usr/local/bin/ && cd /workspace && rm -rf /workspace/circt
+
+
+FROM base AS base-arm64
+RUN echo "deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports/ noble main restricted universe multiverse" > /etc/apt/sources.list; \ 
+    echo "deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports/ noble-updates main restricted universe multiverse" >> /etc/apt/sources.list; \ 
+    echo "deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports/ noble-backports main restricted universe multiverse" >> /etc/apt/sources.list; \ 
+    echo "deb http://ports.ubuntu.com/ubuntu-ports/ noble-security main restricted universe multiverse" >> /etc/apt/sources.list; 
+RUN apt-get update && apt-get install default-jdk sudo git make autoconf g++ flex bison curl wget gnupg ninja-build help2man cmake -y && apt-get clean -y
+WORKDIR /workspace/
+# install firtool
+RUN mkdir circt && \
+    wget -O - https://github.com/llvm/circt/releases/download/firtool-1.62.1/circt-full-sources.tar.gz | tar -xz -C circt && \
+    cd /workspace/circt && \
+    mkdir -p llvm/build && cd llvm/build && \
+    cmake -G Ninja /workspace/circt/llvm/llvm \
+    -DLLVM_ENABLE_PROJECTS="mlir" \
+    -DLLVM_TARGETS_TO_BUILD="host" \
+    -DCMAKE_JOB_POOLS="compile=8;link=1" \
+    -DCMAKE_JOB_POOL_LINK="link" \
+    -DCMAKE_JOB_POOL_COMPILE="compile" \
+    -DLLVM_ENABLE_ASSERTIONS=ON \
+    -DCMAKE_BUILD_TYPE=RELEASE \
+    -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && ninja && \
+    mkdir -p /workspace/circt/build && cd /workspace/circt/build && \
+    sed -ie 's/"unknown git version"/"firtool-1.62.1"/g' /workspace/circt/cmake/modules/GenVersionFile.cmake && \
+    cmake -G Ninja /workspace/circt \
+    -DMLIR_DIR=/workspace/circt/llvm/build/lib/cmake/mlir \
+    -DLLVM_DIR=/workspace/circt/llvm/build/lib/cmake/llvm \
+    -DCMAKE_JOB_POOLS="compile=8;link=1" \
+    -DCMAKE_JOB_POOL_LINK="link" \
+    -DCMAKE_JOB_POOL_COMPILE="compile" \
+    -DLLVM_ENABLE_ASSERTIONS=ON \
+    -DCMAKE_BUILD_TYPE=RELEASE \
+    -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && ninja && \
+    mv /workspace/circt/build/bin/* /usr/local/bin/ && cd /workspace && rm -rf /workspace/circt
 
 FROM base-${TARGETARCH} AS env
 
 WORKDIR /workspace/
-RUN git clone --progress https://github.com/verilator/verilator && cd /workspace/verilator && git pull && git checkout v4.226 && autoconf && ./configure && make -j8 && make install && make clean && rm -rf /workspace/verilator
+RUN git clone --progress https://github.com/verilator/verilator && cd /workspace/verilator && git pull && git checkout v5.036 && autoconf && ./configure && make -j8 && make install && make clean && rm -rf /workspace/verilator
 
 WORKDIR /workspace/
 
@@ -72,11 +98,22 @@ FROM env AS scala-arm64
 RUN curl -fL https://github.com/VirtusLab/coursier-m1/releases/latest/download/cs-aarch64-pc-linux.gz | gzip -d > cs && chmod +x cs && ./cs setup -y && rm -rf cs-aarch64-pc-linux.gz
 
 # build chisel
-FROM scala-${TARGETARCH}
+FROM scala-${TARGETARCH} AS final
 ENV PATH="${PATH}:/root/.local/share/coursier/bin/:/usr/local/bin/"
-RUN git clone --progress https://github.com/chipsalliance/chisel.git && cd /workspace/chisel/ && git checkout v5.1.0 && sbt compile && sbt "unipublish / publishLocal" && rm -rf /workspace/chisel
+RUN git clone --progress https://github.com/chipsalliance/chisel.git && cd /workspace/chisel/ && git checkout v6.7.0 && sbt compile && sbt "unipublish / publishLocal" && rm -rf /workspace/chisel
+
+# install systemc 3.0.1
+FROM final
+WORKDIR /workspace
+RUN apt-get update && apt-get install libtool -y && apt-get clean -y
+RUN wget -O - https://github.com/accellera-official/systemc/archive/refs/tags/3.0.1.tar.gz | tar -xz && \
+    cd /workspace/systemc-3.0.1 && mkdir build && cd build && \
+    cmake -S .. -B .  -DCMAKE_INSTALL_PREFIX=/opt/systemc -DBUILD_SHARED_LIBS=OFF && make -j8 && make install && cd /workspace && rm -rf systemc-3.0.1
 
 # clean up chisel sources
 WORKDIR /workspace/
 ENV COURSIER_CACHE="/workspace/.cache/coursier/v1"
+ENV CHISEL_FIRTOOL_PATH=/usr/local/bin
+ENV SYSTEMC_INCLUDE=/opt/systemc/include
+ENV SYSTEMC_LIBDIR=/opt/systemc/lib
 CMD ["bash"]

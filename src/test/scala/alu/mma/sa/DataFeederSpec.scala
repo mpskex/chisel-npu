@@ -5,14 +5,14 @@ package alu.mma.sa
 import testUtil._
 import scala.util.Random
 import chisel3._
-import chiseltest._
+import chisel3.simulator.EphemeralSimulator._
 import org.scalatest.flatspec.AnyFlatSpec
 import chisel3.experimental.BundleLiterals._
 
-class DataFeederSpec extends AnyFlatSpec with ChiselScalatestTester {
+class DataFeederSpec extends AnyFlatSpec {
 
     "SA Data Feeder" should "generate correct matrix pattern" in {
-        test(new DataFeeder(4)) { dut =>
+        simulate(new DataFeeder(4)) { dut =>
             val print_helper = new testUtil.PrintHelper()
             val _n = dut.n
             val rand = new Random
@@ -76,9 +76,9 @@ class DataFeederSpec extends AnyFlatSpec with ChiselScalatestTester {
                     var _b_in_str_out = ""
                     var _c_in_str_out = ""
                     for (__i <- 0 until _n) {
-                        _a_in_str_out += dut.io.reg_a_out(__i).peekInt().toInt.toString() + ","
-                        _b_in_str_out += dut.io.reg_b_out(__i).peekInt().toInt.toString() + ","
-                        _c_in_str_out += dut.io.reg_accum_out(__i).peekInt().toInt.toString() + ","
+                        _a_in_str_out += dut.io.reg_a_out(__i).peek().litValue.toInt.toString() + ","
+                        _b_in_str_out += dut.io.reg_b_out(__i).peek().litValue.toInt.toString() + ","
+                        _c_in_str_out += dut.io.reg_accum_out(__i).peek().litValue.toInt.toString() + ","
                     }
                     println("Output Vector A tick @ " + i_tick + ": [" + _a_in_str_out + "]")
                     println("Output Vector B tick @ " + i_tick + ": [" + _b_in_str_out + "]")
