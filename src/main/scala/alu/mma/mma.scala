@@ -37,7 +37,7 @@ import chisel3._
     val ctrl_array = Module(new cu.ControlUnit(n))
     ctrl_array.io.cbus_in := io.ctrl
     dclct.io.dat_clct <> ctrl_array.io.cbus_dat_clct
-    io.clct <> ctrl_array.io.cbus_dat_clct
+    io.clct <> ctrl_array.io.clct
     dclct.io.use_accum <> ctrl_array.io.cbus_use_accum
 
     val sarray = Module(new sa.SystolicArray2D(n, nbits))
