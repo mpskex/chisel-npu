@@ -14,13 +14,14 @@ class ControlUnit(val n: Int = 8) extends Module {
         val cbus_out        = Output(Vec(n * n, new NCoreMMALUCtrlBundle()))
         val cbus_dat_clct   = Output(Bool())
         val cbus_use_accum  = Output(Bool())
+        val clct            = Output(Bool())
     })
     // Assign each element with diagnal control signal
     val reg = RegInit(VecInit(Seq.fill(2*n-1)(0.U.asTypeOf(new NCoreMMALUCtrlBundle()))))
     // val clct = Wire(Bool())
     val or_g = Module{new ORGate(2*n-1)}
     io.cbus_dat_clct :<>= or_g.io.out
-
+    io.clct :<>= reg(2 * n - 2).busy
     io.cbus_use_accum :<>= reg(2 * n - 2).use_accum
 
     // 1D systolic array for control
