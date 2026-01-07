@@ -31,6 +31,24 @@ make docs
 
 Then you can use [vscode dev container plugin](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers) to connect this container. Happy coding (for chip)
 
+## Project Structure
+```
+├── build.sbt           // project top level build
+├── docker
+│   └── dockerfile      // build env docker file
+├── docs                // documentation
+├── ip                  // IP integration with different EDAs
+│   └── xilinx          // xilinx vivado
+├── Makefile            // top level make file
+├── mkdocs.yml          // readthedocs yaml
+├── project             // scala project settings
+├── README.md
+├── src                 // chisel source
+│   ├── main            // chisel design
+│   └── test            // chisel tests
+└── top.sv              // generated top system verilog
+```
+
 ## Reference
 
 1. [Chisel Matmul](https://github.com/kazutomo/Chisel-MatMul)
