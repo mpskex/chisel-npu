@@ -49,7 +49,7 @@ push-image-arm64:
 
 docs:
 	pip3 install -r docs/requirements.txt 
-	mkdocs serve
+	python3 -m mkdocs serve
 
 clean:
 	rm -rf project/target project/project/target target *.v *.anno.json
