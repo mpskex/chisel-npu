@@ -213,8 +213,15 @@ class NCoreBackend(
 
   // VALU write-back (port 0 for each class)
   when (isVALU) {
-    // VX write-back
-    rf.io.vx_w_en(0)   := (dec.valu.regCls === W.VX) || isNarrowCvtOut(dec.valu.op)
+    // VX write-back.
+    // isReduceToVR ops (vsum, vrmax, vrmin) encode their *input* class in regCls
+    // (e.g. vsum.vx has regCls=VX so the VALU selects the VX reduction path).
+    // That would accidentally assert vx_w_en and clobber vx_out_addr — suppress it.
+    // isSetLut ops (vsetlut) write only to VALU-internal bank registers;
+    // all RF write ports must be suppressed.
+    rf.io.vx_w_en(0)   := ((dec.valu.regCls === W.VX) || isNarrowCvtOut(dec.valu.op)) &&
+                           !isReduceToVR(dec.valu.op) &&
+                           !isSetLut(dec.valu.op)
     rf.io.vx_w_addr(0) := io.vx_out_addr
     for (lane <- 0 until K) rf.io.vx_w_data(0)(lane) := valu.io.out_vx(lane)
 
@@ -223,14 +230,17 @@ class NCoreBackend(
     rf.io.ve_w_addr(0) := io.ve_out_addr
     for (lane <- 0 until K) rf.io.ve_w_data(0)(lane) := valu.io.out_ve(lane)
 
-    // VR write-back (FP/INT32 and wide conversion results)
-    rf.io.vr_w_en(0)   := (dec.valu.regCls === W.VR) || isWideCvtOut(dec.valu.op)
+    // VR write-back (FP/INT32, wide conversion results, and horizontal reductions).
+    // vsetlut has regCls=VR but must NOT write the RF — suppress it.
+    rf.io.vr_w_en(0)   := ((dec.valu.regCls === W.VR) || isWideCvtOut(dec.valu.op) ||
+                            isReduceToVR(dec.valu.op)) &&
+                           !isSetLut(dec.valu.op)
     rf.io.vr_w_addr(0) := io.vr_out_addr
     for (lane <- 0 until K) rf.io.vr_w_data(0)(lane) := valu.io.out_vr(lane)
   }
 
   // ==========================================================================
-  // Helpers: determine output register class for conversion ops
+  // Helpers: determine output register class for conversion and reduce ops
   // ==========================================================================
   def isNarrowCvtOut(op: VecOp.Type): Bool = {
     op === VecOp.vcvt_s8_s32 ||  // s8 sign-extend → VX slice
@@ -249,5 +259,28 @@ class NCoreBackend(
     op === VecOp.vcvt_bf16_f32 ||
     op === VecOp.vcvt_s16_s32  ||
     op === VecOp.vcvt_s32_s16
+  }
+
+  /**
+   * vsetlut writes only to VALU-internal LUT bank registers.
+   * All register-file write ports must be suppressed for this op.
+   */
+  def isSetLut(op: VecOp.Type): Bool = op === VecOp.vsetlut
+
+  /**
+   * Horizontal reduce ops (vsum, vrmax, vrmin) always produce a VR-width result
+   * broadcast across all K lanes, regardless of the regCls field in the instruction.
+   * The VALU unconditionally drives out_vr for these ops; the backend must enable
+   * the VR write port to store the result in the register file.
+   *
+   * Root cause: the ISA encodes reduce ops with the *input* register class in
+   * funct7[1:0] (e.g. vsum.vx uses regCls=VX to select the VX reduction path),
+   * but the output is always VR-width.  The backend's regCls===VR guard therefore
+   * misses these ops when issued on VX or VE inputs.
+   */
+  def isReduceToVR(op: VecOp.Type): Bool = {
+    op === VecOp.vsum  ||
+    op === VecOp.vrmax ||
+    op === VecOp.vrmin
   }
 }

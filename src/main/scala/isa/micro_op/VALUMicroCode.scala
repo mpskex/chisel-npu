@@ -68,10 +68,13 @@ object VecOp extends ChiselEnum {
   val vrxor = Value(0x15.U(7.W))
 
   // -- LUT (VALU_LUT family) --
-  val vexp   = Value(0x18.U(7.W))
-  val vrecip = Value(0x19.U(7.W))
-  val vtanh  = Value(0x1A.U(7.W))
-  val verf   = Value(0x1B.U(7.W))
+  // vlut   : per-lane byte lookup from a programmable 256-entry bank (bank A or B).
+  //          round[0] in NCoreVALUBundle carries the bank select (0=A, 1=B).
+  // vsetlut: write one K×4-byte segment of a LUT bank from a VR source register.
+  //          imm in NCoreVALUBundle carries the segment index.
+  //          Does NOT write to the register file; side-effect on VALU-internal state only.
+  val vlut    = Value(0x18.U(7.W))
+  val vsetlut = Value(0x19.U(7.W))
 
   // -- CVT (VALU_CVT family) — one entry per (dst_fmt, src_fmt) pair actually used --
   val vcvt_s8_s32   = Value(0x20.U(7.W))

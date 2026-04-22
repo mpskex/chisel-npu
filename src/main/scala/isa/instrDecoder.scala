@@ -124,11 +124,20 @@ class InstrDecoder extends Module {
       }
     }
     is (OpFamily.VALU_LUT) {
+      // vlut (funct3=0/1): R-type lookup. Bank A (0) or B (1) via funct3[0],
+      //   propagated as round[0] in the decoded bundle.
+      // vsetlut (funct3=4/5): I-type segment write. Bank A (4) or B (5).
+      //   imm carries the segment index; no register-file write.
+      // funct3 2, 3, 6, 7: reserved — flag as illegal.
       switch (f3) {
-        is (Funct3Lut.EXP)   { vecOp := VecOp.vexp   }
-        is (Funct3Lut.RECIP) { vecOp := VecOp.vrecip }
-        is (Funct3Lut.TANH)  { vecOp := VecOp.vtanh  }
-        is (Funct3Lut.ERF)   { vecOp := VecOp.verf   }
+        is (Funct3Lut.VLUT_A)    { vecOp := VecOp.vlut    }
+        is (Funct3Lut.VLUT_B)    { vecOp := VecOp.vlut    }
+        is (Funct3Lut.VSETLUT_A) { vecOp := VecOp.vsetlut }
+        is (Funct3Lut.VSETLUT_B) { vecOp := VecOp.vsetlut }
+      }
+      // illegal: reserved funct3 values 2, 3, 6, 7
+      when (f3 === 2.U || f3 === 3.U || f3 === 6.U || f3 === 7.U) {
+        f3Valid := false.B
       }
     }
     is (OpFamily.VALU_CVT) {
@@ -208,6 +217,12 @@ class InstrDecoder extends Module {
   when (family === OpFamily.VALU_BCAST && f3 === Funct3Bcast.IMM) {
     width := 0.U  // VX
   }
+  // vsetlut (I-format): reads from a VR source register → force VR width so
+  // the backend routes in_a_vr correctly.
+  when (family === OpFamily.VALU_LUT &&
+        (f3 === Funct3Lut.VSETLUT_A || f3 === Funct3Lut.VSETLUT_B)) {
+    width := 2.U  // VR
+  }
   // Width bits are repurposed for src format in CVT family; skip width check for CVT.
   val widthIllegal = (f7Width === 3.U) &&
     (family =/= OpFamily.VALU_FP) &&
@@ -270,10 +285,15 @@ class InstrDecoder extends Module {
   io.decoded.valu.dtype    := dtype
   // For CVT, sat bit is at funct7[3] not funct7[4]
   io.decoded.valu.saturate := Mux(family === OpFamily.VALU_CVT, f7CvtSat.asBool, f7Sat.asBool)
+  // For LUT ops, round[0] carries the bank select (taken from funct3[0]):
+  //   vlut.A (f3=0) → round=0, vlut.B (f3=1) → round=1
+  //   vsetlut.A (f3=4) → round=0, vsetlut.B (f3=5) → round=1
   io.decoded.valu.round    := Mux(
     family === OpFamily.VALU_FP_FMA,
     rndS,
-    Mux(family === OpFamily.VALU_CVT, f7CvtRnd, f7Round)
+    Mux(family === OpFamily.VALU_CVT, f7CvtRnd,
+      Mux(family === OpFamily.VALU_LUT, Cat(0.U(1.W), f3(0)),
+        f7Round))
   )
   io.decoded.valu.rs3_idx  := rs3Bits
   io.decoded.valu.imm      := immI

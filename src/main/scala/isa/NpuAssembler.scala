@@ -133,12 +133,24 @@ object NpuAssembler {
   def vror (rd: Int, rs1: Int, width: Int = VX): Int = encR(0x12, 4, f7(width), rd, rs1, 0)
   def vrxor(rd: Int, rs1: Int, width: Int = VX): Int = encR(0x12, 5, f7(width), rd, rs1, 0)
 
-  // ---- VALU_LUT (opcode=0x13) ----------------------------------------------
+  // ---- VALU_LUT (opcode=0x13) — programmable two-bank LUT -------------------
+  // Bank select: 0=A (default), 1=B.
 
-  def vexp  (rd: Int, rs1: Int): Int = encR(0x13, 0, f7(VX), rd, rs1, 0)
-  def vrecip(rd: Int, rs1: Int): Int = encR(0x13, 1, f7(VX), rd, rs1, 0)
-  def vtanh (rd: Int, rs1: Int): Int = encR(0x13, 2, f7(VX), rd, rs1, 0)
-  def verf  (rd: Int, rs1: Int): Int = encR(0x13, 3, f7(VX), rd, rs1, 0)
+  /**
+   * Per-lane lookup: out[i] = lut_bank[in_a_vx[i]].
+   * bank=0 → bank A (funct3=0), bank=1 → bank B (funct3=1).
+   */
+  def vlut(rd: Int, rs1: Int, bank: Int = 0): Int =
+    encR(0x13, bank & 1, f7(VX), rd, rs1, 0)
+
+  /**
+   * Write one K×4-byte segment from VR[rs1] into the selected LUT bank.
+   * segment: which K×4-entry block (0-based) within the 256-entry table.
+   * bank=0 → bank A (funct3=4), bank=1 → bank B (funct3=5).
+   * I-type: rd=0 (no register-file destination); imm=segment.
+   */
+  def vsetlut(rs1: Int, segment: Int, bank: Int = 0): Int =
+    encI(0x13, 4 + (bank & 1), 0, rs1, segment)
 
   // ---- VALU_CVT (opcode=0x14) ----------------------------------------------
   // funct3 = dst fmt code; f7 encodes src + sat + round + bf8 variant

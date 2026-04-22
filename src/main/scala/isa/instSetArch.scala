@@ -87,13 +87,31 @@ object Funct3Reduce {
   // 6, 7 reserved
 }
 
-// VALU_LUT (opcode=0x13): 256-entry ROM transcendentals, SQ1.6 input, VX only
+// VALU_LUT (opcode=0x13): programmable two-bank LUT, raw byte-in/byte-out
+//
+//  vlut   (funct3=0/1) — per-lane 256-entry lookup from bank A (funct3=0)
+//                        or bank B (funct3=1).  R-type; rd=VX dst, rs1=VX src.
+//                        round[0] in the decoded bundle = bank select (0=A, 1=B).
+//
+//  vsetlut (funct3=4/5) — write one K×4-byte segment of the LUT bank from a
+//                          VR source register.  I-type; rs1=VR src, imm=segment.
+//                          funct3=4 → bank A, funct3=5 → bank B.
+//                          No register-file write (side-effect on VALU-internal state only).
+//
+//  Segment packing: VR[rs1] holds K lanes × 4 bytes = K×4 consecutive LUT
+//  entries.  Segment index s maps to LUT entries [s×K×4 .. (s+1)×K×4 − 1].
+//  At K=8  : 8 vsetlut calls fill the full 256-byte bank.
+//  At K=64 : 1 vsetlut call fills the full 256-byte bank.
+//
+//  The Qfmt object (vec.scala) remains available as a Scala-only compiler and
+//  test utility for generating table data; it is no longer synthesised as hardware.
 object Funct3Lut {
-  val EXP   = 0.U(3.W)  // exp(x)   SQ1.6 → UQ0.8 (stored as SInt signed byte)
-  val RECIP = 1.U(3.W)  // 1/x      SQ1.6 → SQ1.6; x=0 → sentinel 127
-  val TANH  = 2.U(3.W)  // tanh(x)  SQ1.6 → SQ1.6
-  val ERF   = 3.U(3.W)  // erf(x)   SQ1.6 → SQ1.6  (GELU helper)
-  // 4..7 reserved for future LUT ops
+  val VLUT_A    = 0.U(3.W)  // per-lane lookup from bank A (R-type)
+  val VLUT_B    = 1.U(3.W)  // per-lane lookup from bank B (R-type)
+  // 2..3 reserved
+  val VSETLUT_A = 4.U(3.W)  // write K×4-byte segment into bank A (I-type)
+  val VSETLUT_B = 5.U(3.W)  // write K×4-byte segment into bank B (I-type)
+  // 6..7 reserved
 }
 
 // VALU_CVT (opcode=0x14): type conversions

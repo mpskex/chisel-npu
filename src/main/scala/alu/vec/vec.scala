@@ -114,11 +114,15 @@ class VALU(val K: Int = 8, val N: Int = 8) extends Module {
     val out_vr = Output(Vec(K, UInt(N4.W)))
   })
 
-  // ---- LUT ROMs (256 entries, 8-bit signed stored as SInt) ----
-  val expLut   = VecInit(Qfmt.lutExp.map(_.S(N.W).asUInt))
-  val recipLut = VecInit(Qfmt.lutRecip.map(_.S(N.W).asUInt))
-  val tanhLut  = VecInit(Qfmt.lutTanh.map(_.S(N.W).asUInt))
-  val erfLut   = VecInit(Qfmt.lutErf.map(_.S(N.W).asUInt))
+  // ---- Programmable LUT banks (256 entries × N bits each) ----
+  // Two independent banks (A and B) allow double-buffering: one bank serves an
+  // active vlut while the other is preloaded with the next table via vsetlut.
+  //
+  // Banks are written by vsetlut (one K×4-byte segment per call) and read by vlut.
+  // The Qfmt reference tables (exp, recip, tanh, erf) are compiler/test utilities;
+  // they are no longer synthesised as hardware ROMs.
+  val lutBankA = RegInit(VecInit(Seq.fill(256)(0.U(N.W))))
+  val lutBankB = RegInit(VecInit(Seq.fill(256)(0.U(N.W))))
 
   // ---- Saturation helpers ----
   def satN(v: SInt, w: Int): SInt = {
@@ -143,6 +147,30 @@ class VALU(val K: Int = 8, val N: Int = 8) extends Module {
   val op  = io.ctrl.op
   val sat = io.ctrl.saturate
   val wid = io.ctrl.regCls
+
+  // ---- vsetlut: write one K×4-byte segment from in_a_vr into the selected bank ----
+  // Segment index s (from ctrl.imm) maps to LUT entries [s×K×4 .. (s+1)×K×4 − 1].
+  // Byte layout within each VR lane (UInt(4N.W), little-endian):
+  //   in_a_vr[k][8*(b+1)-1 : 8*b]  →  bank[s×K×4 + k×4 + b]
+  // Bank select: ctrl.round[0] = 0 → bank A, 1 → bank B.
+  //
+  // The write is gated on op===vsetlut so the banks hold their contents across
+  // all other instructions.  The VALU output ports (out_vx/ve/vr) are zeroed for
+  // vsetlut by rawVX/VE/VR defaulting to 0 and vsetlut not asserting any gate.
+  val lutSegBits = math.max(1, log2Ceil(math.max(2, 256 / (K * 4))))
+  val lutSeg     = io.ctrl.imm(lutSegBits - 1, 0).asUInt
+  val lutBankSel = io.ctrl.round(0)
+
+  when (op === VecOp.vsetlut) {
+    for (k <- 0 until K) {
+      for (b <- 0 until 4) {
+        val idx  = lutSeg * (K * 4).U + (k * 4 + b).U
+        val byte = io.in_a_vr(k)((b + 1) * 8 - 1, b * 8)
+        when (!lutBankSel) { lutBankA(idx) := byte }
+        .otherwise         { lutBankB(idx) := byte }
+      }
+    }
+  }
 
   // ---- Horizontal reductions (tree over all K lanes) ----
   // Operate on VX (N-bit); result widened to 4N for out_vr broadcast
@@ -197,12 +225,9 @@ class VALU(val K: Int = 8, val N: Int = 8) extends Module {
     val aU32  = aU.pad(N*2)
     val vxRolFull = ((aU32 << shAmt) | (aU32 >> (N.U - shAmt)))(N-1, 0)
 
-    // LUT ops (always VX)
+    // LUT lookup (always VX): raw byte index → byte result from the selected bank
     val lutIdx = aU
-    val vxExp   = expLut(lutIdx)
-    val vxRecip = recipLut(lutIdx)
-    val vxTanh  = tanhLut(lutIdx)
-    val vxErf   = erfLut(lutIdx)
+    val vxLut  = Mux(lutBankSel, lutBankB(lutIdx), lutBankA(lutIdx))
 
     // ---- VE arithmetic (2N-bit) ----
     val aVEw = aVE.asTypeOf(SInt(N4.W))
@@ -305,11 +330,8 @@ class VALU(val K: Int = 8, val N: Int = 8) extends Module {
       VecOp.vrand.asUInt -> 0.U,
       VecOp.vror.asUInt  -> 0.U,
       VecOp.vrxor.asUInt -> 0.U,
-      // LUT
-      VecOp.vexp.asUInt   -> vxExp,
-      VecOp.vrecip.asUInt -> vxRecip,
-      VecOp.vtanh.asUInt  -> vxTanh,
-      VecOp.verf.asUInt   -> vxErf,
+      // LUT — programmable bank lookup
+      VecOp.vlut.asUInt   -> vxLut,
       // CVT → VX output (s32_s8, f32_s8, s8_f32 narrow side)
       VecOp.vcvt_s8_s32.asUInt   -> cvtS8S32(N-1, 0),   // sign-extend s8 to 8-bit slice
       VecOp.vcvt_f32_s8.asUInt   -> cvtF32S8(N-1, 0),   // FP32 → INT8 (narrow output)

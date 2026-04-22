@@ -109,12 +109,50 @@ class InstrDecoderSpec extends AnyFlatSpec {
     }
   }
 
-  "InstrDecoder" should "decode LUT ops" in {
+  "InstrDecoder" should "decode vlut (bank A and bank B)" in {
     simulate(new InstrDecoder) { dut =>
-      check(dut, vexp(rd=0, rs1=1),   OpFamily.VALU_LUT, VecOp.vexp,   expRs1=1)
-      check(dut, vrecip(rd=0, rs1=1), OpFamily.VALU_LUT, VecOp.vrecip, expRs1=1)
-      check(dut, vtanh(rd=0, rs1=1),  OpFamily.VALU_LUT, VecOp.vtanh,  expRs1=1)
-      check(dut, verf(rd=0, rs1=1),   OpFamily.VALU_LUT, VecOp.verf,   expRs1=1)
+      // vlut bank A: funct3=0, round[0]=0
+      check(dut, vlut(rd=2, rs1=1, bank=0), OpFamily.VALU_LUT, VecOp.vlut,
+            expWidth=WX, expRd=2, expRs1=1)
+      dut.io.decoded.valu.round.expect(0.U)  // bank A → round[0]=0
+
+      // vlut bank B: funct3=1, round[0]=1
+      check(dut, vlut(rd=2, rs1=1, bank=1), OpFamily.VALU_LUT, VecOp.vlut,
+            expWidth=WX, expRd=2, expRs1=1)
+      dut.io.decoded.valu.round.expect(1.U)  // bank B → round[0]=1
+    }
+  }
+
+  "InstrDecoder" should "decode vsetlut (bank A and bank B)" in {
+    simulate(new InstrDecoder) { dut =>
+      // vsetlut bank A: funct3=4, I-type, imm=segment, width=VR
+      dut.io.instr.poke((vsetlut(rs1=3, segment=2, bank=0).toLong & 0xFFFFFFFFL).U)
+      dut.clock.step(0)
+      assert(!dut.io.illegal.peek().litToBoolean, "vsetlut bank A must not be illegal")
+      dut.io.decoded.valu.round.expect(0.U)          // bank A
+      dut.io.decoded.valu.imm.expect(2.S)            // segment=2
+      dut.io.decoded.rs1.expect(3.U)                 // rs1=3
+
+      // vsetlut bank B: funct3=5
+      dut.io.instr.poke((vsetlut(rs1=5, segment=7, bank=1).toLong & 0xFFFFFFFFL).U)
+      dut.clock.step(0)
+      assert(!dut.io.illegal.peek().litToBoolean, "vsetlut bank B must not be illegal")
+      dut.io.decoded.valu.round.expect(1.U)          // bank B
+      dut.io.decoded.valu.imm.expect(7.S)            // segment=7
+      dut.io.decoded.rs1.expect(5.U)                 // rs1=5
+    }
+  }
+
+  "InstrDecoder" should "flag reserved VALU_LUT funct3 values as illegal" in {
+    simulate(new InstrDecoder) { dut =>
+      // funct3=2 and funct3=3 are reserved
+      for (f3 <- Seq(2, 3, 6, 7)) {
+        val instr = encR(0x13, f3, f7(VX), 0, 1, 0)
+        dut.io.instr.poke((instr.toLong & 0xFFFFFFFFL).U)
+        dut.clock.step(0)
+        assert(dut.io.illegal.peek().litToBoolean,
+          s"VALU_LUT funct3=$f3 should be illegal")
+      }
     }
   }
 
