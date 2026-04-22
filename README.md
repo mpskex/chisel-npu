@@ -6,12 +6,6 @@ Docs: https://chisel-opennpu.readthedocs.io
 
 This is a chisel workbench designed for someone who like docker containers and vscode dev container plugin.
 
-DEVELOP IN PROGRESS. COMMERCIAL USE IS NOT ALLOWED.
-
-NO LICENSE PROVIDED CURRENTLY. 
-
-USE AT YOUR OWN RISK.
-
 ## Usage
 
 ```bash
