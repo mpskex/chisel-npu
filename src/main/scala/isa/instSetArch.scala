@@ -165,28 +165,54 @@ object Funct3Mma {
   // 3..7 reserved
 }
 
-// LD / ST (opcodes 0x01/0x02): memory access; funct3 encodes transfer width
-//   0..2: scalar sub-lane transfers (future)
-//   3..5: full K-lane vector transfers (primary use)
-//   6:    ld.tile — gather one convolution patch (PAG-assisted, see spm.sreg)
-//   7:    tile.cfg — write convolution parameters into .sreg
+// LD (opcode 0x01) / ST (opcode 0x02): register-file access
+//
+//   funct3  LD meaning          ST meaning
+//   ------  ------------------  ------------------
+//   0..2    scalar (future)     scalar (future)
+//   3       ld.VX               st.VX
+//   4       ld.VE               st.VE
+//   5       ld.VR               st.VR
+//   6       ld.gather / ld.tile st.scatter          ← unified via funct7
+//   7       tile.cfg            (reserved)
+//
+// funct3=6 is the "indexed" memory op.  funct7 selects the sub-mode:
+//
+//   Funct7Gather.USE_TILE_CNT (funct7[2]):
+//     0 = ld.gather / st.scatter  — addresses from VX[rs1] lanes (LLM/embedding)
+//     1 = ld.tile                 — address from SREG tile counters (conv/strided)
+//
+//   Other funct7 bits (tile mode only):
+//     funct7[0] = zero_pad   (ld.tile only)
+//     funct7[1] = transposed (ld.tile only)
+//     funct7[3] = auto_inc   (ld.tile: pulse tile_w_inc after load)
 object Funct3Mem {
-  val BYTE     = 0.U(3.W)  // N-bit lane (byte scalar) — future
-  val HALF     = 1.U(3.W)  // 2N-bit                   — future
-  val WORD     = 2.U(3.W)  // 4N-bit                   — future
-  val VX_VEC   = 3.U(3.W)  // full K-lane VX vector (primary LD/ST)
-  val VE_VEC   = 4.U(3.W)  // full K-lane VE vector
-  val VR_VEC   = 5.U(3.W)  // full K-lane VR vector
-  val LD_TILE  = 6.U(3.W)  // ld.tile  — gather conv patch from SPM via PAG
-  val TILE_CFG = 7.U(3.W)  // tile.cfg — write conv params to .sreg
+  val BYTE      = 0.U(3.W)  // N-bit lane scalar       — future
+  val HALF      = 1.U(3.W)  // 2N-bit                  — future
+  val WORD      = 2.U(3.W)  // 4N-bit                  — future
+  val VX_VEC    = 3.U(3.W)  // full K-lane VX vector
+  val VE_VEC    = 4.U(3.W)  // full K-lane VE vector
+  val VR_VEC    = 5.U(3.W)  // full K-lane VR vector
+  val GATHER    = 6.U(3.W)  // ld.gather/ld.tile (LD) | st.scatter (ST)
+  val TILE_CFG  = 7.U(3.W)  // tile.cfg — write conv/stride params to .sreg
+}
+
+// funct7 bit layout for funct3=6 (GATHER) instructions
+object Funct7Gather {
+  val ZERO_PAD      = 0  // bit 0: zero-pad enable     (ld.tile only)
+  val TRANSPOSED    = 1  // bit 1: transposed-mode      (ld.tile only)
+  val USE_TILE_CNT  = 2  // bit 2: 0=gather, 1=tile     (selects sub-mode)
+  val AUTO_INC      = 3  // bit 3: auto-increment tile_w after completion
 }
 
 // tile.cfg wr_sel values (encoded in imm[2:0] of the tile.cfg instruction)
 object TileCfgSel {
-  val HW   = 0.U(3.W)  // wr_data = {W_in[31:16], H_in[15:0]}
-  val CH   = 1.U(3.W)  // wr_data = {C_out[31:16], C_in[15:0]}
-  val KERN = 2.U(3.W)  // wr_data = {mode[25:24],pad_w[23:20],pad_h[19:16],dil[15:12],stride[11:8],Kw[7:4],Kh[3:0]}
-  val POS  = 3.U(3.W)  // wr_data = {tile_w[31:16], tile_h[15:0]}  (reset / seed)
+  val HW       = 0.U(3.W)  // wr_data = {W_in[31:16],  H_in[15:0]}
+  val CH       = 1.U(3.W)  // wr_data = {C_out[31:16], C_in[15:0]}
+  val KERN     = 2.U(3.W)  // wr_data = {mode[25:24],pad_w[23:20],pad_h[19:16],dil[15:12],stride[11:8],Kw[7:4],Kh[3:0]}
+  val POS      = 3.U(3.W)  // wr_data = {tile_w[31:16], tile_h[15:0]}  (reset/seed)
+  val STRIDE_H = 4.U(3.W)  // wr_data[15:0] = stride_row_h (RF rows per tile_h step)
+  val STRIDE_W = 5.U(3.W)  // wr_data[15:0] = stride_row_w (RF rows per tile_w step)
 }
 
 // ---------------------------------------------------------------------------

@@ -232,31 +232,73 @@ object NpuAssembler {
   def mmaReset(rd: Int, rs1: Int, rs2: Int): Int =
     encR(0x03, 2, f7(VR), rd, rs1, rs2)
 
-  // ---- LD / ST (opcodes 0x01 / 0x02) --------------------------------------
+  // ---- LD / ST (opcodes 0x01 / 0x02) — unified register-file access -------
+  //
+  //  The register file (MultiWidthRegisterBlock) is the sole storage tier.
+  //  Instructions address it via:
+  //    Contiguous LD (I-type):  RF row = rs1 (page base) + sext(imm[11:0])
+  //    Contiguous ST (R-type):  RF row = rs1 (base); data from VX/VE/VR[rs2]
+  //                             row offset = funct7[6:0] (0..127)
+  //    ld.gather  (R-type):     VX[rd][k] = RF[ VX[rs1][k] ][ k ]  (diagonal)
+  //    ld.tile    (R-type):     row = rs1 + tile_h*stride_h + tile_w*stride_w
+  //    st.scatter (R-type):     RF[ VX[rs1][k] ][ k ] = VX[rs2][k]
 
+  // ---- Contiguous LD (I-type) ----
   def ldVx(rd: Int, base: Int, offset: Int = 0): Int = encI(0x01, 3, rd, base, offset)
   def ldVe(rd: Int, base: Int, offset: Int = 0): Int = encI(0x01, 4, rd, base, offset)
   def ldVr(rd: Int, base: Int, offset: Int = 0): Int = encI(0x01, 5, rd, base, offset)
-  // ST uses R-type so rs2 (source VX/VE/VR register) can be encoded alongside rs1 (SPM base).
+
+  // ---- Contiguous ST (R-type): rs1=base, rs2=source reg, funct7=row offset ----
   def stVx(rs2: Int, base: Int, offset: Int = 0): Int = encR(0x02, 3, offset & 0x7F, 0, base, rs2)
   def stVe(rs2: Int, base: Int, offset: Int = 0): Int = encR(0x02, 4, offset & 0x7F, 0, base, rs2)
   def stVr(rs2: Int, base: Int, offset: Int = 0): Int = encR(0x02, 5, offset & 0x7F, 0, base, rs2)
 
-  // ---- tile.cfg (opcode=0x01, funct3=7) — write conv params into .sreg -----
+  // ---- ld.gather (opcode=0x01, funct3=6, funct7[USE_TILE_CNT]=0) ----------
   //
-  //   tile.cfg uses I-type: rd=0, rs1=0, imm[2:0] = wr_sel (TileCfgSel)
-  //   The data to write is passed in rs1 (re-interpreted as a 32-bit data word
-  //   via a companion ld.imm — or more practically, the backend reads the
-  //   scalar value from VR[rs1] lane 0).
-  //
-  //   For test-harness simplicity, the backend also exposes direct SREG write
-  //   ports so tests can bypass the ISA path.
-  //
-  //   Encoding:
-  //     imm[2:0]  = wr_sel (TileCfgSel: 0=HW, 1=CH, 2=KERN, 3=POS)
-  //     rs1       = VR register holding the 32-bit config word in lane 0
+  //   R-type:  rd = dest VX,  rs1 = VX holding K row indices,  rs2 = 0
+  //   Semantics: VX[rd][k] = RF[ VX[rs1][k] ][ k ]  (diagonal gather)
+  //     → each lane k reads lane k from the row pointed to by VX[rs1][k].
+  //   autoInc: pulse tile_w_inc after the gather (funct7[AUTO_INC]=1).
 
-  /** Configure H_in and W_in (both as 16-bit values packed in one VR lane). */
+  def ldGather(rd: Int, rs1: Int, autoInc: Boolean = false): Int = {
+    val f7 = (if (autoInc) 1 << Funct7Gather.AUTO_INC else 0)
+    // USE_TILE_CNT=0: gather mode
+    encR(0x01, 6, f7, rd, rs1, 0)
+  }
+
+  // ---- ld.tile (opcode=0x01, funct3=6, funct7[USE_TILE_CNT]=1) ------------
+  //
+  //   R-type:  rd = dest VX,  rs1 = RF base row,  rs2 = 0
+  //   Address: row = rs1 + tile_h * stride_row_h + tile_w * stride_row_w
+  //   Reads one contiguous VX row from the RF.
+  //   autoInc: pulse tile_w_inc after the load (for tiling loops).
+  //   zeroPad / transposed: flags forwarded to future PAG.
+
+  def ldTile(rd: Int, rs1: Int,
+             zeroPad:    Boolean = false,
+             transposed: Boolean = false,
+             autoInc:    Boolean = false): Int = {
+    val f7 = ((if (zeroPad)    1 else 0) << Funct7Gather.ZERO_PAD)    |
+             ((if (transposed) 1 else 0) << Funct7Gather.TRANSPOSED)  |
+             (1                          << Funct7Gather.USE_TILE_CNT) |
+             ((if (autoInc)    1 else 0) << Funct7Gather.AUTO_INC)
+    encR(0x01, 6, f7, rd, rs1, 0)
+  }
+
+  // ---- st.scatter (opcode=0x02, funct3=6) ----------------------------------
+  //
+  //   R-type:  rs1 = VX holding K dest row indices,  rs2 = source VX,  rd=0
+  //   Semantics: RF[ VX[rs1][k] ][ k ] = VX[rs2][k]  (diagonal scatter)
+  //     → lane k of rs2 is written to lane k of the row at VX[rs1][k].
+
+  def stScatter(rs1: Int, rs2: Int): Int = encR(0x02, 6, 0, 0, rs1, rs2)
+
+  // ---- tile.cfg (opcode=0x01, funct3=7) — write config into .sreg ---------
+  //
+  //   I-type: rd=0, rs1 = VR register holding the 32-bit config word in lane 0
+  //   imm[2:0] = wr_sel (TileCfgSel)
+
+  /** Configure H_in and W_in. */
   def tileCfgHW(rs1: Int): Int = encI(0x01, 7, 0, rs1, 0)
 
   /** Configure C_in and C_out. */
@@ -265,25 +307,14 @@ object NpuAssembler {
   /** Configure kernel shape: Kh, Kw, stride, dilation, pad_h, pad_w, mode. */
   def tileCfgKern(rs1: Int): Int = encI(0x01, 7, 0, rs1, 2)
 
-  /** Set/reset tile position: tile_h and tile_w. */
+  /** Set/reset tile position (tile_h, tile_w). */
   def tileCfgPos(rs1: Int): Int = encI(0x01, 7, 0, rs1, 3)
 
-  // ---- ld.tile (opcode=0x01, funct3=6) — gather one conv patch from SPM ---
-  //
-  //   R-type encoding:
-  //     rd     = destination VX base register (VX[rd .. rd+M-1] filled)
-  //     rs1    = SPM base row address
-  //     rs2    = 0 (reserved)
-  //     funct7[4] = zero-pad enable (1 = enable, recommended)
-  //     funct7[5] = transposed-mode override (0 = use .sreg.conv.mode)
-  //
-  //   Tile position (tile_h, tile_w) is read implicitly from .sreg.ax/.bx.
-  //   After the PAG completes, .sreg.bx auto-increments.
+  /** Configure stride_row_h (RF rows per tile_h increment). */
+  def tileCfgStrideH(rs1: Int): Int = encI(0x01, 7, 0, rs1, 4)
 
-  def ldTile(rd: Int, rs1: Int, zeroPad: Boolean = true, transposed: Boolean = false): Int = {
-    val f7 = ((if (zeroPad) 1 else 0) << 4) | ((if (transposed) 1 else 0) << 5)
-    encR(0x01, 6, f7, rd, rs1, 0)
-  }
+  /** Configure stride_row_w (RF rows per tile_w increment). */
+  def tileCfgStrideW(rs1: Int): Int = encI(0x01, 7, 0, rs1, 5)
 
   // ---- Convenience: convert Scala Int to Chisel UInt -----------------------
   implicit class IntToUInt(val v: Int) {

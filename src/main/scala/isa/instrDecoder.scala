@@ -31,13 +31,22 @@ class DecodedMicroOp extends Bundle {
   val rd        = UInt(5.W)
   val rs1       = UInt(5.W)
   val rs2       = UInt(5.W)
-  val mem_width = UInt(3.W)       // ld/st funct3 (Funct3Mem values)
-  val is_ld     = Bool()          // true when LD family (VX/VE/VR load from SPM)
-  val is_st     = Bool()          // true when ST family
-  val is_ldtile = Bool()          // true when ld.tile (PAG-assisted gather)
-  val is_tilecfg = Bool()         // true when tile.cfg (write to .sreg)
-  val tilecfg_sel = UInt(3.W)     // TileCfgSel value for tile.cfg
-  val ldtile_zpad = Bool()        // ld.tile: zero-pad enable (from funct7[4])
+  val mem_width      = UInt(3.W)  // ld/st funct3 (Funct3Mem values)
+  val is_ld          = Bool()     // true: LD family, VX/VE/VR contiguous load from RF
+  val is_st          = Bool()     // true: ST family, VX/VE/VR contiguous store to RF
+  // ---- funct3=6 indexed ops (unified gather/tile/scatter) ----
+  val is_gather      = Bool()     // LD opcode, funct3=6, funct7[USE_TILE_CNT]=0
+                                  //   VX[rd][k] = RF[ VX[rs1][k] ][ k ]  (diagonal gather)
+  val is_tile        = Bool()     // LD opcode, funct3=6, funct7[USE_TILE_CNT]=1
+                                  //   addr = rs1 + tile_h*stride_row_h + tile_w*stride_row_w
+  val tile_zpad      = Bool()     // ld.tile: funct7[ZERO_PAD]
+  val tile_trans     = Bool()     // ld.tile: funct7[TRANSPOSED]
+  val tile_autoinc   = Bool()     // ld.tile/gather: funct7[AUTO_INC], pulse tile_w_inc after
+  val is_scatter     = Bool()     // ST opcode, funct3=6
+                                  //   RF[ VX[rs1][k] ][ k ] = VX[rs2][k]  (diagonal scatter)
+  // ---- tile.cfg ----
+  val is_tilecfg    = Bool()      // LD opcode, funct3=7
+  val tilecfg_sel   = UInt(3.W)   // TileCfgSel value
 }
 
 // ---------------------------------------------------------------------------
@@ -304,23 +313,34 @@ class InstrDecoder extends Module {
   io.decoded.valu.rs3_idx  := rs3Bits
   io.decoded.valu.imm      := immI
 
-  // ---------- LD / ST / ld.tile / tile.cfg decode ----------
+  // ---------- LD / ST / gather / tile / scatter / tile.cfg decode ----------
   val isLdFamily = (family === OpFamily.LD)
   val isStFamily = (family === OpFamily.ST)
 
-  // Standard LD (VX/VE/VR from SPM) — funct3 3..5
+  // funct3=6 sub-mode: USE_TILE_CNT bit (funct7[2])
+  val useTileCnt = f7(Funct7Gather.USE_TILE_CNT).asBool
+
+  // Standard contiguous LD: funct3 = 3/4/5
   io.decoded.is_ld := isLdFamily &&
     (f3 === Funct3Mem.VX_VEC || f3 === Funct3Mem.VE_VEC || f3 === Funct3Mem.VR_VEC)
 
-  // Standard ST
+  // Standard contiguous ST: funct3 = 3/4/5
   io.decoded.is_st := isStFamily &&
     (f3 === Funct3Mem.VX_VEC || f3 === Funct3Mem.VE_VEC || f3 === Funct3Mem.VR_VEC)
 
-  // ld.tile (funct3 = 6 under LD opcode)
-  io.decoded.is_ldtile   := isLdFamily && (f3 === Funct3Mem.LD_TILE)
-  io.decoded.ldtile_zpad := f7(4).asBool   // funct7[4] = zero-pad enable
+  // ld.gather (LD, funct3=6, funct7[USE_TILE_CNT]=0)
+  io.decoded.is_gather := isLdFamily && (f3 === Funct3Mem.GATHER) && !useTileCnt
 
-  // tile.cfg (funct3 = 7 under LD opcode); wr_sel from imm[2:0]
-  io.decoded.is_tilecfg   := isLdFamily && (f3 === Funct3Mem.TILE_CFG)
-  io.decoded.tilecfg_sel  := immI(2, 0).asUInt
+  // ld.tile  (LD, funct3=6, funct7[USE_TILE_CNT]=1)
+  io.decoded.is_tile     := isLdFamily && (f3 === Funct3Mem.GATHER) && useTileCnt
+  io.decoded.tile_zpad   := f7(Funct7Gather.ZERO_PAD).asBool
+  io.decoded.tile_trans  := f7(Funct7Gather.TRANSPOSED).asBool
+  io.decoded.tile_autoinc := f7(Funct7Gather.AUTO_INC).asBool
+
+  // st.scatter (ST, funct3=6)
+  io.decoded.is_scatter := isStFamily && (f3 === Funct3Mem.GATHER)
+
+  // tile.cfg (LD, funct3=7); wr_sel from imm[2:0]
+  io.decoded.is_tilecfg  := isLdFamily && (f3 === Funct3Mem.TILE_CFG)
+  io.decoded.tilecfg_sel := immI(2, 0).asUInt
 }
