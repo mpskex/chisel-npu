@@ -166,14 +166,27 @@ object Funct3Mma {
 }
 
 // LD / ST (opcodes 0x01/0x02): memory access; funct3 encodes transfer width
+//   0..2: scalar sub-lane transfers (future)
+//   3..5: full K-lane vector transfers (primary use)
+//   6:    ld.tile — gather one convolution patch (PAG-assisted, see spm.sreg)
+//   7:    tile.cfg — write convolution parameters into .sreg
 object Funct3Mem {
-  val BYTE  = 0.U(3.W)  // N-bit lane (byte)
-  val HALF  = 1.U(3.W)  // 2N-bit
-  val WORD  = 2.U(3.W)  // 4N-bit
-  val VX_VEC = 3.U(3.W) // full K-lane VX vector
-  val VE_VEC = 4.U(3.W) // full K-lane VE vector
-  val VR_VEC = 5.U(3.W) // full K-lane VR vector
-  // 6..7 reserved
+  val BYTE     = 0.U(3.W)  // N-bit lane (byte scalar) — future
+  val HALF     = 1.U(3.W)  // 2N-bit                   — future
+  val WORD     = 2.U(3.W)  // 4N-bit                   — future
+  val VX_VEC   = 3.U(3.W)  // full K-lane VX vector (primary LD/ST)
+  val VE_VEC   = 4.U(3.W)  // full K-lane VE vector
+  val VR_VEC   = 5.U(3.W)  // full K-lane VR vector
+  val LD_TILE  = 6.U(3.W)  // ld.tile  — gather conv patch from SPM via PAG
+  val TILE_CFG = 7.U(3.W)  // tile.cfg — write conv params to .sreg
+}
+
+// tile.cfg wr_sel values (encoded in imm[2:0] of the tile.cfg instruction)
+object TileCfgSel {
+  val HW   = 0.U(3.W)  // wr_data = {W_in[31:16], H_in[15:0]}
+  val CH   = 1.U(3.W)  // wr_data = {C_out[31:16], C_in[15:0]}
+  val KERN = 2.U(3.W)  // wr_data = {mode[25:24],pad_w[23:20],pad_h[19:16],dil[15:12],stride[11:8],Kw[7:4],Kh[3:0]}
+  val POS  = 3.U(3.W)  // wr_data = {tile_w[31:16], tile_h[15:0]}  (reset / seed)
 }
 
 // ---------------------------------------------------------------------------

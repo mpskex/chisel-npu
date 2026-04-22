@@ -31,7 +31,13 @@ class DecodedMicroOp extends Bundle {
   val rd        = UInt(5.W)
   val rs1       = UInt(5.W)
   val rs2       = UInt(5.W)
-  val mem_width = UInt(3.W)       // ld/st funct3
+  val mem_width = UInt(3.W)       // ld/st funct3 (Funct3Mem values)
+  val is_ld     = Bool()          // true when LD family (VX/VE/VR load from SPM)
+  val is_st     = Bool()          // true when ST family
+  val is_ldtile = Bool()          // true when ld.tile (PAG-assisted gather)
+  val is_tilecfg = Bool()         // true when tile.cfg (write to .sreg)
+  val tilecfg_sel = UInt(3.W)     // TileCfgSel value for tile.cfg
+  val ldtile_zpad = Bool()        // ld.tile: zero-pad enable (from funct7[4])
 }
 
 // ---------------------------------------------------------------------------
@@ -297,4 +303,24 @@ class InstrDecoder extends Module {
   )
   io.decoded.valu.rs3_idx  := rs3Bits
   io.decoded.valu.imm      := immI
+
+  // ---------- LD / ST / ld.tile / tile.cfg decode ----------
+  val isLdFamily = (family === OpFamily.LD)
+  val isStFamily = (family === OpFamily.ST)
+
+  // Standard LD (VX/VE/VR from SPM) — funct3 3..5
+  io.decoded.is_ld := isLdFamily &&
+    (f3 === Funct3Mem.VX_VEC || f3 === Funct3Mem.VE_VEC || f3 === Funct3Mem.VR_VEC)
+
+  // Standard ST
+  io.decoded.is_st := isStFamily &&
+    (f3 === Funct3Mem.VX_VEC || f3 === Funct3Mem.VE_VEC || f3 === Funct3Mem.VR_VEC)
+
+  // ld.tile (funct3 = 6 under LD opcode)
+  io.decoded.is_ldtile   := isLdFamily && (f3 === Funct3Mem.LD_TILE)
+  io.decoded.ldtile_zpad := f7(4).asBool   // funct7[4] = zero-pad enable
+
+  // tile.cfg (funct3 = 7 under LD opcode); wr_sel from imm[2:0]
+  io.decoded.is_tilecfg   := isLdFamily && (f3 === Funct3Mem.TILE_CFG)
+  io.decoded.tilecfg_sel  := immI(2, 0).asUInt
 }
