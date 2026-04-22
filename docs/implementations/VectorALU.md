@@ -5,7 +5,7 @@
 The Vector Arithmetic Logic Unit (VALU) is a **K-lane, multi-width** coprocessor running
 alongside the [Systolic Array](SystolicArray.md).
 It handles all post-GEMM work: elementwise arithmetic, bitwise ops, horizontal reductions,
-LUT-based transcendentals, type conversions (INT/FP32/BF16/BF8), scalar broadcasts, and
+programmable two-bank LUT lookups (`vlut`/`vsetlut`), type conversions (INT/FP32/BF16/BF8), scalar broadcasts, and
 FP32 fused multiply-add. All output is written back to the shared
 [MultiWidthRegisterBlock](Registers.md).
 
@@ -35,7 +35,7 @@ graph TD
 
     CTRL["NCoreVALUBundle\nop · dtype · regCls\nsaturate · round · rs3_idx · imm"]
 
-    VALU["VALU(K, N)\nK lanes × 3 widths\nIEEE754 FP32 helpers"]
+    VALU["VALU(K, N)\nK lanes × 3 widths\nFP32 · vlut/vsetlut"]
 
     OVX["out_vx\nVec(K, UInt(N.W))"]
     OVE["out_ve\nVec(K, UInt(2N.W))"]
@@ -79,7 +79,7 @@ Key properties:
 
 | Code | Type | Notes |
 |:---:|:---|:---|
-| `S8C4` | INT8 × K | Primary dtype for arithmetic/logic/LUT |
+| `S8C4` | INT8 × K | Primary dtype for arithmetic/logic/vlut |
 | `S16C2` | INT16 × K | VE register class |
 | `S32C1` | INT32 × K | VR register class |
 | `FP32C1` | FP32 × K | VR; Tier-2 FP32 subset |
@@ -177,32 +177,50 @@ wavedrom (
 
 ---
 
-### VALU_LUT — 256-entry ROM transcendentals
+### VALU_LUT — Programmable two-bank 256-entry lookup table
 
-Opcode family `0x13`. VX lanes only. 256-entry ROMs are precomputed in Scala at elaboration
-time (object `Qfmt` in `src/main/scala/alu/vec/vec.scala`).
+Opcode family `0x13`. VX lanes only. Two independently writable 256-byte banks (A and B).
+The LUT is **not** a fixed ROM: entries are written at runtime via `vsetlut` before being
+queried per-lane with `vlut`.
 
-#### Q-format
+#### `vlut` — per-lane lookup (R-type, 1 tick)
 
-| Port | Format | Scale | Range |
-|:---|:---|:---:|:---|
-| `in_a_vx[i]` | SQ1.6 | 64 | [−2.0, +2.0) |
-| `vexp` output | UQ0.8 stored as SInt(N) | 256 | [0, 1) — values > 127 appear negative |
-| `vrecip` output | SQ1.6 | 64 | [−2.0, +2.0); x=0 → sentinel 127 |
-| `vtanh` output | SQ1.6 | 64 | [−1.0, +1.0) |
-| `verf` output | SQ1.6 | 64 | [−1.0, +1.0) |
+`rd[i] = lut_bank[in_a_vx[i].asUInt]`
 
-!!! warning "vexp sign interpretation"
-    `vexp` output is UQ0.8 **stored as a signed byte** in `out_vx`. Values > 127
-    (e.g., `exp(0) ≈ 1.0 → 255 → −1` as SInt) appear negative. Downstream arithmetic
-    should reinterpret: `if (v < 0) v + 256 else v`.
+`rs2` is unused. The raw unsigned value of each `in_a_vx` lane is the LUT index (0–255).
+Output goes to `out_vx`. Bank A or B is selected by `funct3[0]`; this bit is also
+propagated as `round[0]` in the `DecodedMicroOp` bundle.
 
-| funct3 | Mnemonic | Input | Output | Accuracy |
-|:---:|:---|:---|:---|:---|
-| 000 | `exp` | SQ1.6 | UQ0.8 (signed byte) | ~2 ULP |
-| 001 | `recip` | SQ1.6 | SQ1.6 | ~2 ULP |
-| 010 | `tanh` | SQ1.6 | SQ1.6 | ~1 ULP; monotone |
-| 011 | `erf` | SQ1.6 | SQ1.6 | ~1 ULP; odd function |
+| funct3 | Mnemonic | Bank | Notes |
+|:---:|:---|:---:|:---|
+| 000 | `vlut` | A | `round[0]=0` in decoded bundle |
+| 001 | `vlut` | B | `round[0]=1` in decoded bundle |
+
+#### `vsetlut` — write LUT segment (I-type, no register-file write)
+
+Writes one K×4-byte segment from `VR[rs1]` into the selected bank.
+`imm` = segment index `s`; fills entries `[s×K×4 .. (s+1)×K×4 − 1]`.
+`funct3[0]` selects bank A (0) or B (1), propagated the same way as `vlut`.
+
+| funct3 | Mnemonic | Bank | Notes |
+|:---:|:---|:---:|:---|
+| 100 | `vsetlut` | A | I-type; `imm`=segment; rs1=VR source |
+| 101 | `vsetlut` | B | I-type; `imm`=segment; rs1=VR source |
+
+**Segment capacity:**
+
+| K | Bytes per VR | `vsetlut` calls to fill 256-entry bank |
+|:---:|:---:|:---:|
+| 8 | 32 | 8 |
+| 64 | 256 | 1 |
+
+!!! note "Reserved funct3 values"
+    funct3 `010`, `011`, `110`, `111` are reserved; the decoder asserts `illegal`.
+
+!!! note "Qfmt table utility"
+    The `Qfmt` object (`src/main/scala/alu/vec/vec.scala`) provides Scala-side precomputed
+    tables (`lutExp`, `lutRecip`, `lutTanh`, `lutErf`) for use in tests and as a source to
+    load into LUT banks via `vsetlut`. These are no longer synthesised as hardware ROMs.
 
 ---
 
@@ -347,8 +365,8 @@ wavedrom (
   { name: "reduce (vsum)",    wave: "x....=x.....",  data: ["issue"], period: 2 },
   { name: "→ out_vr bcast",  wave: "x.....=x....",  data: ["broadcast Σ"], period: 2 },
   {},
-  { name: "LUT (vexp…)",      wave: "x......=x...",  data: ["issue"], period: 2 },
-  { name: "→ out_vx",        wave: "x.......=x..",  data: ["LUT result"], period: 2 }
+  { name: "vlut (bank A/B)",  wave: "x......=x...",  data: ["issue"], period: 2 },
+  { name: "→ out_vx",        wave: "x.......=x..",  data: ["vlut result"], period: 2 }
 ]}
 )
 
@@ -407,9 +425,9 @@ flowchart LR
     X --> A["vrmax → VR\n(broadcast max)\n1 tick"]
     A --> B
     X --> B["vsub.sat → VX\nx' = x - max\n1 tick"]
-    B --> C["vexp → VX\ne = exp(x') UQ0.8\n1 tick"]
+    B --> C["vlut (exp, bank A) → VX\ne = exp(x') UQ0.8\n1 tick"]
     C --> D["vsum → VR\nΣ = sum(e)\n1 tick"]
-    D --> E["vrecip → VX\nr = 1/Σ (SQ1.6)\n1 tick"]
+    D --> E["vlut (recip, bank B) → VX\nr = 1/Σ (SQ1.6)\n1 tick"]
     C --> F["vmul → VX\np = e × r\n1 tick"]
     E --> F
     F --> G["softmax(x)\n6 ticks total"]
@@ -423,7 +441,7 @@ $$\text{GELU}(x) \approx 0.5 \cdot x \cdot \bigl(1 + \text{erf}(x/\sqrt{2})\bigr
 flowchart LR
     X["VX: x[K] (SQ1.6)"]
     X --> A["vsra by 1\n≈ x/√2\n1 tick → VX"]
-    A --> B["verf → VX\nerf(x/√2) SQ1.6\n1 tick"]
+    A --> B["vlut (erf, bank A) → VX\nerf(x/√2) SQ1.6\n1 tick"]
     B --> C["vadd 64\n1+erf(·)\n1 tick → VX"]
     X --> D["vmul → VR\nx·(1+erf)\n1 tick"]
     C --> D
@@ -435,8 +453,8 @@ flowchart LR
 
 ## Implementation Notes
 
-- **LUT ROM generation**: all 256-entry tables (`Qfmt.lutExp/Recip/Tanh/Erf`) are computed at Scala elaboration time via `Seq.tabulate(256){...}`. The same tables are imported in test specs for bit-exact verification; no runtime ROM initialisation cost.
-- **`vexp` UQ0.8 sign**: `out_vx` is `UInt(N.W)`, so values 0–255 are unsigned. The UQ0.8 value 255 (exp(0)≈1.0) is fully representable. Signed reinterpretation is only needed if the caller treats `out_vx` as `SInt`.
+- **Programmable LUT banks**: the VALU holds two 256-byte banks written at runtime via `vsetlut`. The `Qfmt` object (`lutExp`/`lutRecip`/`lutTanh`/`lutErf`) provides Scala-side table data for loading into banks before simulation; no static hardware ROM is synthesised.
+- **UQ0.8 sign when using exp LUT bank**: `out_vx` is `UInt(N.W)`, so values 0–255 are unsigned. The UQ0.8 value 255 (exp(0)≈1.0) is fully representable. Signed reinterpretation is only needed if the caller treats `out_vx` as `SInt`.
 - **`regCls` field**: the register-class selector inside `NCoreVALUBundle` is named `regCls` (not `width`) to avoid a Chisel plugin naming conflict with `chisel3.Width`. Every `funct7[1:0]` decodes to `regCls` in hardware.
 - **VecOp enum width**: `VecOp` values go up to `0x45` (= 69), requiring 7-bit width. If you add new entries, verify the maximum still fits in 7 bits.
 - **Per-lane shift amount**: `vsll`/`vsra`/etc. use the low `log2(lane_width)` bits of the corresponding `in_b` lane, enabling heterogeneous per-lane shifts within a single instruction.

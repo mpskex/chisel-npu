@@ -2,12 +2,12 @@
 
 ## Overview
 
-This tutorial walks through a complete **post-accumulation quantization pipeline** that models transformer attention activation: `softmax(QK^T / √d_k)`. It demonstrates the interplay between the MMALU (dot-product accumulation), VALU (element-wise operations), and LUT-based activation functions, with full end-to-end quantization in the INT8 domain.
+This tutorial walks through a complete **post-accumulation quantization pipeline** that models transformer attention activation: `softmax(QK^T / √d_k)`. It demonstrates the interplay between the MMALU (dot-product accumulation), VALU (element-wise operations), and programmable LUT activation functions (`vlut`/`vsetlut`), with full end-to-end quantization in the INT8 domain.
 
 The implementation combines:
 - **Integer arithmetic** (systolic array, reductions, shifts)
 - **Floating-point FMA** (scaling and bias)
-- **Quantized activation** (exp and reciprocal LUTs)
+- **Quantized activation** (exp and reciprocal via programmable `vlut` banks)
 - **Numerical stability** (max subtraction before exp)
 
 ---
@@ -31,13 +31,13 @@ QK^T accumulator (INT8 seed)
         ↓
    shifted_sq16 [VX]
         ↓
-   Phase 4: vexp LUT (SQ1.6 → UQ0.8)
+   Phase 4: vlut bank A (exp table: SQ1.6 → UQ0.8)
         ↓
    exp_uq08 [VX]
         ↓
    Phase 5: vsum → INT32 sum (broadcast to all lanes)
         ↓
-   Phase 6: vrecip LUT (scalar 1/sum)
+   Phase 6: vlut bank B (recip table: scalar 1/sum)
         ↓
    recip_sq16 [VX]
         ↓
@@ -99,7 +99,7 @@ vrmax(rd=3, rs1=0)                    // max over all K lanes, broadcast to VR[3
 vsub(rd=1, rs1=0, rs2=5, sat=true)    // VX[1] = VX[0] - VX[5], clamp to INT8
 ```
 
-**Purpose:** Prevent overflow in `vexp` when scores are large. Computing `exp(x - max(x))` is numerically stable and mathematically equivalent:
+**Purpose:** Prevent overflow in the exp `vlut` when scores are large. Computing `exp(x - max(x))` is numerically stable and mathematically equivalent:
 
 $$\text{softmax}(x_i) = \frac{e^{x_i}}{\sum_j e^{x_j}} = \frac{e^{x_i - \max(x)}}{\sum_j e^{x_j - \max(x)}}$$
 
@@ -107,21 +107,27 @@ $$\text{softmax}(x_i) = \frac{e^{x_i}}{\sum_j e^{x_j}} = \frac{e^{x_i - \max(x)}
 
 ---
 
-#### Phase 4: Element-wise Exp — LUT Lookup
+#### Phase 4: Element-wise Exp — Programmable LUT Lookup
+
+Before issuing `vlut`, bank A must be pre-loaded with the exp table via `vsetlut`:
 
 ```scala
-vexp(rd=2, rs1=1)                     // 256-entry SQ1.6 → UQ0.8 LUT
+// Pre-load: write Qfmt.lutExp data into LUT bank A (one vsetlut per segment)
+vsetlut(rs1=<vr_holding_exp_segment>, segment=s, bank=0)  // repeated per segment
+
+// Lookup: rd[i] = lut_bank_A[in_a_vx[i]]
+vlut(rd=2, rs1=1, bank=0)             // 256-entry SQ1.6 → UQ0.8 lookup from bank A
 ```
 
-**LUT table (Qfmt):**
+**LUT table (Qfmt.lutExp):**
 ```
-vexp: SQ1.6 input → UQ0.8 output (stored as signed INT8)
+exp table: SQ1.6 input → UQ0.8 output (stored as signed INT8)
   input x in [-2.0, +1.984] (range of SQ1.6)
   output e^x in [~0.135, ~7.389] clamped to [0, 255]
   example: input=0 (x=0.0) → exp(0)=1.0 → output=255 stored as -1 (two's complement)
 ```
 
-**Hardware:** The 256-entry ROM is indexed by the raw 8-bit unsigned byte of the input. The `in_a_vx` lane value is used directly as the LUT index.
+**Hardware:** The 256-byte bank is indexed by the raw 8-bit unsigned byte of each `in_a_vx` lane. The bank must have been written with `vsetlut` before the first `vlut` is issued.
 
 ---
 
@@ -134,19 +140,25 @@ vsum(rd=4, rs1=2)                     // sum all K lanes (signed byte accumulati
 
 **Semantic:** `vsum` reads K lanes of signed INT8, sign-extends each to INT32, sums them all, and broadcasts the result to all K lanes of the output VR register.
 
-**Why clamp to [1,127]?** The reciprocal LUT `vrecip` has a sentinel at index 0 (output=127, representing infinity). For stability, we ensure the sum is in [1,127] before looking it up.
+**Why clamp to [1,127]?** The reciprocal table (`Qfmt.lutRecip`, loaded into bank B) has a sentinel at index 0 (output=127, representing infinity). For stability, we ensure the sum is in [1,127] before looking it up.
 
 ---
 
-#### Phase 6: Reciprocal via LUT
+#### Phase 6: Reciprocal via Programmable LUT
+
+Bank B must be pre-loaded with the recip table via `vsetlut`:
 
 ```scala
-vrecip(rd=7, rs1=6)                   // 256-entry SQ1.6 → SQ1.6 LUT (scalar)
+// Pre-load: write Qfmt.lutRecip data into LUT bank B
+vsetlut(rs1=<vr_holding_recip_segment>, segment=s, bank=1)  // repeated per segment
+
+// Lookup: rd[i] = lut_bank_B[in_a_vx[i]]
+vlut(rd=7, rs1=6, bank=1)             // 256-entry SQ1.6 → SQ1.6 lookup from bank B
 ```
 
-**LUT table:**
+**LUT table (Qfmt.lutRecip):**
 ```
-vrecip: SQ1.6 input → SQ1.6 output
+recip table: SQ1.6 input → SQ1.6 output
   input x in [-2.0, +1.984]
   output 1/x for x≠0, sentinel 127 (max FP value) for x=0
   example: input=64 (x=1.0) → output=64 (1/1.0=1.0 in SQ1.6)
@@ -242,7 +254,7 @@ def gemmSoftmaxRef(accInt8: Array[Int], scaleInt: Int): Array[Int] = {
   val shifted = scoreSgn.map(x => math.max(-128, math.min(127, x - maxSgn)))
   val shiftRaw = shifted.map(_ & 0xFF)
 
-  // Phase 4: vexp LUT
+  // Phase 4: vlut bank A (exp table — Qfmt.lutExp pre-loaded into bank A)
   val expRaw = shiftRaw.map(b => Qfmt.lutExp(b) & 0xFF)
 
   // Phase 5: vsum + clamp
@@ -250,7 +262,7 @@ def gemmSoftmaxRef(accInt8: Array[Int], scaleInt: Int): Array[Int] = {
   val sumSgn = expSgn.map(_.toLong).sum
   val sumClamp = math.max(1, math.min(127, sumSgn.toInt))
 
-  // Phase 6: vrecip LUT
+  // Phase 6: vlut bank B (recip table — Qfmt.lutRecip pre-loaded into bank B)
   val recipRaw = Qfmt.lutRecip(sumClamp & 0xFF) & 0xFF
 
   // Phase 7: FP32 multiply
@@ -279,9 +291,9 @@ The test file `NCoreBackendGemmSoftmaxSpec.scala` includes four test cases:
 ### Test A: Uniform Scores
 ```
 accVal=10, scaleInt=1 → scaled=10 → sq16=10
-x - max(10) = 0 → exp(0)=1.0 → UQ0.8=255 stored as -1
+x - max(10) = 0 → vlut exp(0)=1.0 → UQ0.8=255 stored as -1
 vsum(8×(-1)) = -8; clamp→1
-vrecip(1) → 127 (sentinel for 1/sum)
+vlut recip(1) → 127 (sentinel for 1/sum)
 vfmul(-1.0f, 127.0f) = -127.0f
 vsra(-127, 7) = -1 (arithmetic: rounds toward -∞)
 vcvt_s32_s8(-1) = -1
@@ -293,13 +305,13 @@ Result: all K lanes = -1
 ### Test B: 2× Scale
 ```
 accVal=20, scaleInt=2 → scaled=40.0f
-Same exp/sum/recip/relu path → all K lanes = -1
+Same vlut-exp/sum/vlut-recip/relu path → all K lanes = -1
 ```
 
 ### Test C: Negative Accumulator
 ```
 accVal=-20, scaleInt=1 → scaled=-20.0f
-Exercises negative SQ1.6 exp path
+Exercises negative SQ1.6 vlut-exp path
 Result: consistent with Scala reference
 ```
 
@@ -346,7 +358,7 @@ Expected output:
 
 2. **Numerical stability matters:** Subtracting the max before exp prevents overflow and mirrors standard softmax implementations.
 
-3. **LUT-based activation (exp, recip) gives ~2–3× gate efficiency** over FP32 hardware at the cost of reduced precision (~1/64 per operation).
+3. **Programmable LUT activation (`vlut`) gives ~2–3× gate efficiency** over FP32 hardware at the cost of reduced precision (~1/64 per operation). Banks A and B are loaded at init time via `vsetlut` and can be reprogrammed for different activation functions.
 
 4. **Integer FP32 multiply is exact** for small operands; no fused multiply-add is needed in the quantization chain.
 

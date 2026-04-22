@@ -53,7 +53,7 @@ Confusing them causes hard-to-debug hardware elaboration errors.
 
 ## Tutorials
 
-- [GEMM + Softmax Quantization](tutorials/gemm_softmax_quantization.md) — post-accumulation quantization pipeline for transformer attention activation; demonstrates reduction ops, LUT-based exp/recip, numerical stability, and full end-to-end quantization chain with Scala reference verification
+- [GEMM + Softmax Quantization](tutorials/gemm_softmax_quantization.md) — post-accumulation quantization pipeline for transformer attention activation; demonstrates reduction ops, programmable LUT activation (`vlut`/`vsetlut`), numerical stability, and full end-to-end quantization chain with Scala reference verification
 
 ---
 
