@@ -1,0 +1,1 @@
+docker run --rm -v ${PWD}:/workspace/ fangruil/chisel-dev:amd64 sbt "testOnly $1"

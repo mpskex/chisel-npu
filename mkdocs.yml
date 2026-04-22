@@ -4,6 +4,22 @@ repo_name: Chisel NPU
 theme:
   name: material
 
+nav:
+  - Home: index.md
+  - ISA Designs:
+    - Instructions: designs/01.isa.md
+    - Memory: designs/02.memory.md
+    - Buses: designs/03.bus.md
+  - Implementation:
+    - Neural Core: implementations/NeuralCore.md
+    - Processing Element: implementations/ProcessingElement.md
+    - Systolic Array: implementations/SystolicArray.md
+    - Vector ALU: implementations/VectorALU.md
+    - Register Files: implementations/Registers.md
+    - Quantization Pipeline: implementations/Quantization.md
+  - Tutorials:
+    - GEMM + Softmax Quantization: tutorials/gemm_softmax_quantization.md
+
 plugins:
     - search
     - mermaid2
