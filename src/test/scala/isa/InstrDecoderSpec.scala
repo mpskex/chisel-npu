@@ -118,7 +118,7 @@ class InstrDecoderSpec extends AnyFlatSpec {
 
       // vlut bank B: funct3=1, round[0]=1
       check(dut, vlut(rd=2, rs1=1, bank=1), OpFamily.VALU_LUT, VecOp.vlut,
-            expWidth=WX, expRd=2, expRs1=1)
+            expWidth=WX, expRound=1, expRd=2, expRs1=1)
       dut.io.decoded.valu.round.expect(1.U)  // bank B → round[0]=1
     }
   }
