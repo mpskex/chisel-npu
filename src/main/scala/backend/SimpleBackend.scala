@@ -153,7 +153,157 @@ class NCoreBackend(
   rf.io.ext_w_data := io.ext_wr_data
 
   // ==========================================================================
-  // MMALU (systolic array; n = K lanes, nbits = N)
+  // LD / ST execution
+  //
+  // ─── Contiguous LD (is_ld) ────────────────────────────────────────────────
+  //   Cycle 0: compute RF row address, read combinatorially from port 4.
+  //            Capture (data, rd, mem_width) in pipeline registers.
+  //   Cycle 1: write captured data into dest VX/VE/VR via write port 1.
+  //
+  //   Address: row = dec.rs1.pad(VX_ADDR) + dec.valu.imm.asUInt
+  //
+  // ─── Contiguous ST (is_st) ────────────────────────────────────────────────
+  //   Cycle 0: read RF[dec.rs2] combinatorially (port 2, already wired).
+  //            Write to RF row = dec.rs1 + funct7_offset.
+  //   (1 cycle, synchronous write)
+  //
+  // ─── ld.gather (is_gather) ────────────────────────────────────────────────
+  //   Cycle 0: VX[rs1][k] (port 2) supplies K row addresses → gather port.
+  //            Capture (gather_data, rd) in pipeline registers.
+  //   Cycle 1: write captured data into VX[rd] via write port 1.
+  //
+  // ─── ld.tile (is_tile) ────────────────────────────────────────────────────
+  //   Cycle 0: compute address = rs1 + tile_h*stride_h + tile_w*stride_w.
+  //            Read RF[addr] via port 4.  Capture (data, rd) in pipeline regs.
+  //   Cycle 1: write to VX[rd].  Optionally pulse tile_w_inc.
+  //
+  // ─── st.scatter (is_scatter) ─────────────────────────────────────────────
+  //   Cycle 0: VX[rs1][k] (port 2) → scatter addresses; VX[rs2][k] → data.
+  //            Scatter write fires synchronously.
+  //   (1 cycle)
+  // ==========================================================================
+
+  // ---- RF row address for contiguous LD and tile ----
+  // LD (I-type): address = sext(imm), rs1 is always 0 in the assembler encoding.
+  val ldRow  = dec.valu.imm.asUInt(VX_ADDR - 1, 0)
+
+  // Tile-mode base: {rs2[4:0], rs1[4:0]} (10-bit), matches ldTile assembler encoding.
+  val tileBase = Cat(dec.rs2(4, 0), dec.rs1(4, 0))
+
+  // Tile-mode address: base + tile_h * stride_row_h + tile_w * stride_row_w
+  val tileRow = (tileBase.pad(VX_ADDR) +
+                 (sreg.io.tile_h * sreg.io.conv.stride_row_h)(VX_ADDR - 1, 0) +
+                 (sreg.io.tile_w * sreg.io.conv.stride_row_w)(VX_ADDR - 1, 0)
+                )(VX_ADDR - 1, 0)
+
+  // Mux port 4 address: used for contiguous LD and tile
+  val port4Addr = Mux(dec.is_tile, tileRow, ldRow)
+  rf.io.vx_r_addr(4) := port4Addr
+
+  // ---- Gather: drive gather port from VX[rs1] (port 2) ----
+  when (dec.is_gather) {
+    rf.io.vx_r_addr(2) := dec.rs1            // route rs1 to port 2
+    for (k <- 0 until K) {
+      rf.io.gather_r_addr(k) := rf.io.vx_r_data(2)(k).pad(VX_ADDR)
+    }
+  }
+
+  // ---- Pipeline register: capture cycle-0 read for cycle-1 write-back ----
+  // Covers contiguous LD, ld.gather, and ld.tile.
+  val ld_issue     = dec.is_ld || dec.is_gather || dec.is_tile
+  val ld_wb_en     = RegNext(ld_issue,       false.B)
+  val ld_wb_rd     = RegNext(dec.rd)
+  val ld_wb_width  = RegNext(dec.mem_width)
+  val ld_wb_is_gth = RegNext(dec.is_gather,  false.B)  // gather vs. contiguous
+  val ld_wb_autoinc= RegNext(dec.tile_autoinc && dec.is_tile, false.B)
+
+  // Capture data: gather uses gather_r_data; contiguous/tile uses vx_r_data(4)
+  val ld_capture_data = WireDefault(VecInit(Seq.fill(K)(0.U(N.W))))
+  when (dec.is_gather) {
+    for (k <- 0 until K) ld_capture_data(k) := rf.io.gather_r_data(k)
+  } .otherwise {
+    for (k <- 0 until K) ld_capture_data(k) := rf.io.vx_r_data(4)(k)
+  }
+  val ld_wb_data = RegNext(ld_capture_data)
+
+  // Also capture VE/VR extra rows for multi-row write-back.
+  // VE: port-4 reads row N; we need row N+1.  Read via a second address on
+  //     port 4 in cycle 1 (ldRow+1 registered from cycle 0).
+  // VR: similarly needs rows +1,+2,+3.
+  // For simplicity in this first implementation:
+  //   VE LD stores the low-N bits from port 4; the high-N bits come from the
+  //   row immediately after (registered address, re-read in cycle 1).
+  //   VR LD similarly fills 4 consecutive rows.
+  // This means the instruction must be held for multiple cycles for VE/VR.
+  // TODO: implement full multi-row pipeline; for now only VX width is complete.
+
+  // ---- LD write-back (cycle 1) ----
+  when (ld_wb_en) {
+    // Gather and contiguous VX both write via VX port 1
+    when (ld_wb_is_gth || ld_wb_width === Funct3Mem.VX_VEC) {
+      rf.io.vx_w_en(1)   := true.B
+      rf.io.vx_w_addr(1) := ld_wb_rd
+      for (lane <- 0 until K) rf.io.vx_w_data(1)(lane) := ld_wb_data(lane)
+    }
+    when (ld_wb_width === Funct3Mem.VE_VEC && !ld_wb_is_gth) {
+      // First implementation: loads low-N bits of each 2N lane only.
+      // Full multi-row pipeline is a future improvement.
+      rf.io.ve_w_en(0)   := true.B
+      rf.io.ve_w_addr(0) := ld_wb_rd.pad(VE_ADDR)
+      for (lane <- 0 until K) {
+        rf.io.ve_w_data(0)(lane) := Cat(0.U(N.W), ld_wb_data(lane))
+      }
+    }
+    when (ld_wb_width === Funct3Mem.VR_VEC && !ld_wb_is_gth) {
+      // First implementation: loads low-N bits of each 4N lane only.
+      rf.io.vr_w_en(0)   := true.B
+      rf.io.vr_w_addr(0) := ld_wb_rd.pad(VR_ADDR)
+      for (lane <- 0 until K) {
+        rf.io.vr_w_data(0)(lane) := Cat(0.U(N * 3), ld_wb_data(lane))
+      }
+    }
+    // Pulse tile_w_inc if this was an auto-increment tile load
+    when (ld_wb_autoinc) {
+      sreg.io.tile_w_inc := true.B
+    }
+  }
+
+  // ---- Contiguous ST (cycle 0 — synchronous write) ----
+  // ST is R-type: addr = {funct7[6:0], rs1[4:0]} (12-bit), rs2=source register.
+  // funct7 is at io.instr[31:25]; rs1 is dec.rs1[4:0].
+  val stFunct7 = io.instr(31, 25)
+  val stRow    = Cat(stFunct7, dec.rs1(4, 0)).pad(VX_ADDR)
+
+  when (dec.is_st) {
+    rf.io.vx_r_addr(2) := dec.rs2                        // read source VX
+    rf.io.vx_w_en(1)   := (dec.mem_width === Funct3Mem.VX_VEC)
+    rf.io.vx_w_addr(1) := stRow
+    for (lane <- 0 until K) rf.io.vx_w_data(1)(lane) := rf.io.vx_r_data(2)(lane)
+  }
+
+  // ---- st.scatter (cycle 0 — synchronous scatter write) ----
+  when (dec.is_scatter) {
+    rf.io.vx_r_addr(2) := dec.rs1                // port 2 reads VX[rs1] (index vector)
+    rf.io.scatter_w_en := true.B
+    for (k <- 0 until K) {
+      rf.io.scatter_w_addr(k) := rf.io.vx_r_data(2)(k).pad(VX_ADDR)
+      // Data comes from VX[rs2]; route via port 1 of vx_r (unused otherwise)
+      rf.io.scatter_w_data(k) := rf.io.vx_r_data(1)(k)
+    }
+    // Re-route port 1 to rs2 for scatter data
+    rf.io.vx_r_addr(1) := dec.rs2
+  }
+
+  // ---- tile.cfg: write to SREG (ISA path overrides direct harness port) ----
+  when (dec.is_tilecfg) {
+    sreg.io.wr_en   := true.B
+    sreg.io.wr_sel  := dec.tilecfg_sel
+    // Data source: VR[rs1] lane 0 low 32 bits
+    sreg.io.wr_data := rf.io.vr_r_data(0)(0)(31, 0)
+  }
+
+  // ==========================================================================
+  // MMALU (systolic array; n = K, nbits = N)
   // ==========================================================================
   val mmalu = Module(new MMALU(new MMPE(N), K, N, N4))
   mmalu.io.in_a := VecInit(rf.io.vx_r_data(0).map(_.asSInt))

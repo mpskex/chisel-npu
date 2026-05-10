@@ -4,8 +4,8 @@ test_run_dir/
 .vscode
 .metals
 .scalafmt.conf
-*.v
-*.sv
+top.v
+top.sv
 *.anno.json
 site/
 .DS_Store

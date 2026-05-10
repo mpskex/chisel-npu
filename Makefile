@@ -6,6 +6,8 @@ export ARCH=`uname -m`
 # export ARCH=amd64
 export VER=0.4
 
+export SBT_OPTS="-Xmx8G -Xss2M"
+
 image:
 	make image-${ARCH}
 
@@ -23,7 +25,7 @@ container:
 	if [ ${ARCH} = "arm64" ]; then docker run -u $(id -u):$(id -g) --rm -it -v ${PWD}:/workspace/ fangruil/chisel-dev:arm64 bash; else docker run -u $(id -u):$(id -g) --rm -it -v ${PWD}:/workspace/ fangruil/chisel-dev:amd64 bash; fi
 
 test:
-	if [ ${ARCH} = "arm64" ]; then docker run -u $(id -u):$(id -g) --rm -it -v ${PWD}:/workspace/ fangruil/chisel-dev:arm64 sbt test; else docker run -u $(id -u):$(id -g) --rm -it -v ${PWD}:/workspace/ fangruil/chisel-dev:amd64 sbt test; fi
+	if [ ${ARCH} = "arm64" ]; then docker run -u $(id -u):$(id -g) --rm -it --env SBT_OPTS=${SBT_OPTS} -v ${PWD}:/workspace/ fangruil/chisel-dev:arm64 sbt test; else docker run -u $(id -u):$(id -g) --rm -it --env SBT_OPTS=${SBT_OPTS} -v ${PWD}:/workspace/ fangruil/chisel-dev:amd64 sbt test; fi
 
 top.v:
 	if [ ${ARCH} = "arm64" ]; then docker run -u $(id -u):$(id -g) --rm -it -v ${PWD}:/workspace/ fangruil/chisel-dev:arm64 sbt run; else docker run -u $(id -u):$(id -g) --rm -it -v ${PWD}:/workspace/ fangruil/chisel-dev:amd64 sbt run; fi

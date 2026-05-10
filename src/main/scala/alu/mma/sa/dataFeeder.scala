@@ -20,16 +20,23 @@ class DataFeeder(val n: Int = 8, val nbits: Int = 8, val accum_nbits: Int = 32) 
 
     val buffer_a = (1 until n map(x => Module(new Pipe(SInt(nbits.W), x))))
     val buffer_b = (1 until n map(x => Module(new Pipe(SInt(nbits.W), x))))
-    val buffer_accum = Module(new Pipe(Vec(n, SInt(accum_nbits.W)), 2 * n - 1))
+    // Per-lane accum pipes: replaces Pipe(Vec(n,...), 2n-1) which produces a
+    // single valid FF with fanout=n*(2n-1) (1025 for n=32) spanning the full
+    // die and violating timing at 250 MHz.  One Pipe per lane gives each lane
+    // its own independent valid chain (fanout ≤ 2n-1 = 63), allowing Vivado
+    // to place each replica near its consumers and cut net delay by ~6x.
+    val buffer_accum = (0 until n map(x => Module(new Pipe(SInt(accum_nbits.W), 2 * n - 1))))
 
     // TODO: replace the enqueue as io port
     for (i <- 0 until n - 1) {
         buffer_a(i).io.enq.valid := true.B
         buffer_b(i).io.enq.valid := true.B
     }
-    buffer_accum.io.enq.valid := true.B
-    buffer_accum.io.enq.bits :<>= io.reg_accum_in
-    io.reg_accum_out :<>= buffer_accum.io.deq.bits
+    for (i <- 0 until n) {
+        buffer_accum(i).io.enq.valid := true.B
+        buffer_accum(i).io.enq.bits  := io.reg_accum_in(i)
+        io.reg_accum_out(i)          := buffer_accum(i).io.deq.bits
+    }
 
     // chainsaw layout
     for (i <- 0 until n) {
