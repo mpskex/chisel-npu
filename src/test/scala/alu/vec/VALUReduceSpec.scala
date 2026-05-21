@@ -27,43 +27,50 @@ class VALUReduceSpec extends AnyFlatSpec {
     }
   }
 
-  "VALU vsum" should "produce horizontal sum on out_vr, broadcast to all lanes" in {
-    simulate(new VALU(K, N)) { dut =>
-      pokeCtrl(dut, VecOp.vsum)
-      for (_ <- 0 until 64) {
-        val a = Array.fill(K)(rand.between(-128, 128))
-        pokeA(dut, a)
-        dut.clock.step()
-        val expected = a.map(_.toLong).sum
-        for (i <- 0 until K) {
-          dut.io.out_vr(i).expect((expected & 0xFFFFFFFFL).U,
-            s"vsum out_vr lane $i expected $expected")
-        }
-        val lane0 = dut.io.out_vr(0).peek().litValue
-        for (i <- 1 until K) {
-          assert(lane0 == dut.io.out_vr(i).peek().litValue, s"vsum broadcast invariant lane $i")
-        }
+  // ---- Sub-case helpers ------------------------------------------------------
+
+  private def runVsum(dut: VALU): Unit = {
+    pokeCtrl(dut, VecOp.vsum)
+    for (_ <- 0 until 64) {
+      val a = Array.fill(K)(rand.between(-128, 128))
+      pokeA(dut, a)
+      dut.clock.step()
+      val expected = a.map(_.toLong).sum
+      for (i <- 0 until K) {
+        dut.io.out_vr(i).expect((expected & 0xFFFFFFFFL).U,
+          s"vsum out_vr lane $i expected $expected")
+      }
+      val lane0 = dut.io.out_vr(0).peek().litValue
+      for (i <- 1 until K) {
+        assert(lane0 == dut.io.out_vr(i).peek().litValue, s"vsum broadcast invariant lane $i")
       }
     }
   }
 
-  "VALU vrmax" should "broadcast horizontal max on out_vr" in {
-    simulate(new VALU(K, N)) { dut =>
-      pokeCtrl(dut, VecOp.vrmax)
-      for (_ <- 0 until 64) {
-        val a = Array.fill(K)(rand.between(-128, 128))
-        pokeA(dut, a)
-        dut.clock.step()
-        val expected = a.max
-        for (i <- 0 until K) {
-          dut.io.out_vr(i).expect((expected & 0xFFFFFFFFL).U,
-            s"vrmax out_vr lane $i expected $expected")
-        }
-        val lane0 = dut.io.out_vr(0).peek().litValue
-        for (i <- 1 until K) {
-          assert(lane0 == dut.io.out_vr(i).peek().litValue, s"vrmax broadcast invariant lane $i")
-        }
+  private def runVrmax(dut: VALU): Unit = {
+    pokeCtrl(dut, VecOp.vrmax)
+    for (_ <- 0 until 64) {
+      val a = Array.fill(K)(rand.between(-128, 128))
+      pokeA(dut, a)
+      dut.clock.step()
+      val expected = a.max
+      for (i <- 0 until K) {
+        dut.io.out_vr(i).expect((expected & 0xFFFFFFFFL).U,
+          s"vrmax out_vr lane $i expected $expected")
       }
+      val lane0 = dut.io.out_vr(0).peek().litValue
+      for (i <- 1 until K) {
+        assert(lane0 == dut.io.out_vr(i).peek().litValue, s"vrmax broadcast invariant lane $i")
+      }
+    }
+  }
+
+  // ---- Coalesced test --------------------------------------------------------
+
+  "VALU reduce" should "pass all reduce sub-cases" in {
+    simulate(new VALU(K, N)) { dut =>
+      withClue("vsum: ")  { runVsum(dut)  }
+      withClue("vrmax: ") { runVrmax(dut) }
     }
   }
 }

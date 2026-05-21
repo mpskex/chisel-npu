@@ -392,73 +392,70 @@ class NCoreBackendGemmSoftmaxSpec extends AnyFlatSpec {
     }.toArray
   }
 
-  // ===========================================================================
-  // Test A: Uniform scores — exp table in bank A, recip in bank B
-  // ===========================================================================
-  "NCoreBackendGemmSoftmax" should "produce equal outputs for uniform input scores" in {
-    withBackend { dut =>
-      val accInt8  = Array.fill(K)(10)
-      val result   = runGemmSoftmax(dut, accInt8, scaleInt = 1)
-      val expected = gemmSoftmaxRef(accInt8, scaleInt = 1)
+  // ---- Sub-case helpers ------------------------------------------------------
+  //
+  // Each sub-case is independent: runGemmSoftmax() reloads both LUT banks at
+  // the start (loadLutBank in Phase 0), so register-file state from prior
+  // sub-cases is overwritten in the registers it cares about.
 
-      for (i <- 0 until K)
-        assert(result(i) == expected(i),
-          s"[Test A] lane $i: got ${result(i)}, expected ${expected(i)}")
+  private def runUniform(dut: NCoreBackend): Unit = {
+    val accInt8  = Array.fill(K)(10)
+    val result   = runGemmSoftmax(dut, accInt8, scaleInt = 1)
+    val expected = gemmSoftmaxRef(accInt8, scaleInt = 1)
 
-      val lane0 = result(0)
-      for (i <- 1 until K)
-        assert(result(i) == lane0,
-          s"[Test A] uniformity: lane $i=${result(i)} != lane 0=$lane0")
-    }
+    for (i <- 0 until K)
+      assert(result(i) == expected(i),
+        s"[uniform] lane $i: got ${result(i)}, expected ${expected(i)}")
+
+    val lane0 = result(0)
+    for (i <- 1 until K)
+      assert(result(i) == lane0,
+        s"[uniform] uniformity: lane $i=${result(i)} != lane 0=$lane0")
   }
 
-  // ===========================================================================
-  // Test B: 2× scale
-  // ===========================================================================
-  "NCoreBackendGemmSoftmax" should "handle 2x scale with full value check" in {
-    withBackend { dut =>
-      val accInt8  = Array.fill(K)(20)
-      val result   = runGemmSoftmax(dut, accInt8, scaleInt = 2)
-      val expected = gemmSoftmaxRef(accInt8, scaleInt = 2)
+  private def run2xScale(dut: NCoreBackend): Unit = {
+    val accInt8  = Array.fill(K)(20)
+    val result   = runGemmSoftmax(dut, accInt8, scaleInt = 2)
+    val expected = gemmSoftmaxRef(accInt8, scaleInt = 2)
 
-      for (i <- 0 until K)
-        assert(result(i) == expected(i),
-          s"[Test B] lane $i: got ${result(i)}, expected ${expected(i)}")
+    for (i <- 0 until K)
+      assert(result(i) == expected(i),
+        s"[2x scale] lane $i: got ${result(i)}, expected ${expected(i)}")
 
-      val lane0 = result(0)
-      for (i <- 1 until K)
-        assert(result(i) == lane0,
-          s"[Test B] uniformity: lane $i=${result(i)} != lane 0=$lane0")
-    }
+    val lane0 = result(0)
+    for (i <- 1 until K)
+      assert(result(i) == lane0,
+        s"[2x scale] uniformity: lane $i=${result(i)} != lane 0=$lane0")
   }
 
-  // ===========================================================================
-  // Test C: Negative accumulator
-  // ===========================================================================
-  "NCoreBackendGemmSoftmax" should "handle negative accumulator scores" in {
-    withBackend { dut =>
-      val accInt8  = Array.fill(K)(-20)
-      val result   = runGemmSoftmax(dut, accInt8, scaleInt = 1)
-      val expected = gemmSoftmaxRef(accInt8, scaleInt = 1)
+  private def runNegative(dut: NCoreBackend): Unit = {
+    val accInt8  = Array.fill(K)(-20)
+    val result   = runGemmSoftmax(dut, accInt8, scaleInt = 1)
+    val expected = gemmSoftmaxRef(accInt8, scaleInt = 1)
 
-      for (i <- 0 until K)
-        assert(result(i) == expected(i),
-          s"[Test C] lane $i: got ${result(i)}, expected ${expected(i)}")
-    }
+    for (i <- 0 until K)
+      assert(result(i) == expected(i),
+        s"[negative] lane $i: got ${result(i)}, expected ${expected(i)}")
   }
 
-  // ===========================================================================
-  // Test D: scale=3
-  // ===========================================================================
-  "NCoreBackendGemmSoftmax" should "pass full value check with scale=3" in {
-    withBackend { dut =>
-      val accInt8  = Array.fill(K)(5)
-      val result   = runGemmSoftmax(dut, accInt8, scaleInt = 3)
-      val expected = gemmSoftmaxRef(accInt8, scaleInt = 3)
+  private def run3xScale(dut: NCoreBackend): Unit = {
+    val accInt8  = Array.fill(K)(5)
+    val result   = runGemmSoftmax(dut, accInt8, scaleInt = 3)
+    val expected = gemmSoftmaxRef(accInt8, scaleInt = 3)
 
-      for (i <- 0 until K)
-        assert(result(i) == expected(i),
-          s"[Test D] lane $i: got ${result(i)}, expected ${expected(i)}")
+    for (i <- 0 until K)
+      assert(result(i) == expected(i),
+        s"[3x scale] lane $i: got ${result(i)}, expected ${expected(i)}")
+  }
+
+  // ---- Coalesced test --------------------------------------------------------
+
+  "NCoreBackendGemmSoftmax" should "pass all GEMM+softmax quantization sub-cases" in {
+    withBackend { dut =>
+      withClue("uniform scores: ")           { runUniform(dut)  }
+      withClue("2x scale: ")                 { run2xScale(dut)  }
+      withClue("negative accumulator: ")     { runNegative(dut) }
+      withClue("scale=3: ")                  { run3xScale(dut)  }
     }
   }
 }

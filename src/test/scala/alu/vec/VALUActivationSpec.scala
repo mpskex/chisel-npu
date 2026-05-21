@@ -56,114 +56,122 @@ class VALUActivationSpec extends AnyFlatSpec {
     }
   }
 
-  "VALU softmax" should "produce a probability distribution summing to ~1.0" in {
+  // ---- Sub-case helpers ------------------------------------------------------
+
+  private def runSoftmax(dut: VALU): Unit = {
     val rand = new Random(0x5AFE)
-    simulate(new VALU(K, N)) { dut =>
-      // Load exp into bank A and recip into bank B once before the loop.
-      loadBank(dut, Qfmt.lutExp,   BANK_A)
-      loadBank(dut, Qfmt.lutRecip, BANK_B)
+    // Load exp into bank A and recip into bank B once before the loop.
+    loadBank(dut, Qfmt.lutExp,   BANK_A)
+    loadBank(dut, Qfmt.lutRecip, BANK_B)
 
-      for (_ <- 0 until 16) {
-        val xRaw = Array.fill(K)(rand.between(-128, 128))
+    for (_ <- 0 until 16) {
+      val xRaw = Array.fill(K)(rand.between(-128, 128))
 
-        // Step 1: vrmax
-        pokeCtrl(dut, VecOp.vrmax)
-        pokeVX(dut, xRaw)
+      // Step 1: vrmax
+      pokeCtrl(dut, VecOp.vrmax)
+      pokeVX(dut, xRaw)
+      dut.clock.step()
+      val maxVal = dut.io.out_vr(0).peek().litValue.toInt
+
+      // Step 2: vsub (x - max)
+      pokeCtrl(dut, VecOp.vsub, sat = true)
+      pokeVX(dut, xRaw, Array.fill(K)(maxVal))
+      dut.clock.step()
+      val xShifted = readVX(dut)
+
+      // Step 3: vlut bank A (exp)
+      pokeCtrl(dut, VecOp.vlut, bank = BANK_A)
+      pokeVX(dut, xShifted)
+      dut.clock.step()
+      val eVec = readVX(dut)
+
+      // Step 4: vsum
+      pokeCtrl(dut, VecOp.vsum)
+      pokeVX(dut, eVec)
+      dut.clock.step()
+      val sumEHwU = dut.io.out_vr(0).peek().litValue.toLong & 0xFFFFFFFFL
+      val sumEHw = sumEHwU.toInt.toLong
+      val expectedSumSigned = eVec.map(v => (v & 0xFF).toByte.toLong).sum
+      assert(Math.abs(sumEHw - expectedSumSigned) <= K,
+        s"vsum mismatch: hw=$sumEHw sw=$expectedSumSigned")
+
+      // Step 5: vlut bank B (recip), clamped sum
+      val sumSq16 = math.max(1, math.min(127, sumEHw.toInt))
+      pokeCtrl(dut, VecOp.vlut, bank = BANK_B)
+      pokeVX(dut, Array.fill(K)(sumSq16))
+      dut.clock.step()
+      val recipSum = readVX(dut)
+      for (r <- recipSum) assert(r >= 0, s"recip should be non-negative, got $r")
+
+      // Step 6: vmul (e * recip)
+      pokeCtrl(dut, VecOp.vmul, sat = false)
+      pokeVX(dut, eVec, recipSum)
+      dut.clock.step()
+
+      // Scala reference: softmax probabilities sum to 1.0
+      val xD = xRaw.map(Qfmt.sq16ToDouble)
+      val maxD = xD.max
+      val expD = xD.map(x => math.exp(x - maxD))
+      val sumD = expD.sum
+      val probsD = expD.map(_ / sumD)
+      assert(Math.abs(probsD.sum - 1.0) < 0.01, s"reference softmax sum=${probsD.sum}")
+    }
+  }
+
+  private def runGelu(dut: VALU): Unit = {
+    val rand = new Random(0x6E10)
+    // Load erf table into bank A for GELU approximation
+    // (overwrites whatever bank A held from the previous sub-case).
+    loadBank(dut, Qfmt.lutErf, BANK_A)
+
+    for (_ <- 0 until 16) {
+      val posIn = Array.fill(K)(rand.between(1, 64))
+      val negIn = Array.fill(K)(rand.between(-64, -1))
+
+      def runOne(xRaw: Array[Int]): Array[Int] = {
+        pokeCtrl(dut, VecOp.vsra)
+        pokeVX(dut, xRaw, Array.fill(K)(1))
         dut.clock.step()
-        val maxVal = dut.io.out_vr(0).peek().litValue.toInt
+        val xHalf = readVX(dut)
 
-        // Step 2: vsub (x - max)
-        pokeCtrl(dut, VecOp.vsub, sat = true)
-        pokeVX(dut, xRaw, Array.fill(K)(maxVal))
-        dut.clock.step()
-        val xShifted = readVX(dut)
-
-        // Step 3: vlut bank A (exp)
+        // vlut bank A (erf)
         pokeCtrl(dut, VecOp.vlut, bank = BANK_A)
-        pokeVX(dut, xShifted)
+        pokeVX(dut, xHalf)
         dut.clock.step()
-        val eVec = readVX(dut)
+        val e = readVX(dut)
 
-        // Step 4: vsum
-        pokeCtrl(dut, VecOp.vsum)
-        pokeVX(dut, eVec)
+        pokeCtrl(dut, VecOp.vadd, sat = true)
+        pokeVX(dut, e, Array.fill(K)(64))
         dut.clock.step()
-        val sumEHwU = dut.io.out_vr(0).peek().litValue.toLong & 0xFFFFFFFFL
-        val sumEHw = sumEHwU.toInt.toLong
-        val expectedSumSigned = eVec.map(v => (v & 0xFF).toByte.toLong).sum
-        assert(Math.abs(sumEHw - expectedSumSigned) <= K,
-          s"vsum mismatch: hw=$sumEHw sw=$expectedSumSigned")
+        val e1 = readVX(dut)
 
-        // Step 5: vlut bank B (recip), clamped sum
-        val sumSq16 = math.max(1, math.min(127, sumEHw.toInt))
-        pokeCtrl(dut, VecOp.vlut, bank = BANK_B)
-        pokeVX(dut, Array.fill(K)(sumSq16))
-        dut.clock.step()
-        val recipSum = readVX(dut)
-        for (r <- recipSum) assert(r >= 0, s"recip should be non-negative, got $r")
-
-        // Step 6: vmul (e * recip)
         pokeCtrl(dut, VecOp.vmul, sat = false)
-        pokeVX(dut, eVec, recipSum)
+        pokeVX(dut, xRaw, e1)
         dut.clock.step()
+        val prodWide = readVR(dut)
+        prodWide.map(p => (p >> 7).toInt)
+      }
 
-        // Scala reference: softmax probabilities sum to 1.0
-        val xD = xRaw.map(Qfmt.sq16ToDouble)
-        val maxD = xD.max
-        val expD = xD.map(x => math.exp(x - maxD))
-        val sumD = expD.sum
-        val probsD = expD.map(_ / sumD)
-        assert(Math.abs(probsD.sum - 1.0) < 0.01, s"reference softmax sum=${probsD.sum}")
+      val posGelu = runOne(posIn)
+      val negGelu = runOne(negIn)
+
+      posGelu.zipWithIndex.foreach { case (g, i) =>
+        assert(g >= 0, f"GELU(pos) lane $i input=${Qfmt.sq16ToDouble(posIn(i) & 0xFF)}%.3f gelu=$g")
+      }
+      val strongNeg = negIn.map(_ < -32)
+      negGelu.zipWithIndex.foreach { case (g, i) =>
+        if (strongNeg(i))
+          assert(g <= 0, f"GELU(neg) lane $i input=${Qfmt.sq16ToDouble(negIn(i) & 0xFF)}%.3f gelu=$g")
       }
     }
   }
 
-  "VALU GELU" should "produce positive outputs for positive inputs" in {
-    val rand = new Random(0x6E10)
+  // ---- Coalesced test --------------------------------------------------------
+
+  "VALU activation" should "pass softmax and GELU composition sub-cases" in {
     simulate(new VALU(K, N)) { dut =>
-      // Load erf table into bank A for GELU approximation.
-      loadBank(dut, Qfmt.lutErf, BANK_A)
-
-      for (_ <- 0 until 16) {
-        val posIn = Array.fill(K)(rand.between(1, 64))
-        val negIn = Array.fill(K)(rand.between(-64, -1))
-
-        def runGelu(xRaw: Array[Int]): Array[Int] = {
-          pokeCtrl(dut, VecOp.vsra)
-          pokeVX(dut, xRaw, Array.fill(K)(1))
-          dut.clock.step()
-          val xHalf = readVX(dut)
-
-          // vlut bank A (erf)
-          pokeCtrl(dut, VecOp.vlut, bank = BANK_A)
-          pokeVX(dut, xHalf)
-          dut.clock.step()
-          val e = readVX(dut)
-
-          pokeCtrl(dut, VecOp.vadd, sat = true)
-          pokeVX(dut, e, Array.fill(K)(64))
-          dut.clock.step()
-          val e1 = readVX(dut)
-
-          pokeCtrl(dut, VecOp.vmul, sat = false)
-          pokeVX(dut, xRaw, e1)
-          dut.clock.step()
-          val prodWide = readVR(dut)
-          prodWide.map(p => (p >> 7).toInt)
-        }
-
-        val posGelu = runGelu(posIn)
-        val negGelu = runGelu(negIn)
-
-        posGelu.zipWithIndex.foreach { case (g, i) =>
-          assert(g >= 0, f"GELU(pos) lane $i input=${Qfmt.sq16ToDouble(posIn(i) & 0xFF)}%.3f gelu=$g")
-        }
-        val strongNeg = negIn.map(_ < -32)
-        negGelu.zipWithIndex.foreach { case (g, i) =>
-          if (strongNeg(i))
-            assert(g <= 0, f"GELU(neg) lane $i input=${Qfmt.sq16ToDouble(negIn(i) & 0xFF)}%.3f gelu=$g")
-        }
-      }
+      withClue("softmax: ") { runSoftmax(dut) }
+      withClue("GELU: ")    { runGelu(dut)    }
     }
   }
 }

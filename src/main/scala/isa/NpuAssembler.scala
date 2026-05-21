@@ -232,104 +232,14 @@ object NpuAssembler {
   def mmaReset(rd: Int, rs1: Int, rs2: Int): Int =
     encR(0x03, 2, f7(VR), rd, rs1, rs2)
 
-  // ---- LD / ST (opcodes 0x01 / 0x02) — unified register-file access -------
-  //
-  //  The register file (MultiWidthRegisterBlock) is the sole storage tier.
-  //  Instructions address it via:
-  //    Contiguous LD (I-type):  RF row = sext(imm[11:0])  (rs1 always 0)
-  //                             Supports addresses 0..2047.
-  //    Contiguous ST (R-type):  RF row = { funct7[6:0], rs1[4:0] }  (12-bit)
-  //                             rs2 = source VX/VE/VR register (5-bit, 0..31)
-  //    ld.gather  (R-type):     VX[rd][k] = RF[ VX[rs1][k] ][ k ]  (diagonal)
-  //    ld.tile    (R-type):     row = {rs2[4:0], rs1[4:0]} + tile offsets
-  //                             rs2 carries the upper 5 bits of the base address.
-  //    st.scatter (R-type):     RF[ VX[rs1][k] ][ k ] = VX[rs2][k]
+  // ---- LD / ST (opcodes 0x01 / 0x02) --------------------------------------
 
-  // ---- Contiguous LD (I-type): address encoded entirely in imm, rs1=0 ----
-  def ldVx(rd: Int, base: Int, offset: Int = 0): Int = encI(0x01, 3, rd, 0, base + offset)
-  def ldVe(rd: Int, base: Int, offset: Int = 0): Int = encI(0x01, 4, rd, 0, base + offset)
-  def ldVr(rd: Int, base: Int, offset: Int = 0): Int = encI(0x01, 5, rd, 0, base + offset)
-
-  // ---- Contiguous ST (R-type): addr = {funct7[6:0], rs1[4:0]} (12-bit) ----
-  //   rs2 = source register (0..31); base+offset must fit in 12 bits.
-  def stVx(rs2: Int, base: Int, offset: Int = 0): Int = {
-    val addr = (base + offset) & 0xFFF
-    encR(0x02, 3, (addr >> 5) & 0x7F, 0, addr & 0x1F, rs2)
-  }
-  def stVe(rs2: Int, base: Int, offset: Int = 0): Int = {
-    val addr = (base + offset) & 0xFFF
-    encR(0x02, 4, (addr >> 5) & 0x7F, 0, addr & 0x1F, rs2)
-  }
-  def stVr(rs2: Int, base: Int, offset: Int = 0): Int = {
-    val addr = (base + offset) & 0xFFF
-    encR(0x02, 5, (addr >> 5) & 0x7F, 0, addr & 0x1F, rs2)
-  }
-
-  // ---- ld.gather (opcode=0x01, funct3=6, funct7[USE_TILE_CNT]=0) ----------
-  //
-  //   R-type:  rd = dest VX,  rs1 = VX holding K row indices,  rs2 = 0
-  //   Semantics: VX[rd][k] = RF[ VX[rs1][k] ][ k ]  (diagonal gather)
-  //     → each lane k reads lane k from the row pointed to by VX[rs1][k].
-  //   autoInc: pulse tile_w_inc after the gather (funct7[AUTO_INC]=1).
-
-  def ldGather(rd: Int, rs1: Int, autoInc: Boolean = false): Int = {
-    val f7 = (if (autoInc) 1 << Funct7Gather.AUTO_INC else 0)
-    // USE_TILE_CNT=0: gather mode
-    encR(0x01, 6, f7, rd, rs1, 0)
-  }
-
-  // ---- ld.tile (opcode=0x01, funct3=6, funct7[USE_TILE_CNT]=1) ------------
-  //
-  //   R-type:  rd = dest VX,  rs1 = base[4:0],  rs2 = base[9:5]
-  //   Full base address = {rs2[4:0], rs1[4:0]}  (10-bit, 0..1023)
-  //   Address: row = base + tile_h * stride_row_h + tile_w * stride_row_w
-  //   Reads one contiguous VX row from the RF.
-  //   autoInc: pulse tile_w_inc after the load (for tiling loops).
-  //   zeroPad / transposed: flags forwarded to future PAG.
-
-  def ldTile(rd: Int, rs1: Int,
-             zeroPad:    Boolean = false,
-             transposed: Boolean = false,
-             autoInc:    Boolean = false): Int = {
-    val f7 = ((if (zeroPad)    1 else 0) << Funct7Gather.ZERO_PAD)    |
-             ((if (transposed) 1 else 0) << Funct7Gather.TRANSPOSED)  |
-             (1                          << Funct7Gather.USE_TILE_CNT) |
-             ((if (autoInc)    1 else 0) << Funct7Gather.AUTO_INC)
-    // Encode base address as {rs2[4:0], rs1[4:0]} (10-bit)
-    val baseAddr = rs1 & 0x3FF
-    encR(0x01, 6, f7, rd, baseAddr & 0x1F, (baseAddr >> 5) & 0x1F)
-  }
-
-  // ---- st.scatter (opcode=0x02, funct3=6) ----------------------------------
-  //
-  //   R-type:  rs1 = VX holding K dest row indices,  rs2 = source VX,  rd=0
-  //   Semantics: RF[ VX[rs1][k] ][ k ] = VX[rs2][k]  (diagonal scatter)
-  //     → lane k of rs2 is written to lane k of the row at VX[rs1][k].
-
-  def stScatter(rs1: Int, rs2: Int): Int = encR(0x02, 6, 0, 0, rs1, rs2)
-
-  // ---- tile.cfg (opcode=0x01, funct3=7) — write config into .sreg ---------
-  //
-  //   I-type: rd=0, rs1 = VR register holding the 32-bit config word in lane 0
-  //   imm[2:0] = wr_sel (TileCfgSel)
-
-  /** Configure H_in and W_in. */
-  def tileCfgHW(rs1: Int): Int = encI(0x01, 7, 0, rs1, 0)
-
-  /** Configure C_in and C_out. */
-  def tileCfgCh(rs1: Int): Int = encI(0x01, 7, 0, rs1, 1)
-
-  /** Configure kernel shape: Kh, Kw, stride, dilation, pad_h, pad_w, mode. */
-  def tileCfgKern(rs1: Int): Int = encI(0x01, 7, 0, rs1, 2)
-
-  /** Set/reset tile position (tile_h, tile_w). */
-  def tileCfgPos(rs1: Int): Int = encI(0x01, 7, 0, rs1, 3)
-
-  /** Configure stride_row_h (RF rows per tile_h increment). */
-  def tileCfgStrideH(rs1: Int): Int = encI(0x01, 7, 0, rs1, 4)
-
-  /** Configure stride_row_w (RF rows per tile_w increment). */
-  def tileCfgStrideW(rs1: Int): Int = encI(0x01, 7, 0, rs1, 5)
+  def ldVx(rd: Int, base: Int, offset: Int = 0): Int = encI(0x01, 3, rd, base, offset)
+  def ldVe(rd: Int, base: Int, offset: Int = 0): Int = encI(0x01, 4, rd, base, offset)
+  def ldVr(rd: Int, base: Int, offset: Int = 0): Int = encI(0x01, 5, rd, base, offset)
+  def stVx(rs2: Int, base: Int, offset: Int = 0): Int = encI(0x02, 3, 0, base, offset)
+  def stVe(rs2: Int, base: Int, offset: Int = 0): Int = encI(0x02, 4, 0, base, offset)
+  def stVr(rs2: Int, base: Int, offset: Int = 0): Int = encI(0x02, 5, 0, base, offset)
 
   // ---- Convenience: convert Scala Int to Chisel UInt -----------------------
   implicit class IntToUInt(val v: Int) {

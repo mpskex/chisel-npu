@@ -21,4 +21,6 @@ lazy val root = (project in file("."))
       "-Ymacro-annotations",
     ),
     addCompilerPlugin("org.chipsalliance" % "chisel-plugin" % chiselVersion cross CrossVersion.full),
+    // Print per-test duration sorted by slowest first (-oDT)
+    Test / testOptions += Tests.Argument(TestFrameworks.ScalaTest, "-oDT"),
   )

@@ -47,146 +47,145 @@ class VALUArithSpec extends AnyFlatSpec {
     }
   }
 
-  "VALU vadd" should "add elementwise without saturation (wrapping)" in {
-    simulate(new VALU(K, N)) { dut =>
-      pokeCtrl(dut, VecOp.vadd, saturate = false)
-      for (_ <- 0 until 64) {
-        val a = randVec(); val b = randVec()
-        pokeAB(dut, a, b)
-        dut.clock.step()
-        for (i <- 0 until K) {
-          val exp = ArithRef.vadd(a(i), b(i), saturate = false)
-          dut.io.out_vx(i).expect((exp & 0xFF).U, s"vadd wrap lane $i")
-        }
-      }
-    }
-  }
+  // ---- Sub-case helpers ------------------------------------------------------
 
-  "VALU vadd" should "saturate to [-128,127] when saturate=true" in {
-    simulate(new VALU(K, N)) { dut =>
-      pokeCtrl(dut, VecOp.vadd, saturate = true)
-      val a = Array(127, -128, 100, -100, 0, 0, 64, -64)
-      val b = Array(  1,   -1, 100, -100, 0, 127, 64, -64)
+  private def runVaddWrap(dut: VALU): Unit = {
+    pokeCtrl(dut, VecOp.vadd, saturate = false)
+    for (_ <- 0 until 64) {
+      val a = randVec(); val b = randVec()
       pokeAB(dut, a, b)
       dut.clock.step()
       for (i <- 0 until K) {
-        val exp = ArithRef.vadd(a(i), b(i), saturate = true)
-        dut.io.out_vx(i).expect((exp & 0xFF).U, s"vadd sat lane $i")
+        val exp = ArithRef.vadd(a(i), b(i), saturate = false)
+        dut.io.out_vx(i).expect((exp & 0xFF).U, s"vadd wrap lane $i")
       }
     }
   }
 
-  "VALU vsub" should "subtract elementwise without saturation" in {
-    simulate(new VALU(K, N)) { dut =>
-      pokeCtrl(dut, VecOp.vsub, saturate = false)
-      for (_ <- 0 until 64) {
-        val a = randVec(); val b = randVec()
-        pokeAB(dut, a, b)
-        dut.clock.step()
-        for (i <- 0 until K) {
-          val exp = ArithRef.vsub(a(i), b(i), saturate = false)
-          dut.io.out_vx(i).expect((exp & 0xFF).U, s"vsub wrap lane $i")
-        }
-      }
+  private def runVaddSat(dut: VALU): Unit = {
+    pokeCtrl(dut, VecOp.vadd, saturate = true)
+    val a = Array(127, -128, 100, -100, 0, 0, 64, -64)
+    val b = Array(  1,   -1, 100, -100, 0, 127, 64, -64)
+    pokeAB(dut, a, b)
+    dut.clock.step()
+    for (i <- 0 until K) {
+      val exp = ArithRef.vadd(a(i), b(i), saturate = true)
+      dut.io.out_vx(i).expect((exp & 0xFF).U, s"vadd sat lane $i")
     }
   }
 
-  "VALU vsub" should "saturate when saturate=true" in {
-    simulate(new VALU(K, N)) { dut =>
-      pokeCtrl(dut, VecOp.vsub, saturate = true)
-      val a = Array(-128, 127, 0, 0, 100, -100, 64, -64)
-      val b = Array(   1,  -1, 0, 0,-100,  100,-64,  64)
+  private def runVsubWrap(dut: VALU): Unit = {
+    pokeCtrl(dut, VecOp.vsub, saturate = false)
+    for (_ <- 0 until 64) {
+      val a = randVec(); val b = randVec()
       pokeAB(dut, a, b)
       dut.clock.step()
       for (i <- 0 until K) {
-        val exp = ArithRef.vsub(a(i), b(i), saturate = true)
-        dut.io.out_vx(i).expect((exp & 0xFF).U, s"vsub sat lane $i")
+        val exp = ArithRef.vsub(a(i), b(i), saturate = false)
+        dut.io.out_vx(i).expect((exp & 0xFF).U, s"vsub wrap lane $i")
       }
     }
   }
 
-  "VALU vmul" should "produce saturated narrow output and full-width wide output" in {
-    simulate(new VALU(K, N)) { dut =>
-      pokeCtrl(dut, VecOp.vmul, saturate = true)
-      for (_ <- 0 until 64) {
-        val a = randVec(); val b = randVec()
-        pokeAB(dut, a, b)
-        dut.clock.step()
-        for (i <- 0 until K) {
-          val narrow = ArithRef.vmulNarrow(a(i), b(i), saturate = true)
-          dut.io.out_vx(i).expect((narrow & 0xFF).U, s"vmul narrow sat lane $i")
-        }
-      }
+  private def runVsubSat(dut: VALU): Unit = {
+    pokeCtrl(dut, VecOp.vsub, saturate = true)
+    val a = Array(-128, 127, 0, 0, 100, -100, 64, -64)
+    val b = Array(   1,  -1, 0, 0,-100,  100,-64,  64)
+    pokeAB(dut, a, b)
+    dut.clock.step()
+    for (i <- 0 until K) {
+      val exp = ArithRef.vsub(a(i), b(i), saturate = true)
+      dut.io.out_vx(i).expect((exp & 0xFF).U, s"vsub sat lane $i")
     }
   }
 
-  "VALU vmul" should "wrap narrow output when saturate=false" in {
-    simulate(new VALU(K, N)) { dut =>
-      pokeCtrl(dut, VecOp.vmul, saturate = false)
-      val a = Array(64, -64, 127, -128, 10, -10, 3, -3)
-      val b = Array( 2,   2,   2,    2,  5,   5, 9,  9)
+  private def runVmulSat(dut: VALU): Unit = {
+    pokeCtrl(dut, VecOp.vmul, saturate = true)
+    for (_ <- 0 until 64) {
+      val a = randVec(); val b = randVec()
       pokeAB(dut, a, b)
       dut.clock.step()
       for (i <- 0 until K) {
-        val narrow = ArithRef.vmulNarrow(a(i), b(i), saturate = false)
-        dut.io.out_vx(i).expect((narrow & 0xFF).U, s"vmul wrap narrow lane $i")
+        val narrow = ArithRef.vmulNarrow(a(i), b(i), saturate = true)
+        dut.io.out_vx(i).expect((narrow & 0xFF).U, s"vmul narrow sat lane $i")
       }
     }
   }
 
-  "VALU vneg" should "negate elementwise" in {
-    simulate(new VALU(K, N)) { dut =>
-      pokeCtrl(dut, VecOp.vneg, saturate = false)
-      for (_ <- 0 until 64) {
-        val a = randVec()
-        pokeAB(dut, a, Array.fill(K)(0))
-        dut.clock.step()
-        for (i <- 0 until K) {
-          val exp = ArithRef.vneg(a(i), saturate = false)
-          dut.io.out_vx(i).expect((exp & 0xFF).U, s"vneg lane $i")
-        }
-      }
+  private def runVmulWrap(dut: VALU): Unit = {
+    pokeCtrl(dut, VecOp.vmul, saturate = false)
+    val a = Array(64, -64, 127, -128, 10, -10, 3, -3)
+    val b = Array( 2,   2,   2,    2,  5,   5, 9,  9)
+    pokeAB(dut, a, b)
+    dut.clock.step()
+    for (i <- 0 until K) {
+      val narrow = ArithRef.vmulNarrow(a(i), b(i), saturate = false)
+      dut.io.out_vx(i).expect((narrow & 0xFF).U, s"vmul wrap narrow lane $i")
     }
   }
 
-  "VALU vneg" should "saturate -(-128) to 127 when saturate=true" in {
-    simulate(new VALU(K, N)) { dut =>
-      pokeCtrl(dut, VecOp.vneg, saturate = true)
-      val a = Array(-128, 127, 0, 1, -1, 64, -64, 100)
+  private def runVnegWrap(dut: VALU): Unit = {
+    pokeCtrl(dut, VecOp.vneg, saturate = false)
+    for (_ <- 0 until 64) {
+      val a = randVec()
       pokeAB(dut, a, Array.fill(K)(0))
       dut.clock.step()
       for (i <- 0 until K) {
-        val exp = ArithRef.vneg(a(i), saturate = true)
-        dut.io.out_vx(i).expect((exp & 0xFF).U, s"vneg sat lane $i")
+        val exp = ArithRef.vneg(a(i), saturate = false)
+        dut.io.out_vx(i).expect((exp & 0xFF).U, s"vneg lane $i")
       }
     }
   }
 
-  "VALU vabs" should "take absolute value of each lane" in {
-    simulate(new VALU(K, N)) { dut =>
-      pokeCtrl(dut, VecOp.vabs, saturate = false)
-      for (_ <- 0 until 64) {
-        val a = randVec()
-        pokeAB(dut, a, Array.fill(K)(0))
-        dut.clock.step()
-        for (i <- 0 until K) {
-          val exp = ArithRef.vabs(a(i), saturate = false)
-          dut.io.out_vx(i).expect((exp & 0xFF).U, s"vabs lane $i")
-        }
-      }
+  private def runVnegSat(dut: VALU): Unit = {
+    pokeCtrl(dut, VecOp.vneg, saturate = true)
+    val a = Array(-128, 127, 0, 1, -1, 64, -64, 100)
+    pokeAB(dut, a, Array.fill(K)(0))
+    dut.clock.step()
+    for (i <- 0 until K) {
+      val exp = ArithRef.vneg(a(i), saturate = true)
+      dut.io.out_vx(i).expect((exp & 0xFF).U, s"vneg sat lane $i")
     }
   }
 
-  "VALU vabs" should "saturate abs(-128) to 127 when saturate=true" in {
-    simulate(new VALU(K, N)) { dut =>
-      pokeCtrl(dut, VecOp.vabs, saturate = true)
-      val a = Array(-128, -127, -1, 0, 1, 127, -64, 64)
+  private def runVabsWrap(dut: VALU): Unit = {
+    pokeCtrl(dut, VecOp.vabs, saturate = false)
+    for (_ <- 0 until 64) {
+      val a = randVec()
       pokeAB(dut, a, Array.fill(K)(0))
       dut.clock.step()
       for (i <- 0 until K) {
-        val exp = ArithRef.vabs(a(i), saturate = true)
-        dut.io.out_vx(i).expect((exp & 0xFF).U, s"vabs sat lane $i")
+        val exp = ArithRef.vabs(a(i), saturate = false)
+        dut.io.out_vx(i).expect((exp & 0xFF).U, s"vabs lane $i")
       }
+    }
+  }
+
+  private def runVabsSat(dut: VALU): Unit = {
+    pokeCtrl(dut, VecOp.vabs, saturate = true)
+    val a = Array(-128, -127, -1, 0, 1, 127, -64, 64)
+    pokeAB(dut, a, Array.fill(K)(0))
+    dut.clock.step()
+    for (i <- 0 until K) {
+      val exp = ArithRef.vabs(a(i), saturate = true)
+      dut.io.out_vx(i).expect((exp & 0xFF).U, s"vabs sat lane $i")
+    }
+  }
+
+  // ---- Coalesced test --------------------------------------------------------
+
+  "VALU arith" should "pass all VALU arithmetic sub-cases" in {
+    simulate(new VALU(K, N)) { dut =>
+      withClue("vadd wrap: ") { runVaddWrap(dut) }
+      withClue("vadd sat: ")  { runVaddSat(dut)  }
+      withClue("vsub wrap: ") { runVsubWrap(dut) }
+      withClue("vsub sat: ")  { runVsubSat(dut)  }
+      withClue("vmul sat: ")  { runVmulSat(dut)  }
+      withClue("vmul wrap: ") { runVmulWrap(dut) }
+      withClue("vneg wrap: ") { runVnegWrap(dut) }
+      withClue("vneg sat: ")  { runVnegSat(dut)  }
+      withClue("vabs wrap: ") { runVabsWrap(dut) }
+      withClue("vabs sat: ")  { runVabsSat(dut)  }
     }
   }
 }
