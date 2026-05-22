@@ -1,9 +1,9 @@
 # xc7k480t NPU — FPGA Build and Bring-up Guide
 
-Production Vivado build for the NPU on the `xc7k480tffg1156-2` PCIe carrier
-(board: xc7k480tffg1156-2 PCIe carrier).  The build is **self-contained**: it bootstraps a
-Vivado project from committed XCI files — no external project or environment
-variable is required.
+Production Vivado build for the NPU on the `xc7k480tffg1156-2` PCIe carrier.
+The build is **self-contained**: it bootstraps a Vivado project from
+committed XCI files in `ip/vivado/xc7k480t.reference/`. No external project
+or environment variable is required.
 
 ---
 
@@ -13,14 +13,17 @@ variable is required.
 |:-----|:------|
 | FPGA | `xc7k480tffg1156-2` (Kintex-7 480T, –2 speed) |
 | PCIe | XDMA 4.2 IP, configured Gen2 ×8; actual link Gen1 ×4 (slot limit) |
-| DDR3 C0 | MIG 7-series, 2 GB, driven by host via XDMA `M_AXI` |
-| DDR3 C1 | MIG 7-series, 2 GB, driven by NPU DMA master |
+| DDR3 C0 | MIG 7-series, 2 GB |
+| DDR3 C1 | MIG 7-series, 2 GB |
 | Flash | `mt28gu512aax1e-bpi-x16`, 512 Mbit BPI — programmed via JTAG |
-| Serial console | `/dev/ttyUSB0`, 115200 8N1, PL2303 USB–UART |
+| Serial console | `/dev/ttyUSB0` (default), 115200 8N1, PL2303 USB–UART |
 | JTAG | `hw_server` default `localhost:3121` |
 
+Both DDR3 channels are addressable by **both** the host (via XDMA M\_AXI) and
+the NPU's DMA master through `axi_xbar` (see §2.1).
+
 **IMPORTANT — never power off.**  The FPGA host has no remote power-on
-capability.  Always reboot with `sudo /sbin/reboot`.
+capability. Always reboot with `sudo /sbin/reboot`.
 
 ---
 
@@ -31,37 +34,63 @@ capability.  Always reboot with `sudo /sbin/reboot`.
 ```
 Host (x86)
   │
-  │  PCIe Gen1 ×4 @ 2.5 GT/s
+  │  PCIe Gen2 ×8 configured, Gen1 ×4 in this slot @ 2.5 GT/s
   │
 ┌─┴────────────────────────────────────────────────────────────────────┐
 │ XDMA 4.2  (axi_aclk = 125 MHz)                                       │
-│                                                                        │
-│  M_AXI ──► axi_cc_xdma_in ──► axi_clkconv_xdma(125→133 MHz)         │
-│             (125 MHz)           ──► axi_dwidth_xdma(128→512 bit)      │
-│                                      ──► MIG C0  @ 0x0000_0000 [2 GB]│
-│                                                                        │
-│  M_AXI_BYPASS ──► axi_clkconv_byp ──► byp_dw(128→32) ──► byp_pc     │
-│                    (125 MHz)           ──► ctrl_lite BAR2 registers   │
-└────────────────────────────────────────────────────────────────────────┘
-                                ▲
-             fabric_aclk = 125 MHz (clk_wiz_fabric MMCM, driven from axi_aclk)
-                                │
-┌───────────────────────────────┴───────────────────────────────────────┐
-│ NPU subsystem  (npu_ctrl_lite + npu_dma_master + MMALU)               │
-│                                                                        │
-│  ctrl_lite (CTRL/STATUS @ BAR2 + 0x0)                                │
-│    bit[0] W  start  — host writes 1 to kick one MMA tile              │
-│    bit[1] RO done   — pulses 1 when DMA write-back completes          │
-│    bit[2] RO busy   — asserted while DMA is active                    │
-│                                                                        │
-│  npu_dma_master (AXI4 master, 128-bit, K=32)                         │
-│    reads  A[32×8-bit], B[32×8-bit], Accum[32×32-bit] from MIG C1    │
-│    kicks  MMALU  (K=32 systolic array, N=8 bits, 32-bit accumulators) │
-│    writes result[32×32-bit] back to MIG C1                           │
-│    ──► axi_clkconv_npu(125→133 MHz) ──► axi_dwidth_npu(128→512 bit)  │
-│         ──► MIG C1                                                     │
-└────────────────────────────────────────────────────────────────────────┘
+│                                                                       │
+│  M_AXI ─► axi_cc_xdma_in (125→200 MHz)                              │
+│            ─► axi_clkconv_xdma (200→133 MHz)                          │
+│               ─► axi_dwidth_xdma (128→512 bit)                       │
+│                  ─► axi_xbar.S00   ┐                                  │
+│                                    │                                  │
+│  M_AXI_BYPASS ─► axi_clkconv_byp ─► byp_dw (128→32) ─► byp_pc       │
+│                                                          │           │
+│                                                          ▼           │
+│                                                npu_subsys/s_axil    │
+│                                                (ctrl_lite BAR2+0x0) │
+└────────────────────────────────┬──────────────────────────────────────┘
+                                 │
+                                 │  axi_xbar (axi_interconnect 2S:2M)
+                                 │  - clock domain: c0_ui_clk (133 MHz)
+                                 │  - S00 ◄── XDMA data path
+                                 │  - S01 ◄── NPU master data path
+                                 │  - M00 ──► MIG C0 (c0_ui_clk, no CDC)
+                                 │  - M01 ──► MIG C1 (c1_ui_clk, async-FIFO CDC)
+                                 │  - Address map (both slaves):
+                                 │      0x0000_0000..0x7FFF_FFFF → C0 (2 GB)
+                                 │      0x8000_0000..0xFFFF_FFFF → C1 (2 GB)
+                                 │
+                ┌────────────────┴────────────────┐
+                │                                 │
+                ▼ M00                             ▼ M01
+            mig_7series_0/S0_AXI            mig_7series_0/S1_AXI
+            ◄──► DDR3 C0                    ◄──► DDR3 C1
+                                 ▲
+                                 │ S01 (512-bit @ c0_ui_clk)
+                                 │
+                          axi_dwidth_npu (128→512 bit @ c0_ui_clk)
+                                 ▲
+                                 │
+                          axi_clkconv_npu (200→133 MHz)
+                                 ▲
+                                 │ m_axi (128b @ fabric_aclk = 200 MHz)
+                          ┌──────┴───────────────────────────────────────┐
+                          │ npu_subsys (single BD module cell)          │
+                          │   ┌────────────┐ ┌──────────────────────┐   │
+                          │   │ ctrl_lite  │ │ npu_dma_master       │   │
+                          │   │ (BAR2+0x0) │ │ (K=32, AXI4 master)  │   │
+                          │   └─────┬──────┘ └─────────┬────────────┘   │
+                          │         │     start/done/busy               │
+                          │         │                                    │
+                          │         └─► MMALU (K=32, N=8, 32-bit accum) │
+                          │              (top.sv — Chisel-generated)   │
+                          └──────────────────────────────────────────────┘
 ```
+
+The fabric domain runs at **200 MHz** (`clk_wiz_fabric` MMCM, 8×/5 from
+`xdma_0/axi_aclk` = 125 MHz). Both MIG channels run at **133 MHz**
+(`c0_ui_clk`, `c1_ui_clk`).
 
 ### 2.2  MMALU parameters
 
@@ -69,12 +98,34 @@ Host (x86)
 |:----------|:-----:|:------------|
 | K | 32 | SIMD lane count (systolic array side) |
 | N | 8 | Base lane width in bits |
-| L | 32 | Base register count (not used by DMA master directly) |
 | accBits | 32 | Accumulator width |
-| AXI data width | 128 bit | DMA master bus to MIG C1 |
+| AXI data width | 128 bit | DMA master bus to the xbar |
 
 The Chisel netlist (`top.sv`, generated by `firtool-1.62.1`) is 1.7 MB and
 instantiates module `MMALU`.
+
+### 2.3  ctrl_lite register (BAR2 + 0x0)
+
+| Bit | Field | Direction | Description |
+|:----|:------|:----------|:------------|
+| 0 | start | W | Write 1 to start one NPU DMA+MMA cycle (self-clears) |
+| 1 | done | RO | Pulses 1 when DMA write-back completes |
+| 2 | busy | RO | Asserted while DMA is active |
+
+### 2.4  Default NPU operand region (in MIG C0)
+
+`npu_dma_master.v` reads A/B/ACCUM from these offsets and writes OUT back
+to the same region. The host stages operands here over the same xbar:
+
+| Region | Address | Size |
+|:-------|:--------|:-----|
+| Matrix A | `0x0_4000_0000` | 32 B  (int8 × K=32) |
+| Matrix B | `0x0_4000_0100` | 32 B  (int8 × K=32) |
+| ACCUM | `0x0_4000_0200` | 128 B (int32 × K=32) |
+| OUT | `0x0_4000_0400` | 128 B (int32 × K=32) |
+
+`0x4000_0000` = +1 GB inside MIG C0 — well clear of any host PCIe DMA
+staging that typically sits near 0x0.
 
 ---
 
@@ -86,46 +137,69 @@ instantiates module `MMALU`.
 |:-----|:--------|:------|
 | Vivado | 2025.2 | `~/Xilinx/2025.2/Vivado/bin/vivado` |
 | Docker | any | `fangruil/chisel-dev:amd64` for Chisel synthesis |
-| `hw_server` | 2025.2 | must be running on the FPGA host at port 3121 |
+| `hw_server` | 2025.2 | must be running on `localhost:3121` |
 
-`top.sv` must exist at the repo root.  Regenerate it any time Scala sources change:
+`top.sv` must exist at the repo root. Regenerate it any time Chisel
+sources change:
 
 ```bash
 make build          # runs sbt inside Docker, writes top.sv to repo root
 ```
 
-### 3.2  Step 1 — Build bitstream
+### 3.2  Step 1 — Build the bitstream
 
-On **first run** `build_v9_npu_full.tcl` automatically bootstraps a fresh
-Vivado project at `ip/vivado/xc7k480t/proj/` from the committed XCI sources.
-This takes **~45 minutes** on a cold IP cache.  Subsequent runs reuse the
-project and complete in **~30 minutes** (impl only).
+Two top-level scripts ship under `scripts/`. They produce **identical NPU
+topology**; the only difference is whether the `u_npu_ila` debugger core is
+wired in:
+
+| Script | Output | Use when |
+|:-------|:-------|:---------|
+| `build_npu.tcl` | `top_npu.bit` | Production / runtime — no ILA, slightly smaller bitstream |
+| `build_npu_with_ila.tcl` | `top_npu_with_ila.bit` + `.ltx` | Hardware debug — `u_npu_ila` wired to every `(* mark_debug *)` net |
+
+Both auto-bootstrap `proj/` on first run (~25 min cold cache), then run
+synth\_1 + impl\_1 + write\_bitstream (~50 min). Re-runs reuse the project
+(~30 min total).
 
 ```bash
 cd /path/to/chisel-npu
 
+# Production build (no ILA):
 ~/Xilinx/2025.2/Vivado/bin/vivado -mode batch \
-    -source  ip/vivado/xc7k480t/scripts/build_v9_npu_full.tcl \
-    -journal ip/vivado/xc7k480t/scripts/build_v9_npu_full.jou \
-    -log     ip/vivado/xc7k480t/scripts/build_v9_npu_full.log
+    -source  ip/vivado/xc7k480t/scripts/build_npu.tcl \
+    -journal ip/vivado/xc7k480t/scripts/build_npu.jou \
+    -log     ip/vivado/xc7k480t/scripts/build_npu.log
+
+# OR debug build with ILA debugger core:
+~/Xilinx/2025.2/Vivado/bin/vivado -mode batch \
+    -source  ip/vivado/xc7k480t/scripts/build_npu_with_ila.tcl \
+    -journal ip/vivado/xc7k480t/scripts/build_npu_with_ila.jou \
+    -log     ip/vivado/xc7k480t/scripts/build_npu_with_ila.log
 ```
 
-Output: `ip/vivado/xc7k480t/top_v9_npu_full.bit` (~17 MB, WNS ≥ +0.020 ns)
+Outputs:
 
-### 3.3  Step 2 — Flash + bringup
+```
+ip/vivado/xc7k480t/top_npu.bit            ~18 MB
+ip/vivado/xc7k480t/top_npu_with_ila.bit   ~18 MB
+ip/vivado/xc7k480t/top_npu_with_ila.ltx   ~80 KB   (probes file)
+```
+
+### 3.3  Step 2 — Flash + smoke tests
 
 ```bash
 python3 tool/hw/bringup_flash.py \
-    ip/vivado/xc7k480t/top_v9_npu_full.bit \
+    ip/vivado/xc7k480t/top_npu.bit \
     --max-attempts 6
 ```
 
 This script:
+
 1. Programs the bitstream to BPI flash via JTAG (`program_hw_cfgmem`, ~3 min)
 2. JTAG-loads the same bitstream directly into FPGA SRAM (PCIe hard IP wakes)
 3. Warm-reboots the host and issues one SBR (Secondary Bus Reset) cycle
 4. Waits for PCIe to enumerate and loads the XDMA driver
-5. Runs all 9 smoke tests over the serial console
+5. Runs all 9 smoke tests over the serial console (no SSH required)
 
 Expected output (all 9 PASS):
 
@@ -141,15 +215,29 @@ PASS  ddr3_c0_loopback_1mb  — DDR3 C0 1MB write→read match
 PASS  bypass_bar_accessible — reg[0]=0x0
 ```
 
-### 3.4  Step 3 (optional) — NPU functional test
+### 3.4  Step 3 — MMALU compute tests
 
 ```bash
-pytest tool/hw/tests/test_npu_kick.py -v
+python3 -m pytest tool/hw/tests/test_mmalu_compute.py -v -m hw
 ```
 
-This writes matrices A, B, and an initial accumulator to DDR3 C1, writes
-`start=1` to the CTRL register, polls `done`, reads back the result, and
-verifies it matches the expected MMA output.
+Six tests; all PASS on V10 silicon:
+
+| Test | Verifies |
+|:-----|:---------|
+| `test_mmalu_done_smoke` | FSM kick → done within 1 s |
+| `test_mmalu_zero_in_zero_out` | `A=B=ACCUM=0` → `OUT` all zero |
+| `test_mmalu_accum_passthrough` | `A=B=0` → `OUT == ACCUM` |
+| `test_mmalu_zero_a_kills_multiplier` | `A=0, B≠0` → `OUT == ACCUM` |
+| `test_mmalu_multiplier_alive` | `A=10, B=7, ACCUM=0` → every `OUT` lane = 70 |
+| `test_mmalu_outer_b_last` | `OUT[i] = A[i]·B[K-1] + ACCUM[i]` (analytical formula) |
+
+### 3.5  Step 4 (optional) — ILA capture
+
+Use the `top_npu_with_ila.bit` + `top_npu_with_ila.ltx` pair in Vivado HW
+Manager to capture cycle-accurate waveforms of the NPU's FSM. See
+`docs/implementations/FPGA_XC7K480T.md` § "ILA Debug Methodology" for a
+worked example (the one used to root-cause the V10 `S_WR_W` bug).
 
 ---
 
@@ -157,7 +245,7 @@ verifies it matches the expected MMA output.
 
 | Variable | Default | Description |
 |:---------|:--------|:------------|
-| `SERIAL_PORT` | `/dev/ttyUSB0` | Serial console device |
+| `SERIAL_PORT` | `/dev/ttyUSB0` | Serial console device (PL2303 USB-UART) |
 | `SERIAL_USER` | `$USER` | Login username on FPGA host |
 | `HW_SERVER` | `localhost:3121` | JTAG hw_server URL |
 | `XDMA_REF_XPR` | *(auto)* | Override external XPR; not needed with bootstrap |
@@ -170,17 +258,27 @@ verifies it matches the expected MMA output.
 
 The AMD FCH bridge on this host cannot reliably train PCIe on cold boot.
 `bringup_flash.py` handles this automatically (JTAG SRAM load + warm reboot +
-SBR).  If it fails after 6 attempts:
+SBR). If it fails after 6 attempts:
 
-1. Check `top_v9_npu_full.bit` is present and ~17 MB.
+1. Check the bitstream is present and ~18 MB.
 2. Verify `hw_server` is running: `ps aux | grep hw_server`.
 3. Run `tool/hw/bringup_npu_jtag.sh` for a manual JTAG-only recovery.
 
 ### DDR3 loopback fails
 
-Indicates MIG calibration did not complete.  Check:
-- WNS in the build log is positive (`INFO: WNS = 0.0xx ns`).
-- Bitstream COR0 = `0x02003fe5` (run `python3 tool/hw/check_cor0.py <bit>`).
+Indicates MIG calibration did not complete. Check:
+
+- WNS in the build log is positive or near-zero (`INFO: WNS = 0.0xx ns` or
+  `−0.1xx ns` is acceptable; very negative numbers can indicate metastability).
+- The `axi_xbar` cell is present in the BD (per the topology applied by
+  `_apply_npu_topology.tcl`).
+
+### MMALU compute tests show off-by-one OUT shift
+
+This was the V10-era `S_WR_W` bug. It is fixed in the current
+`npu_dma_master.v`; if you see it on a fresh build, the source has
+regressed. Reproduce + diagnose with `build_npu_with_ila.tcl` and an ILA
+capture triggered on `state == 4'd10` (S\_WR\_W).
 
 ### Bootstrap fails on first run
 
@@ -190,7 +288,7 @@ Delete the stale project and retry:
 rm -rf ip/vivado/xc7k480t/proj/
 ```
 
-Then re-run `build_v9_npu_full.tcl`.
+Then re-run `build_npu.tcl` or `build_npu_with_ila.tcl`.
 
 ---
 
@@ -198,59 +296,77 @@ Then re-run `build_v9_npu_full.tcl`.
 
 ```
 ip/vivado/xc7k480t/
-├── README.md                    ← this file
-├── RESULTS.md                   ← V0–V9 validation results
-├── constrs/
-│   └── IO_Port.xdc              ← pin assignments for xc7k480tffg1156-2
+├── README.md                       ← this file
+├── constrs/IO_Port.xdc             ← pin assignments for xc7k480tffg1156-2
 ├── src/
-│   ├── npu_ctrl_lite.v          ← AXI4-Lite CTRL/STATUS register (BAR2)
-│   ├── npu_dma_master.v         ← AXI4 DMA master, K=32 (reads/writes MIG C1)
-│   ├── npu_subsys.v             ← subsystem wrapper (ctrl_lite + dma_master + MMALU)
-│   └── mmalu_stub.v             ← empty MMALU stub for synthesis testing
-└── scripts/
-    ├── migrate_lib.tcl          ← shared TCL helpers (project open, synthesis, impl)
-    ├── bootstrap_project.tcl   ← create proj/ from XCI sources (auto-called)
-    ├── build_v9_npu_full.tcl   ← PRODUCTION build (run this)
-    ├── build_v0_baseline.tcl   ← V0: reference baseline (validation only)
-    ├── build_v1_no_mb.tcl      ← V1: remove MicroBlaze
-    ├── build_v2_bypass_ctrl.tcl ← V2: BYPASS path + ctrl_lite
-    ├── build_v3_mmcm.tcl       ← V3: fabric MMCM
-    ├── build_v4_byp_cdc.tcl    ← V4: BYPASS clock crossing
-    ├── build_v5_xdma_cc.tcl    ← V5: XDMA→fabric clock crossing
-    ├── build_v6_no_smc.tcl     ← V6: remove SmartConnect, NPU flat AXI chain
-    ├── build_v7_dma_master.tcl ← V7: DMA master → MIG C1
-    ├── build_v8_npu_stub.tcl   ← V8: mmalu_stub (synthesis test)
-    ├── _apply_v2.tcl            ← BD delta procs used by V3+ builds
-    ├── _apply_v5.tcl
-    ├── _apply_v6.tcl
-    ├── _apply_v7.tcl
-    └── run_step.sh             ← build + flash + test one step
+│   ├── npu_ctrl_lite.v             ← AXI4-Lite CTRL/STATUS register (BAR2)
+│   ├── npu_dma_master.v            ← AXI4 master FSM (K=32, fixes write-phase
+│   │                                  off-by-one, mark_debug tags for ILA)
+│   └── npu_subsys.v                ← module wrapper (ctrl_lite + dma_master +
+│                                      MMALU) — instantiated as a single BD cell
+├── scripts/
+│   ├── migrate_lib.tcl             ← shared helpers (open_ref_project,
+│   │                                  assert_synth_done, run_impl_and_write_bit)
+│   ├── bootstrap_project.tcl       ← first-run project bootstrap from
+│   │                                  xc7k480t.reference (V7-equivalent BD)
+│   ├── _apply_npu_topology.tcl     ← squashed V1..V10 BD-delta library;
+│   │                                  apply_npu_topology auto-detects state
+│   ├── _apply_npu_ila.tcl          ← post-synth ILA insertion
+│   ├── build_npu.tcl               ← PRODUCTION: no ILA
+│   └── build_npu_with_ila.tcl      ← DEBUG: adds u_npu_ila + .ltx
+├── top_npu_with_ila.ltx            ← committed reference probes file
+└── proj/                           ← gitignored, generated by bootstrap
 
-ip/vivado/xc7k480t.reference/   ← reference design source (XCI, BD, mig_a.prj)
-    scripts/recreate_bd.tcl     ← BD recreation recipe (used by bootstrap)
+ip/vivado/xc7k480t.reference/       ← committed XCI/BD sources for bootstrap
+    src/bd/top.bd                   ← V7-equivalent BD JSON
+    src/bd/ip/                      ← IP XCI descriptors
+    src/mig_a.prj                   ← MIG DDR3 memory config
+    scripts/recreate_bd.tcl         ← BD recreation recipe (used by bootstrap)
+    constrs/IO_Port.xdc             ← pin assignments
 ```
 
-`proj/` is gitignored (generated).  `top.sv` lives at the repo root (generated
-by `make build`).
+`proj/` is gitignored (generated). `top.sv` lives at the repo root
+(generated by `make build`). Built `.bit` files are gitignored; the
+`.ltx` file is checked in as a reference for HW Manager.
 
 ---
 
-## 7  Cold-boot PCIe background
+## 7  Bring-up history & BD details
 
-The AMD FCH host requires warm-boot + SBR to reliably enumerate the PCIe
-device after a cold power cycle.  Two bitstream bugs in the original design
-caused persistent cold-boot failures (root-caused via the V0–V9 bisect ladder):
+The BD topology was developed via a 10-step ladder (V0–V10) for
+bisectability. The intermediate per-step build scripts have been retired
+now that the final topology is verified end-to-end; the BD construction
+logic lives in `_apply_npu_topology.tcl` (which still organises the
+construction as `_npu_step_*` procs so the historical step order is
+preserved and self-documenting).
+
+The bootstrap project is a V7-equivalent BD (captured in
+`xc7k480t.reference/`), so on a fresh build only the final
+`_npu_step_xbar_and_subsys` step actually executes — it adds the
+`axi_xbar` 2S:2M, the `npu_subsys` wrapper cell, and the 4 GB unified
+address map.
+
+For the full timing-closure history and the ILA-driven `S_WR_W`
+write-phase bug fix, see
+`docs/implementations/FPGA_XC7K480T.md`.
+
+---
+
+## 8  Cold-boot PCIe background
+
+Two bitstream-side bugs cause unreliable PCIe cold-boot training on the
+AMD FCH host. Both fixes are baked into the V10 build:
 
 1. **`CONFIG_MODE=BPI16` in XDC** set `COR0[22] DRIVEDONE=1` and
    `MATCH_CYCLE=2`, delaying FPGA DONE past the FCH training window.
    Fix: override to `CONFIG_MODE=SPIx1` + `CONFIGRATE=3` in TCL before
-   `write_bitstream`.  Target COR0 = `0x02003fe5`.
+   `write_bitstream`. Target COR0 = `0x02003fe5`.
 
 2. **`mig_sys_rst_n = axi_aresetn`** held MIG in reset until PCIe trained,
-   but PCIe training required MIG to be up — a chicken-and-egg deadlock.
-   Fix: drive MIG reset from the board reset pin (`reset_rtl_0`), not from
-   the PCIe-derived `axi_aresetn`.
+   but PCIe training required MIG to be up — a deadlock. Fix: drive MIG
+   reset from the board reset pin (`reset_rtl_0`), not from
+   `axi_aresetn`.
 
-Both fixes are applied in the V9 build.  The SmartConnect was also replaced
-by a flat standalone AXI converter chain to match the NPU's own topology
-and avoid IP regeneration issues during iterative BD editing.
+For boards where the AMD FCH still fails to train PCIe on cold boot,
+`bringup_flash.py` automatically warm-reboots and issues SBR on bridge
+`00:15.0` (typically 1–2 iterations).
