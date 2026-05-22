@@ -23,10 +23,21 @@ module npu_dma_master #(
     parameter AXI_DATA_WIDTH = 128,
     parameter AXI_ADDR_WIDTH = 64,
     parameter AXI_ID_WIDTH   = 4,
-    parameter [63:0] DEFAULT_BASE_A     = 64'h1000_0000_0000_0000,
-    parameter [63:0] DEFAULT_BASE_B     = 64'h1000_0000_0000_0100,
-    parameter [63:0] DEFAULT_BASE_ACCUM = 64'h1000_0000_0000_0200,
-    parameter [63:0] DEFAULT_BASE_OUT   = 64'h1000_0000_0000_0400
+    // V10: with the new axi_xbar (2S:2M), the NPU master and the host see the
+    // same unified 4 GB address map:
+    //   0x0000_0000 .. 0x7FFF_FFFF → MIG C0
+    //   0x8000_0000 .. 0xFFFF_FFFF → MIG C1
+    // The default operand region lives at +1 GB inside MIG C0 so it is far
+    // from any host PCIe DMA staging that typically sits near 0x0.  The
+    // 64-bit high half is zero; the xbar only decodes the low 32 bits.
+    //   A     @ 0x0_4000_0000 ( 32 B = 32 × int8 )
+    //   B     @ 0x0_4000_0100 ( 32 B = 32 × int8 )
+    //   ACCUM @ 0x0_4000_0200 (128 B = 32 × int32)
+    //   OUT   @ 0x0_4000_0400 (128 B = 32 × int32)
+    parameter [63:0] DEFAULT_BASE_A     = 64'h0000_0000_4000_0000,
+    parameter [63:0] DEFAULT_BASE_B     = 64'h0000_0000_4000_0100,
+    parameter [63:0] DEFAULT_BASE_ACCUM = 64'h0000_0000_4000_0200,
+    parameter [63:0] DEFAULT_BASE_OUT   = 64'h0000_0000_4000_0400
 ) (
     input  wire                       aclk,
     input  wire                       aresetn,
@@ -121,14 +132,25 @@ module npu_dma_master #(
 );
 
     // -----------------------------------------------------------------------
-    // Staging buffers
+    // Staging buffers (zero-initialised on reset so a dropped/spurious beat
+    // cannot leak stale data from a previous run into a new MMA cycle).
     // -----------------------------------------------------------------------
     reg [7:0]  a_buf   [0:31];
     reg [7:0]  b_buf   [0:31];
     reg [31:0] acc_buf [0:31];
     reg [31:0] out_buf [0:31];
 
-    reg [3:0] beat_cnt;
+    (* mark_debug = "true" *) reg [3:0] beat_cnt;
+
+    integer _bi;
+    initial begin
+        for (_bi = 0; _bi < 32; _bi = _bi + 1) begin
+            a_buf  [_bi] = 8'h00;
+            b_buf  [_bi] = 8'h00;
+            acc_buf[_bi] = 32'h0000_0000;
+            out_buf[_bi] = 32'h0000_0000;
+        end
+    end
 
     // -----------------------------------------------------------------------
     // Fix A: AXI read-data pipeline register
@@ -136,9 +158,40 @@ module npu_dma_master #(
     // rpipe_valid fires the cycle AFTER acceptance.
     // All buffer writes use rdata_pipe+rpipe_valid instead of m_axi_rdata+rvalid.
     // -----------------------------------------------------------------------
-    reg [AXI_DATA_WIDTH-1:0] rdata_pipe;
-    reg                       rlast_pipe;
-    reg                       rpipe_valid;
+    (* mark_debug = "true" *) reg [AXI_DATA_WIDTH-1:0] rdata_pipe;
+    (* mark_debug = "true" *) reg                       rlast_pipe;
+    (* mark_debug = "true" *) reg                       rpipe_valid;
+
+    // ──────────────────────────────────────────────────────────────────────
+    // ILA debug shadows for the AXI read-handshake signals (which are
+    // module ports — we can't tag them directly with mark_debug, so we
+    // register them on every clock and expose those shadow regs to the ILA).
+    // ──────────────────────────────────────────────────────────────────────
+    (* mark_debug = "true" *) reg                       dbg_rvalid;
+    (* mark_debug = "true" *) reg                       dbg_rready;
+    (* mark_debug = "true" *) reg                       dbg_rlast;
+    (* mark_debug = "true" *) reg [31:0]                dbg_rdata_lo;
+    (* mark_debug = "true" *) reg                       dbg_arvalid;
+    (* mark_debug = "true" *) reg                       dbg_arready;
+    (* mark_debug = "true" *) reg [3:0]                 dbg_state_d1;
+    (* mark_debug = "true" *) reg [3:0]                 dbg_beat_cnt_d1;
+    always @(posedge aclk) begin
+        dbg_rvalid       <= m_axi_rvalid;
+        dbg_rready       <= m_axi_rready;
+        dbg_rlast        <= m_axi_rlast;
+        dbg_rdata_lo     <= m_axi_rdata[31:0];
+        dbg_arvalid      <= m_axi_arvalid;
+        dbg_arready      <= m_axi_arready;
+        dbg_state_d1     <= state;
+        dbg_beat_cnt_d1  <= beat_cnt;
+    end
+    // The rdrop fix has been removed (it did not solve the off-by-one and
+    // made the symptom worse). Test data shows that with positive-WNS V10
+    // and zero-initialised acc_buf, beat 0 of each read burst is consistently
+    // lost in the xbar/dwidth-converter chain rather than being dropped here.
+    // Treat rpipe_use as plain rpipe_valid until a permanent FSM redesign or
+    // an ILA capture can pinpoint where the beat is being lost.
+    wire                      rpipe_use = rpipe_valid;
 
     always @(posedge aclk) begin
         if (!aresetn) begin
@@ -175,7 +228,7 @@ module npu_dma_master #(
         S_WR_B       = 4'd11,
         S_DONE       = 4'd12;
 
-    reg [3:0] state;
+    (* mark_debug = "true" *) reg [3:0] state;
 
     localparam AXI_SIZE_128   = 3'd4;
     localparam AXI_BURST_INCR = 2'b01;
@@ -248,7 +301,7 @@ module npu_dma_master #(
                     if (m_axi_rvalid && m_axi_rready && m_axi_rlast)
                         m_axi_rready <= 1'b0;
                     // Buffer unpack from pipeline register (1 cycle after acceptance)
-                    if (rpipe_valid) begin
+                    if (rpipe_use) begin
                         // beat N: bytes [beat_cnt*16 .. beat_cnt*16+15]
                         a_buf[beat_cnt*16 + 0]  <= rdata_pipe[7:0];
                         a_buf[beat_cnt*16 + 1]  <= rdata_pipe[15:8];
@@ -290,7 +343,7 @@ module npu_dma_master #(
                 S_READ_B_R: begin
                     if (m_axi_rvalid && m_axi_rready && m_axi_rlast)
                         m_axi_rready <= 1'b0;
-                    if (rpipe_valid) begin
+                    if (rpipe_use) begin
                         b_buf[beat_cnt*16 + 0]  <= rdata_pipe[7:0];
                         b_buf[beat_cnt*16 + 1]  <= rdata_pipe[15:8];
                         b_buf[beat_cnt*16 + 2]  <= rdata_pipe[23:16];
@@ -331,7 +384,7 @@ module npu_dma_master #(
                 S_READ_ACC_R: begin
                     if (m_axi_rvalid && m_axi_rready && m_axi_rlast)
                         m_axi_rready <= 1'b0;
-                    if (rpipe_valid) begin
+                    if (rpipe_use) begin
                         // 4 words per beat
                         acc_buf[beat_cnt*4 + 0] <= rdata_pipe[31:0];
                         acc_buf[beat_cnt*4 + 1] <= rdata_pipe[63:32];
@@ -435,6 +488,25 @@ module npu_dma_master #(
 
                 // ----------------------------------------------------------
                 // Write result to DDR (128 B, 8 beats, ARLEN=7)
+                //
+                // V10 BUG FIX: the original S_WR_W had an off-by-one because
+                // `m_axi_wdata` was only updated AFTER each accepted handshake
+                // (via NB inside the IF branch). The very first beat sent
+                // therefore carried the stale wdata value from the previous
+                // burst (or from reset/initial), and the body's `bc*4` index
+                // ran from 0..6 over 7 handshakes, but the 8th handshake (with
+                // wlast=1) advanced wdata to `bc=7*4 = out_buf[28..31]` AFTER
+                // its own wdata had already been latched (= out_buf[24..27]).
+                // Net effect: out_buf[28..31] was never sent to DDR3, and the
+                // host saw an off-by-one shift in OUT.
+                //
+                // The fix has two parts:
+                //   (a) Pre-load m_axi_wdata with out_buf[0..3] AT the AW
+                //       handshake (S_WR_AW → S_WR_W transition).
+                //   (b) In S_WR_W's IF branch, advance the NEXT wdata to
+                //       out_buf[(beat_cnt+1)*4 + 0..3] so that beat N carries
+                //       out_buf[N*4 + 0..3] and the final beat (bc=7, wlast=1)
+                //       sends out_buf[28..31] correctly.
                 // ----------------------------------------------------------
                 S_WR_AW: begin
                     m_axi_awaddr  <= DEFAULT_BASE_OUT;
@@ -444,17 +516,25 @@ module npu_dma_master #(
                         m_axi_awvalid <= 1'b0;
                         m_axi_wvalid  <= 1'b1;
                         m_axi_wlast   <= 1'b0;
+                        // (a) Pre-load the FIRST beat data so that handshake 0
+                        // in S_WR_W carries out_buf[0..3] (not stale data).
+                        m_axi_wdata   <= {
+                            out_buf[3], out_buf[2], out_buf[1], out_buf[0]
+                        };
                         state         <= S_WR_W;
                     end
                 end
 
                 S_WR_W: begin
                     if (m_axi_wready && m_axi_wvalid) begin
+                        // (b) Advance to NEXT beat's data for the upcoming
+                        // handshake. Indexing (beat_cnt+1)*4 means after
+                        // handshake N (bc=N), wdata is set up for beat N+1.
                         m_axi_wdata <= {
-                            out_buf[beat_cnt*4 + 3],
-                            out_buf[beat_cnt*4 + 2],
-                            out_buf[beat_cnt*4 + 1],
-                            out_buf[beat_cnt*4 + 0]
+                            out_buf[(beat_cnt + 1)*4 + 3],
+                            out_buf[(beat_cnt + 1)*4 + 2],
+                            out_buf[(beat_cnt + 1)*4 + 1],
+                            out_buf[(beat_cnt + 1)*4 + 0]
                         };
                         beat_cnt <= beat_cnt + 1;
                         if (beat_cnt == 4'd6)
@@ -464,11 +544,11 @@ module npu_dma_master #(
                             m_axi_bready <= 1'b1;
                             state        <= S_WR_B;
                         end
-                    end else begin
-                        m_axi_wdata <= {
-                            out_buf[3], out_buf[2], out_buf[1], out_buf[0]
-                        };
                     end
+                    // No need for an else branch any more — wdata is
+                    // pre-loaded in S_WR_AW and advanced lock-step with
+                    // beat_cnt, so it stays at the correct beat value across
+                    // any back-pressure cycle (wready=0).
                 end
 
                 S_WR_B: begin
