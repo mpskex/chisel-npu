@@ -56,113 +56,116 @@ class VALUFP32Spec extends AnyFlatSpec {
     Math.abs(hw - ref) <= ulp * Math.ulp(ref)
   }
 
-  "VALU FP32" should "compute vfadd for finite normal values" in {
-    simulate(new VALU(K, N)) { dut =>
-      pokeCtrlFP(dut, VecOp.vfadd)
-      val aArr = Array[Float](1.0f, -2.5f, 0.5f, 100.0f, -100.0f, 3.14f, -3.14f, 0.0f)
-      val bArr = Array[Float](2.0f,  1.5f, 0.5f,  50.0f,  -50.0f, 2.71f, -2.71f, 1.0f)
-      val cArr = Array.fill(K)(0.0f)
-      pokeFPLanes(dut, aArr, bArr, cArr)
-      dut.clock.step()
-      val result = readVR(dut)
-      for (i <- 0 until K) {
-        val expected = f32Bits(aArr(i) + bArr(i))
-        assert(withinUlp(result(i), expected),
-          f"vfadd lane $i: hw=${bitsF32(result(i))}%.6f ref=${bitsF32(expected)}%.6f")
-      }
+  // ---- Sub-case helpers ------------------------------------------------------
+
+  private def runVfadd(dut: VALU): Unit = {
+    pokeCtrlFP(dut, VecOp.vfadd)
+    val aArr = Array[Float](1.0f, -2.5f, 0.5f, 100.0f, -100.0f, 3.14f, -3.14f, 0.0f)
+    val bArr = Array[Float](2.0f,  1.5f, 0.5f,  50.0f,  -50.0f, 2.71f, -2.71f, 1.0f)
+    val cArr = Array.fill(K)(0.0f)
+    pokeFPLanes(dut, aArr, bArr, cArr)
+    dut.clock.step()
+    val result = readVR(dut)
+    for (i <- 0 until K) {
+      val expected = f32Bits(aArr(i) + bArr(i))
+      assert(withinUlp(result(i), expected),
+        f"vfadd lane $i: hw=${bitsF32(result(i))}%.6f ref=${bitsF32(expected)}%.6f")
     }
   }
 
-  "VALU FP32" should "compute vfmul for finite normal values" in {
-    simulate(new VALU(K, N)) { dut =>
-      pokeCtrlFP(dut, VecOp.vfmul)
-      val aArr = Array[Float](2.0f, -3.0f, 0.5f, 1e4f, -1e4f, 1.0f, -1.0f, 0.125f)
-      val bArr = Array[Float](3.0f,  2.0f, 2.0f, 2.5f, -2.5f, 1.0f,  1.0f, 8.0f)
-      val cArr = Array.fill(K)(0.0f)
-      pokeFPLanes(dut, aArr, bArr, cArr)
-      dut.clock.step()
-      val result = readVR(dut)
-      for (i <- 0 until K) {
-        val expected = f32Bits(aArr(i) * bArr(i))
-        assert(withinUlp(result(i), expected),
-          f"vfmul lane $i: hw=${bitsF32(result(i))}%.6f ref=${bitsF32(expected)}%.6f")
-      }
+  private def runVfmul(dut: VALU): Unit = {
+    pokeCtrlFP(dut, VecOp.vfmul)
+    val aArr = Array[Float](2.0f, -3.0f, 0.5f, 1e4f, -1e4f, 1.0f, -1.0f, 0.125f)
+    val bArr = Array[Float](3.0f,  2.0f, 2.0f, 2.5f, -2.5f, 1.0f,  1.0f, 8.0f)
+    val cArr = Array.fill(K)(0.0f)
+    pokeFPLanes(dut, aArr, bArr, cArr)
+    dut.clock.step()
+    val result = readVR(dut)
+    for (i <- 0 until K) {
+      val expected = f32Bits(aArr(i) * bArr(i))
+      assert(withinUlp(result(i), expected),
+        f"vfmul lane $i: hw=${bitsF32(result(i))}%.6f ref=${bitsF32(expected)}%.6f")
     }
   }
 
-  "VALU FP32" should "compute vfma (a*b + c)" in {
-    simulate(new VALU(K, N)) { dut =>
-      pokeCtrlFP(dut, VecOp.vfma)
-      val aArr = Array[Float](2.0f, 3.0f, 0.5f, -1.0f, 4.0f, -2.0f, 1.0f, 0.25f)
-      val bArr = Array[Float](3.0f, 2.0f, 4.0f,  2.0f, 0.5f,  3.0f, 1.0f, 4.0f)
-      val cArr = Array[Float](1.0f, 1.0f, 1.0f,  1.0f, 1.0f,  1.0f, 1.0f, 1.0f)
-      pokeFPLanes(dut, aArr, bArr, cArr)
-      dut.clock.step()
-      val result = readVR(dut)
-      for (i <- 0 until K) {
-        val expected = f32Bits(aArr(i) * bArr(i) + cArr(i))
-        assert(withinUlp(result(i), expected, ulp=4),
-          f"vfma lane $i: hw=${bitsF32(result(i))}%.6f ref=${bitsF32(expected)}%.6f")
-      }
+  private def runVfma(dut: VALU): Unit = {
+    pokeCtrlFP(dut, VecOp.vfma)
+    val aArr = Array[Float](2.0f, 3.0f, 0.5f, -1.0f, 4.0f, -2.0f, 1.0f, 0.25f)
+    val bArr = Array[Float](3.0f, 2.0f, 4.0f,  2.0f, 0.5f,  3.0f, 1.0f, 4.0f)
+    val cArr = Array[Float](1.0f, 1.0f, 1.0f,  1.0f, 1.0f,  1.0f, 1.0f, 1.0f)
+    pokeFPLanes(dut, aArr, bArr, cArr)
+    dut.clock.step()
+    val result = readVR(dut)
+    for (i <- 0 until K) {
+      val expected = f32Bits(aArr(i) * bArr(i) + cArr(i))
+      assert(withinUlp(result(i), expected, ulp=4),
+        f"vfma lane $i: hw=${bitsF32(result(i))}%.6f ref=${bitsF32(expected)}%.6f")
     }
   }
 
-  "VALU FP32" should "saturate overflow to max finite normal" in {
-    simulate(new VALU(K, N)) { dut =>
-      pokeCtrlFP(dut, VecOp.vfmul)
-      val big = java.lang.Float.MAX_VALUE
-      val aArr = Array.fill(K)(big)
-      val bArr = Array.fill(K)(2.0f)
-      val cArr = Array.fill(K)(0.0f)
-      pokeFPLanes(dut, aArr, bArr, cArr)
-      dut.clock.step()
-      val result = readVR(dut)
-      for (i <- 0 until K) {
-        val hw = bitsF32(result(i))
-        assert(!hw.isInfinite, s"Overflow should saturate to max finite, got $hw lane $i")
-        assert(hw >= 0, s"Expected positive saturation, got $hw")
-      }
+  private def runOverflowSat(dut: VALU): Unit = {
+    pokeCtrlFP(dut, VecOp.vfmul)
+    val big = java.lang.Float.MAX_VALUE
+    val aArr = Array.fill(K)(big)
+    val bArr = Array.fill(K)(2.0f)
+    val cArr = Array.fill(K)(0.0f)
+    pokeFPLanes(dut, aArr, bArr, cArr)
+    dut.clock.step()
+    val result = readVR(dut)
+    for (i <- 0 until K) {
+      val hw = bitsF32(result(i))
+      assert(!hw.isInfinite, s"Overflow should saturate to max finite, got $hw lane $i")
+      assert(hw >= 0, s"Expected positive saturation, got $hw")
     }
   }
 
-  "VALU FP32" should "treat zero operand as zero (Tier-2 NaN/subnormal FTZ)" in {
-    simulate(new VALU(K, N)) { dut =>
-      pokeCtrlFP(dut, VecOp.vfmul)
-      // Multiply by 0
-      val aArr = Array.fill(K)(5.0f)
-      val bArr = Array.fill(K)(0.0f)
-      val cArr = Array.fill(K)(0.0f)
-      pokeFPLanes(dut, aArr, bArr, cArr)
-      dut.clock.step()
-      val result = readVR(dut)
-      for (i <- 0 until K) {
-        val hw = bitsF32(result(i))
-        assert(Math.abs(hw) < 1e-30f, s"Expected ~0, got $hw lane $i")
-      }
+  private def runZeroOperand(dut: VALU): Unit = {
+    pokeCtrlFP(dut, VecOp.vfmul)
+    // Multiply by 0
+    val aArr = Array.fill(K)(5.0f)
+    val bArr = Array.fill(K)(0.0f)
+    val cArr = Array.fill(K)(0.0f)
+    pokeFPLanes(dut, aArr, bArr, cArr)
+    dut.clock.step()
+    val result = readVR(dut)
+    for (i <- 0 until K) {
+      val hw = bitsF32(result(i))
+      assert(Math.abs(hw) < 1e-30f, s"Expected ~0, got $hw lane $i")
     }
   }
 
-  "VALU FP32" should "negate and abs correctly" in {
-    simulate(new VALU(K, N)) { dut =>
-      pokeCtrlFP(dut, VecOp.vfneg)
-      val aArr = Array[Float](1.0f, -2.0f, 0.0f, 3.14f, -3.14f, 100.0f, -100.0f, 0.5f)
-      val bArr = Array.fill(K)(0.0f); val cArr = Array.fill(K)(0.0f)
-      pokeFPLanes(dut, aArr, bArr, cArr)
-      dut.clock.step()
-      val negResult = readVR(dut)
-      for (i <- 0 until K) {
-        val hw = bitsF32(negResult(i)); val exp = -aArr(i)
-        assert(hw == exp, s"vfneg lane $i: $hw != $exp")
-      }
+  private def runNegAndAbs(dut: VALU): Unit = {
+    pokeCtrlFP(dut, VecOp.vfneg)
+    val aArr = Array[Float](1.0f, -2.0f, 0.0f, 3.14f, -3.14f, 100.0f, -100.0f, 0.5f)
+    val bArr = Array.fill(K)(0.0f); val cArr = Array.fill(K)(0.0f)
+    pokeFPLanes(dut, aArr, bArr, cArr)
+    dut.clock.step()
+    val negResult = readVR(dut)
+    for (i <- 0 until K) {
+      val hw = bitsF32(negResult(i)); val exp = -aArr(i)
+      assert(hw == exp, s"vfneg lane $i: $hw != $exp")
+    }
 
-      pokeCtrlFP(dut, VecOp.vfabs)
-      pokeFPLanes(dut, aArr, bArr, cArr)
-      dut.clock.step()
-      val absResult = readVR(dut)
-      for (i <- 0 until K) {
-        val hw = bitsF32(absResult(i)); val exp = Math.abs(aArr(i))
-        assert(hw == exp, s"vfabs lane $i: $hw != $exp")
-      }
+    pokeCtrlFP(dut, VecOp.vfabs)
+    pokeFPLanes(dut, aArr, bArr, cArr)
+    dut.clock.step()
+    val absResult = readVR(dut)
+    for (i <- 0 until K) {
+      val hw = bitsF32(absResult(i)); val exp = Math.abs(aArr(i))
+      assert(hw == exp, s"vfabs lane $i: $hw != $exp")
+    }
+  }
+
+  // ---- Coalesced test --------------------------------------------------------
+
+  "VALU FP32" should "pass all FP32 arithmetic sub-cases" in {
+    simulate(new VALU(K, N)) { dut =>
+      withClue("vfadd: ")              { runVfadd(dut)        }
+      withClue("vfmul: ")              { runVfmul(dut)        }
+      withClue("vfma: ")               { runVfma(dut)         }
+      withClue("overflow saturation: ") { runOverflowSat(dut)  }
+      withClue("zero-operand: ")        { runZeroOperand(dut)  }
+      withClue("vfneg/vfabs: ")         { runNegAndAbs(dut)    }
     }
   }
 }

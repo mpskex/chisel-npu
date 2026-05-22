@@ -12,7 +12,7 @@ object Main extends App {
   // These lines generate the Verilog output
 
   val hdl = ChiselStage.emitSystemVerilog(
-    new MMALU(new MMPE(), 64, 8, 32),
+    new MMALU(new MMPE(), 32, 8, 32),
     firtoolOpts = Array("-disable-all-randomization", "-strip-debug-info")
   )
   Files.write(Paths.get("top.sv"), hdl.getBytes(StandardCharsets.UTF_8))

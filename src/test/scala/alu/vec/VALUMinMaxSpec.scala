@@ -27,47 +27,53 @@ class VALUMinMaxSpec extends AnyFlatSpec {
     }
   }
 
-  "VALU vmax" should "return elementwise maximum" in {
-    simulate(new VALU(K, N)) { dut =>
-      pokeCtrl(dut, VecOp.vmax)
-      for (_ <- 0 until 64) {
-        val a = Array.fill(K)(rand.between(-128, 128))
-        val b = Array.fill(K)(rand.between(-128, 128))
-        pokeAB(dut, a, b)
-        dut.clock.step()
-        for (i <- 0 until K) {
-          val exp = (math.max(a(i), b(i)) & 0xFF).U
-          dut.io.out_vx(i).expect(exp, s"vmax lane $i")
-        }
-      }
-    }
-  }
+  // ---- Sub-case helpers ------------------------------------------------------
 
-  "VALU vmax" should "handle boundary values" in {
-    simulate(new VALU(K, N)) { dut =>
-      pokeCtrl(dut, VecOp.vmax)
-      val a = Array(-128, 127, 0, 0, -1, 1, -128, 127)
-      val b = Array( 127,-128, 0, 0,  1,-1,  127,-128)
+  private def runVmaxRandom(dut: VALU): Unit = {
+    pokeCtrl(dut, VecOp.vmax)
+    for (_ <- 0 until 64) {
+      val a = Array.fill(K)(rand.between(-128, 128))
+      val b = Array.fill(K)(rand.between(-128, 128))
       pokeAB(dut, a, b)
       dut.clock.step()
       for (i <- 0 until K) {
-        dut.io.out_vx(i).expect((math.max(a(i), b(i)) & 0xFF).U, s"vmax boundary lane $i")
+        val exp = (math.max(a(i), b(i)) & 0xFF).U
+        dut.io.out_vx(i).expect(exp, s"vmax lane $i")
       }
     }
   }
 
-  "VALU vmin" should "return elementwise minimum" in {
-    simulate(new VALU(K, N)) { dut =>
-      pokeCtrl(dut, VecOp.vmin)
-      for (_ <- 0 until 64) {
-        val a = Array.fill(K)(rand.between(-128, 128))
-        val b = Array.fill(K)(rand.between(-128, 128))
-        pokeAB(dut, a, b)
-        dut.clock.step()
-        for (i <- 0 until K) {
-          dut.io.out_vx(i).expect((math.min(a(i), b(i)) & 0xFF).U, s"vmin lane $i")
-        }
+  private def runVmaxBoundary(dut: VALU): Unit = {
+    pokeCtrl(dut, VecOp.vmax)
+    val a = Array(-128, 127, 0, 0, -1, 1, -128, 127)
+    val b = Array( 127,-128, 0, 0,  1,-1,  127,-128)
+    pokeAB(dut, a, b)
+    dut.clock.step()
+    for (i <- 0 until K) {
+      dut.io.out_vx(i).expect((math.max(a(i), b(i)) & 0xFF).U, s"vmax boundary lane $i")
+    }
+  }
+
+  private def runVminRandom(dut: VALU): Unit = {
+    pokeCtrl(dut, VecOp.vmin)
+    for (_ <- 0 until 64) {
+      val a = Array.fill(K)(rand.between(-128, 128))
+      val b = Array.fill(K)(rand.between(-128, 128))
+      pokeAB(dut, a, b)
+      dut.clock.step()
+      for (i <- 0 until K) {
+        dut.io.out_vx(i).expect((math.min(a(i), b(i)) & 0xFF).U, s"vmin lane $i")
       }
+    }
+  }
+
+  // ---- Coalesced test --------------------------------------------------------
+
+  "VALU min/max" should "pass all elementwise min/max sub-cases" in {
+    simulate(new VALU(K, N)) { dut =>
+      withClue("vmax random: ")   { runVmaxRandom(dut)   }
+      withClue("vmax boundary: ") { runVmaxBoundary(dut) }
+      withClue("vmin random: ")   { runVminRandom(dut)   }
     }
   }
 }

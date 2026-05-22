@@ -100,78 +100,78 @@ class VALUProgrammableLutSpec extends AnyFlatSpec {
     }
   }
 
-  // ===========================================================================
-  // Test 1: Load exp table into bank A; verify all 256 entries via vlut
-  // ===========================================================================
-  "VALU vlut/vsetlut" should "load and look up exp table (bank A) bit-exactly" in {
+  // ---- Sub-case helpers ------------------------------------------------------
+
+  // 1: Load exp into bank A and verify
+  private def runExpBankA(dut: VALU): Unit = {
+    loadBank(dut, Qfmt.lutExp, BANK_A)
+    sweepLut(dut, Qfmt.lutExp, BANK_A, "vexp")
+  }
+
+  // 2: Load recip into bank B and verify
+  private def runRecipBankB(dut: VALU): Unit = {
+    loadBank(dut, Qfmt.lutRecip, BANK_B)
+    sweepLut(dut, Qfmt.lutRecip, BANK_B, "vrecip")
+  }
+
+  // 3: Load tanh into A and erf into B; verify both
+  private def runTwoBanks(dut: VALU): Unit = {
+    loadBank(dut, Qfmt.lutTanh, BANK_A)
+    loadBank(dut, Qfmt.lutErf,  BANK_B)
+    sweepLut(dut, Qfmt.lutTanh, BANK_A, "vtanh")
+    sweepLut(dut, Qfmt.lutErf,  BANK_B, "verf")
+  }
+
+  // 4: Overwrite bank A
+  private def runOverwriteBankA(dut: VALU): Unit = {
+    // Load exp first, then overwrite with recip
+    loadBank(dut, Qfmt.lutExp,   BANK_A)
+    loadBank(dut, Qfmt.lutRecip, BANK_A)
+    // Only recip should be visible now
+    sweepLut(dut, Qfmt.lutRecip, BANK_A, "overwrite-recip")
+  }
+
+  // 5: recip(0) sentinel via vlut
+  private def runRecipZeroSentinel(dut: VALU): Unit = {
+    loadBank(dut, Qfmt.lutRecip, BANK_A)
+    pokeCtrl(dut, VecOp.vlut, regCls = 0, bank = BANK_A)
+    zeroInputs(dut)
+    // all lanes index 0 → recip(0) = sentinel 127
+    for (i <- 0 until K) dut.io.in_a_vx(i).poke(0.U)
+    dut.clock.step()
+    for (i <- 0 until K)
+      dut.io.out_vx(i).expect(127.U, s"vlut recip(0) sentinel lane $i")
+  }
+
+  // 8: Compiler-defined identity table
+  private def runIdentityTable(dut: VALU): Unit = {
+    val identityTable = (0 until 256).map(_ & 0xFF)
+    loadBank(dut, identityTable, BANK_A)
+    sweepLut(dut, identityTable, BANK_A, "identity")
+  }
+
+  // ---- Coalesced simulate-based test ----------------------------------------
+
+  "VALU vlut/vsetlut" should "pass all programmable-LUT sub-cases" in {
     simulate(new VALU(K, N)) { dut =>
-      loadBank(dut, Qfmt.lutExp, BANK_A)
-      sweepLut(dut, Qfmt.lutExp, BANK_A, "vexp")
+      withClue("exp bank A: ")            { runExpBankA(dut)           }
+      withClue("recip bank B: ")          { runRecipBankB(dut)         }
+      withClue("two banks (tanh+erf): ")  { runTwoBanks(dut)           }
+      withClue("overwrite bank A: ")      { runOverwriteBankA(dut)     }
+      withClue("recip(0) sentinel: ")     { runRecipZeroSentinel(dut)  }
+      withClue("identity table: ")        { runIdentityTable(dut)      }
     }
   }
 
-  // ===========================================================================
-  // Test 2: Load recip table into bank B; verify all 256 entries
-  // ===========================================================================
-  "VALU vlut/vsetlut" should "load and look up recip table (bank B) bit-exactly" in {
-    simulate(new VALU(K, N)) { dut =>
-      loadBank(dut, Qfmt.lutRecip, BANK_B)
-      sweepLut(dut, Qfmt.lutRecip, BANK_B, "vrecip")
-    }
-  }
+  // ---- Pure-Scala property tests (no DUT, kept separate) --------------------
 
-  // ===========================================================================
-  // Test 3: Load tanh into bank A, erf into bank B; both independent
-  // ===========================================================================
-  "VALU vlut/vsetlut" should "support two independent banks (tanh in A, erf in B)" in {
-    simulate(new VALU(K, N)) { dut =>
-      loadBank(dut, Qfmt.lutTanh, BANK_A)
-      loadBank(dut, Qfmt.lutErf,  BANK_B)
-      sweepLut(dut, Qfmt.lutTanh, BANK_A, "vtanh")
-      sweepLut(dut, Qfmt.lutErf,  BANK_B, "verf")
-    }
-  }
-
-  // ===========================================================================
-  // Test 4: Overwrite bank A — new table replaces old
-  // ===========================================================================
-  "VALU vlut/vsetlut" should "overwrite bank A when reloaded with a different table" in {
-    simulate(new VALU(K, N)) { dut =>
-      // Load exp first, then overwrite with recip
-      loadBank(dut, Qfmt.lutExp,   BANK_A)
-      loadBank(dut, Qfmt.lutRecip, BANK_A)
-      // Only recip should be visible now
-      sweepLut(dut, Qfmt.lutRecip, BANK_A, "overwrite-recip")
-    }
-  }
-
-  // ===========================================================================
-  // Test 5: Legacy property — vrecip sentinel for x=0 still holds via vlut
-  // ===========================================================================
-  "VALU vlut/vsetlut" should "return sentinel 127 for recip(0) via vlut" in {
-    simulate(new VALU(K, N)) { dut =>
-      loadBank(dut, Qfmt.lutRecip, BANK_A)
-      pokeCtrl(dut, VecOp.vlut, regCls = 0, bank = BANK_A)
-      zeroInputs(dut)
-      // all lanes index 0 → recip(0) = sentinel 127
-      for (i <- 0 until K) dut.io.in_a_vx(i).poke(0.U)
-      dut.clock.step()
-      for (i <- 0 until K)
-        dut.io.out_vx(i).expect(127.U, s"vlut recip(0) sentinel lane $i")
-    }
-  }
-
-  // ===========================================================================
-  // Test 6: Legacy property — vexp has no zero entries in the Qfmt table
-  // ===========================================================================
+  // 6: Legacy property — vexp has no zero entries in the Qfmt table
   "VALU vlut/vsetlut" should "have no zero entries in the Qfmt exp table" in {
     for (raw <- 0 until 256)
       assert(Qfmt.lutExp(raw) != 0, s"Qfmt.lutExp[$raw] = 0")
   }
 
-  // ===========================================================================
-  // Test 7: Legacy property — Qfmt tanh table is monotone non-decreasing
-  // ===========================================================================
+  // 7: Legacy property — Qfmt tanh table is monotone non-decreasing
   "VALU vlut/vsetlut" should "have a monotone non-decreasing Qfmt tanh table" in {
     var prev = Qfmt.lutTanh(128)
     val order = (-128 until 128).map(v => if (v < 0) v + 256 else v)
@@ -182,18 +182,6 @@ class VALUProgrammableLutSpec extends AnyFlatSpec {
       assert(curS >= prevS - 1,
         s"Qfmt.lutTanh not monotone at raw=$raw: prev=$prevS cur=$curS")
       prev = cur
-    }
-  }
-
-  // ===========================================================================
-  // Test 8: Custom table — compiler-defined arbitrary byte→byte function
-  // ===========================================================================
-  "VALU vlut/vsetlut" should "support a compiler-defined identity table" in {
-    // Table: output[i] = i (identity / passthrough)
-    val identityTable = (0 until 256).map(_ & 0xFF)
-    simulate(new VALU(K, N)) { dut =>
-      loadBank(dut, identityTable, BANK_A)
-      sweepLut(dut, identityTable, BANK_A, "identity")
     }
   }
 }

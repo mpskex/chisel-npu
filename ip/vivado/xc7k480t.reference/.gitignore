@@ -1,0 +1,34 @@
+# --- Vivado Temporary/Generated Files ---
+*.jou
+*.log
+*.str
+*.tmp
+*.debug
+*.zip
+*.vds
+*.veo
+*.wdf
+*.vdi
+*.dmp
+*.rpx
+*.rpt
+
+# --- Project Infrastructure Directories ---
+*.cache/
+*.hw/
+*.ip_user_files/
+*.runs/
+*.sim/
+.Xil/
+
+# --- Compilation/Synthesis Artifacts ---
+*.dcp
+*.hwdef
+*_stub.v
+*_stub.vhdl
+*_funcsim.v
+*_funcsim.vhdl
+
+# --- SDK / Vitis ---
+*.sdk/
+.metadata/

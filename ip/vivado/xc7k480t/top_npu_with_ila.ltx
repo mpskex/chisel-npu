@@ -1,0 +1,1561 @@
+{
+    "ltx_root": {
+        "version": 4,
+        "minor": 0,
+        "ltx_data": [
+            {
+                "name": "EDA_PROBESET",
+                "active": true,
+                "debug_cores": [
+                    {
+                        "type": "XSDB_V3",
+                        "name": "dbg_hub",
+                        "spec": "labtools_xsdbm_v3",
+                        "clk_input_freq_hz": "199999996"
+                    },
+                    {
+                        "type": "ILA_V3",
+                        "name": "u_npu_ila",
+                        "spec": "labtools_ila_v6",
+                        "core_location": {
+                            "user_chain": 1,
+                            "slave_index": 0,
+                            "bscan_switch_index": 0
+                        },
+                        "uuid": "D6DB3E01AD0E5F3299ECB71F0A2CC81B",
+                        "pins": [
+                            {
+                                "name": "probe0",
+                                "id": 0,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": false,
+                                "leftIndex": 0,
+                                "rightIndex": 0,
+                                "portIndex": 0,
+                                "nets": [
+                                    {
+                                        "name": "top_i/npu_subsys/inst/u_dma/dbg_rlast",
+                                        "isBus": false
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe1",
+                                "id": 1,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": false,
+                                "leftIndex": 0,
+                                "rightIndex": 0,
+                                "portIndex": 1,
+                                "nets": [
+                                    {
+                                        "name": "top_i/npu_subsys/inst/u_dma/dbg_rready",
+                                        "isBus": false
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe2",
+                                "id": 2,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": false,
+                                "leftIndex": 0,
+                                "rightIndex": 0,
+                                "portIndex": 2,
+                                "nets": [
+                                    {
+                                        "name": "top_i/npu_subsys/inst/u_dma/dbg_arready",
+                                        "isBus": false
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe3",
+                                "id": 3,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": false,
+                                "leftIndex": 0,
+                                "rightIndex": 0,
+                                "portIndex": 3,
+                                "nets": [
+                                    {
+                                        "name": "top_i/npu_subsys/inst/u_dma/dbg_rvalid",
+                                        "isBus": false
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe4",
+                                "id": 4,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": false,
+                                "leftIndex": 0,
+                                "rightIndex": 0,
+                                "portIndex": 4,
+                                "nets": [
+                                    {
+                                        "name": "top_i/npu_subsys/inst/u_dma/rpipe_valid",
+                                        "isBus": false
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe5",
+                                "id": 5,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": false,
+                                "leftIndex": 0,
+                                "rightIndex": 0,
+                                "portIndex": 5,
+                                "nets": [
+                                    {
+                                        "name": "top_i/npu_subsys/inst/u_dma/dbg_arvalid",
+                                        "isBus": false
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe6",
+                                "id": 6,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 0,
+                                "rightIndex": 3,
+                                "portIndex": 6,
+                                "nets": [
+                                    {
+                                        "name": "top_i/npu_subsys/inst/u_dma/dbg_beat_cnt_d1",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/dbg_beat_cnt_d1[3]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/dbg_beat_cnt_d1[2]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/dbg_beat_cnt_d1[1]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/dbg_beat_cnt_d1[0]"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe7",
+                                "id": 7,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 0,
+                                "rightIndex": 0,
+                                "portIndex": 7,
+                                "nets": [
+                                    {
+                                        "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_1",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_1[0]"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe7",
+                                "id": 8,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 1,
+                                "rightIndex": 10,
+                                "portIndex": 7,
+                                "nets": [
+                                    {
+                                        "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_2",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_2[109]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_2[108]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_2[107]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_2[106]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_2[105]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_2[104]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_2[103]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_2[102]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_2[101]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_2[100]"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe7",
+                                "id": 9,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 11,
+                                "rightIndex": 11,
+                                "portIndex": 7,
+                                "nets": [
+                                    {
+                                        "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_3",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_3[10]"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe7",
+                                "id": 10,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 12,
+                                "rightIndex": 21,
+                                "portIndex": 7,
+                                "nets": [
+                                    {
+                                        "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_4",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_4[119]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_4[118]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_4[117]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_4[116]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_4[115]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_4[114]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_4[113]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_4[112]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_4[111]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_4[110]"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe7",
+                                "id": 11,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 22,
+                                "rightIndex": 22,
+                                "portIndex": 7,
+                                "nets": [
+                                    {
+                                        "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_5",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_5[11]"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe7",
+                                "id": 12,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 23,
+                                "rightIndex": 30,
+                                "portIndex": 7,
+                                "nets": [
+                                    {
+                                        "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_6",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_6[127]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_6[126]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_6[125]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_6[124]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_6[123]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_6[122]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_6[121]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_6[120]"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe7",
+                                "id": 13,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 31,
+                                "rightIndex": 38,
+                                "portIndex": 7,
+                                "nets": [
+                                    {
+                                        "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_7",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_7[19]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_7[18]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_7[17]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_7[16]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_7[15]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_7[14]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_7[13]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_7[12]"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe7",
+                                "id": 14,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 39,
+                                "rightIndex": 39,
+                                "portIndex": 7,
+                                "nets": [
+                                    {
+                                        "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_8",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_8[1]"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe7",
+                                "id": 15,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 40,
+                                "rightIndex": 49,
+                                "portIndex": 7,
+                                "nets": [
+                                    {
+                                        "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_9",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_9[29]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_9[28]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_9[27]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_9[26]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_9[25]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_9[24]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_9[23]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_9[22]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_9[21]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_9[20]"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe7",
+                                "id": 16,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 50,
+                                "rightIndex": 50,
+                                "portIndex": 7,
+                                "nets": [
+                                    {
+                                        "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_10",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_10[2]"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe7",
+                                "id": 17,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 51,
+                                "rightIndex": 60,
+                                "portIndex": 7,
+                                "nets": [
+                                    {
+                                        "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_11",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_11[39]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_11[38]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_11[37]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_11[36]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_11[35]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_11[34]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_11[33]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_11[32]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_11[31]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_11[30]"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe7",
+                                "id": 18,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 61,
+                                "rightIndex": 61,
+                                "portIndex": 7,
+                                "nets": [
+                                    {
+                                        "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_12",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_12[3]"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe7",
+                                "id": 19,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 62,
+                                "rightIndex": 71,
+                                "portIndex": 7,
+                                "nets": [
+                                    {
+                                        "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_13",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_13[49]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_13[48]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_13[47]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_13[46]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_13[45]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_13[44]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_13[43]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_13[42]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_13[41]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_13[40]"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe7",
+                                "id": 20,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 72,
+                                "rightIndex": 72,
+                                "portIndex": 7,
+                                "nets": [
+                                    {
+                                        "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_14",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_14[4]"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe7",
+                                "id": 21,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 73,
+                                "rightIndex": 82,
+                                "portIndex": 7,
+                                "nets": [
+                                    {
+                                        "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_15",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_15[59]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_15[58]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_15[57]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_15[56]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_15[55]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_15[54]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_15[53]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_15[52]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_15[51]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_15[50]"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe7",
+                                "id": 22,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 83,
+                                "rightIndex": 83,
+                                "portIndex": 7,
+                                "nets": [
+                                    {
+                                        "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_16",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_16[5]"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe7",
+                                "id": 23,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 84,
+                                "rightIndex": 93,
+                                "portIndex": 7,
+                                "nets": [
+                                    {
+                                        "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_17",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_17[69]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_17[68]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_17[67]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_17[66]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_17[65]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_17[64]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_17[63]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_17[62]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_17[61]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_17[60]"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe7",
+                                "id": 24,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 94,
+                                "rightIndex": 94,
+                                "portIndex": 7,
+                                "nets": [
+                                    {
+                                        "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_18",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_18[6]"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe7",
+                                "id": 25,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 95,
+                                "rightIndex": 104,
+                                "portIndex": 7,
+                                "nets": [
+                                    {
+                                        "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_19",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_19[79]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_19[78]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_19[77]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_19[76]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_19[75]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_19[74]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_19[73]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_19[72]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_19[71]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_19[70]"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe7",
+                                "id": 26,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 105,
+                                "rightIndex": 105,
+                                "portIndex": 7,
+                                "nets": [
+                                    {
+                                        "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_20",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_20[7]"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe7",
+                                "id": 27,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 106,
+                                "rightIndex": 115,
+                                "portIndex": 7,
+                                "nets": [
+                                    {
+                                        "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_21",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_21[89]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_21[88]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_21[87]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_21[86]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_21[85]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_21[84]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_21[83]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_21[82]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_21[81]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_21[80]"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe7",
+                                "id": 28,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 116,
+                                "rightIndex": 116,
+                                "portIndex": 7,
+                                "nets": [
+                                    {
+                                        "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_22",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_22[8]"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe7",
+                                "id": 29,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 117,
+                                "rightIndex": 126,
+                                "portIndex": 7,
+                                "nets": [
+                                    {
+                                        "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_23",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_23[99]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_23[98]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_23[97]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_23[96]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_23[95]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_23[94]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_23[93]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_23[92]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_23[91]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe_23[90]"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe7",
+                                "id": 30,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 127,
+                                "rightIndex": 127,
+                                "portIndex": 7,
+                                "nets": [
+                                    {
+                                        "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/rdata_pipe[9]"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe8",
+                                "id": 31,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 0,
+                                "rightIndex": 0,
+                                "portIndex": 8,
+                                "nets": [
+                                    {
+                                        "name": "top_i/npu_subsys/inst/u_dma/dbg_rdata_lo_1",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/dbg_rdata_lo_1[0]"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe8",
+                                "id": 32,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 1,
+                                "rightIndex": 10,
+                                "portIndex": 8,
+                                "nets": [
+                                    {
+                                        "name": "top_i/npu_subsys/inst/u_dma/dbg_rdata_lo_2",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/dbg_rdata_lo_2[19]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/dbg_rdata_lo_2[18]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/dbg_rdata_lo_2[17]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/dbg_rdata_lo_2[16]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/dbg_rdata_lo_2[15]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/dbg_rdata_lo_2[14]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/dbg_rdata_lo_2[13]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/dbg_rdata_lo_2[12]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/dbg_rdata_lo_2[11]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/dbg_rdata_lo_2[10]"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe8",
+                                "id": 33,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 11,
+                                "rightIndex": 11,
+                                "portIndex": 8,
+                                "nets": [
+                                    {
+                                        "name": "top_i/npu_subsys/inst/u_dma/dbg_rdata_lo_3",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/dbg_rdata_lo_3[1]"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe8",
+                                "id": 34,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 12,
+                                "rightIndex": 21,
+                                "portIndex": 8,
+                                "nets": [
+                                    {
+                                        "name": "top_i/npu_subsys/inst/u_dma/dbg_rdata_lo_4",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/dbg_rdata_lo_4[29]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/dbg_rdata_lo_4[28]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/dbg_rdata_lo_4[27]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/dbg_rdata_lo_4[26]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/dbg_rdata_lo_4[25]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/dbg_rdata_lo_4[24]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/dbg_rdata_lo_4[23]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/dbg_rdata_lo_4[22]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/dbg_rdata_lo_4[21]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/dbg_rdata_lo_4[20]"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe8",
+                                "id": 35,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 22,
+                                "rightIndex": 22,
+                                "portIndex": 8,
+                                "nets": [
+                                    {
+                                        "name": "top_i/npu_subsys/inst/u_dma/dbg_rdata_lo_5",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/dbg_rdata_lo_5[2]"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe8",
+                                "id": 36,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 23,
+                                "rightIndex": 24,
+                                "portIndex": 8,
+                                "nets": [
+                                    {
+                                        "name": "top_i/npu_subsys/inst/u_dma/dbg_rdata_lo_6",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/dbg_rdata_lo_6[31]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/dbg_rdata_lo_6[30]"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe8",
+                                "id": 37,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 25,
+                                "rightIndex": 31,
+                                "portIndex": 8,
+                                "nets": [
+                                    {
+                                        "name": "top_i/npu_subsys/inst/u_dma/dbg_rdata_lo",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/dbg_rdata_lo[9]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/dbg_rdata_lo[8]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/dbg_rdata_lo[7]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/dbg_rdata_lo[6]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/dbg_rdata_lo[5]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/dbg_rdata_lo[4]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/dbg_rdata_lo[3]"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe9",
+                                "id": 38,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": false,
+                                "leftIndex": 0,
+                                "rightIndex": 0,
+                                "portIndex": 9,
+                                "nets": [
+                                    {
+                                        "name": "top_i/npu_subsys/inst/u_dma/rlast_pipe",
+                                        "isBus": false
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe10",
+                                "id": 39,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 0,
+                                "rightIndex": 3,
+                                "portIndex": 10,
+                                "nets": [
+                                    {
+                                        "name": "top_i/npu_subsys/inst/u_dma/beat_cnt",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/beat_cnt[3]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/beat_cnt[2]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/beat_cnt[1]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/beat_cnt[0]"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe11",
+                                "id": 40,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 0,
+                                "rightIndex": 3,
+                                "portIndex": 11,
+                                "nets": [
+                                    {
+                                        "name": "top_i/npu_subsys/inst/u_dma/state",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/state[3]",
+                                                "parentNetId": 175
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/state[2]",
+                                                "parentNetId": 176
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/state[1]",
+                                                "parentNetId": 177
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/state[0]",
+                                                "parentNetId": 178
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "probe12",
+                                "id": 41,
+                                "type": "DATA_TRIGGER",
+                                "direction": "IN",
+                                "isVector": true,
+                                "leftIndex": 0,
+                                "rightIndex": 3,
+                                "portIndex": 12,
+                                "nets": [
+                                    {
+                                        "name": "top_i/npu_subsys/inst/u_dma/dbg_state_d1",
+                                        "isBus": true,
+                                        "subnets": [
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/dbg_state_d1[3]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/dbg_state_d1[2]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/dbg_state_d1[1]"
+                                            },
+                                            {
+                                                "name": "top_i/npu_subsys/inst/u_dma/dbg_state_d1[0]"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ],
+                "parent_nets": [
+                    {
+                        "id": 175,
+                        "name": "top_i/npu_subsys/inst/u_dma/state[3]",
+                        "state_reg": [
+                            {
+                                "name": "top_i/npu_subsys/inst/u_dma/state_reg[3]",
+                                "states": [
+                                    {
+                                        "name": "S_IDLE",
+                                        "val": "0000"
+                                    },
+                                    {
+                                        "name": "S_READ_A_AR",
+                                        "val": "0001"
+                                    },
+                                    {
+                                        "name": "S_READ_A_R",
+                                        "val": "0010"
+                                    },
+                                    {
+                                        "name": "S_READ_B_AR",
+                                        "val": "0011"
+                                    },
+                                    {
+                                        "name": "S_READ_B_R",
+                                        "val": "0100"
+                                    },
+                                    {
+                                        "name": "S_READ_ACC_AR",
+                                        "val": "0101"
+                                    },
+                                    {
+                                        "name": "S_READ_ACC_R",
+                                        "val": "0110"
+                                    },
+                                    {
+                                        "name": "S_KICK",
+                                        "val": "0111"
+                                    },
+                                    {
+                                        "name": "S_WAIT_CLCT",
+                                        "val": "1000"
+                                    },
+                                    {
+                                        "name": "S_WR_AW",
+                                        "val": "1001"
+                                    },
+                                    {
+                                        "name": "S_WR_W",
+                                        "val": "1010"
+                                    },
+                                    {
+                                        "name": "S_WR_B",
+                                        "val": "1011"
+                                    },
+                                    {
+                                        "name": "S_DONE",
+                                        "val": "1100"
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "id": 176,
+                        "name": "top_i/npu_subsys/inst/u_dma/state[2]",
+                        "state_reg": [
+                            {
+                                "name": "top_i/npu_subsys/inst/u_dma/state_reg[2]",
+                                "states": [
+                                    {
+                                        "name": "S_IDLE",
+                                        "val": "0000"
+                                    },
+                                    {
+                                        "name": "S_READ_A_AR",
+                                        "val": "0001"
+                                    },
+                                    {
+                                        "name": "S_READ_A_R",
+                                        "val": "0010"
+                                    },
+                                    {
+                                        "name": "S_READ_B_AR",
+                                        "val": "0011"
+                                    },
+                                    {
+                                        "name": "S_READ_B_R",
+                                        "val": "0100"
+                                    },
+                                    {
+                                        "name": "S_READ_ACC_AR",
+                                        "val": "0101"
+                                    },
+                                    {
+                                        "name": "S_READ_ACC_R",
+                                        "val": "0110"
+                                    },
+                                    {
+                                        "name": "S_KICK",
+                                        "val": "0111"
+                                    },
+                                    {
+                                        "name": "S_WAIT_CLCT",
+                                        "val": "1000"
+                                    },
+                                    {
+                                        "name": "S_WR_AW",
+                                        "val": "1001"
+                                    },
+                                    {
+                                        "name": "S_WR_W",
+                                        "val": "1010"
+                                    },
+                                    {
+                                        "name": "S_WR_B",
+                                        "val": "1011"
+                                    },
+                                    {
+                                        "name": "S_DONE",
+                                        "val": "1100"
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "id": 177,
+                        "name": "top_i/npu_subsys/inst/u_dma/state[1]",
+                        "state_reg": [
+                            {
+                                "name": "top_i/npu_subsys/inst/u_dma/state_reg[1]",
+                                "states": [
+                                    {
+                                        "name": "S_IDLE",
+                                        "val": "0000"
+                                    },
+                                    {
+                                        "name": "S_READ_A_AR",
+                                        "val": "0001"
+                                    },
+                                    {
+                                        "name": "S_READ_A_R",
+                                        "val": "0010"
+                                    },
+                                    {
+                                        "name": "S_READ_B_AR",
+                                        "val": "0011"
+                                    },
+                                    {
+                                        "name": "S_READ_B_R",
+                                        "val": "0100"
+                                    },
+                                    {
+                                        "name": "S_READ_ACC_AR",
+                                        "val": "0101"
+                                    },
+                                    {
+                                        "name": "S_READ_ACC_R",
+                                        "val": "0110"
+                                    },
+                                    {
+                                        "name": "S_KICK",
+                                        "val": "0111"
+                                    },
+                                    {
+                                        "name": "S_WAIT_CLCT",
+                                        "val": "1000"
+                                    },
+                                    {
+                                        "name": "S_WR_AW",
+                                        "val": "1001"
+                                    },
+                                    {
+                                        "name": "S_WR_W",
+                                        "val": "1010"
+                                    },
+                                    {
+                                        "name": "S_WR_B",
+                                        "val": "1011"
+                                    },
+                                    {
+                                        "name": "S_DONE",
+                                        "val": "1100"
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "id": 178,
+                        "name": "top_i/npu_subsys/inst/u_dma/state[0]",
+                        "state_reg": [
+                            {
+                                "name": "top_i/npu_subsys/inst/u_dma/state_reg[0]",
+                                "states": [
+                                    {
+                                        "name": "S_IDLE",
+                                        "val": "0000"
+                                    },
+                                    {
+                                        "name": "S_READ_A_AR",
+                                        "val": "0001"
+                                    },
+                                    {
+                                        "name": "S_READ_A_R",
+                                        "val": "0010"
+                                    },
+                                    {
+                                        "name": "S_READ_B_AR",
+                                        "val": "0011"
+                                    },
+                                    {
+                                        "name": "S_READ_B_R",
+                                        "val": "0100"
+                                    },
+                                    {
+                                        "name": "S_READ_ACC_AR",
+                                        "val": "0101"
+                                    },
+                                    {
+                                        "name": "S_READ_ACC_R",
+                                        "val": "0110"
+                                    },
+                                    {
+                                        "name": "S_KICK",
+                                        "val": "0111"
+                                    },
+                                    {
+                                        "name": "S_WAIT_CLCT",
+                                        "val": "1000"
+                                    },
+                                    {
+                                        "name": "S_WR_AW",
+                                        "val": "1001"
+                                    },
+                                    {
+                                        "name": "S_WR_W",
+                                        "val": "1010"
+                                    },
+                                    {
+                                        "name": "S_WR_B",
+                                        "val": "1011"
+                                    },
+                                    {
+                                        "name": "S_DONE",
+                                        "val": "1100"
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        ]
+    }
+}

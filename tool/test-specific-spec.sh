@@ -1,1 +1,1 @@
-docker run --rm -v ${PWD}:/workspace/ fangruil/chisel-dev:amd64 sbt "testOnly $1"
+docker run --rm --env SBT_OPTS="-Xmx8G -Xss2M" -v ${PWD}:/workspace/ fangruil/chisel-dev:amd64 sbt "testOnly $1"

@@ -49,6 +49,8 @@ Confusing them causes hard-to-debug hardware elaboration errors.
 
 - [Quantization Pipeline](implementations/Quantization.md) — worked example: MMA → vcvt → vfma → vcvt INT8 requantization
 
+- [FPGA Verification Platform (xc7k480t)](implementations/FPGA_XC7K480T.md) — PCIe Gen2×8 + dual DDR3 + K=32 MMALU on Kintex-7; timing closure history and 200 MHz fabric architecture
+
 ---
 
 ## Tutorials
