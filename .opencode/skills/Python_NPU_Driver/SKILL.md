@@ -96,8 +96,8 @@ size from the native module.
 source .env.sh                             # FPGA_HOST, SSH_IDENTITY, ...
 make py-build                              # sdist (dev host)
 make py-deploy                             # rsync + venv + build + udev + selftest
-make py-test-unit                          # 26 mock tests, no hardware (dev host)
-make py-test-hw                            # 14 hw tests natively on the FPGA host
+make py-test-unit                          # 27 mock tests, no hardware (dev host)
+make py-test-hw                            # 23 hw tests natively on the FPGA host
 ```
 
 Deploy (`drivers/chisel_npu_py/tool/deploy.sh`) is idempotent: rsync →
@@ -116,7 +116,13 @@ compiles the extension **on the host in the target venv**) → udev rule
   `tests/conftest.py`).
 - `python -m chisel_npu_py selftest` — node discovery, ctrl_lite read,
   staged OUT round-trip; exit 0 = pass.
-- Current status: 26 unit + 14 hw tests, all PASS on V10 silicon.
+- `test_mmalu_compute.py` includes the formal bit-exactness suite
+  (`test_mmalu_formula_*`): OUT[i] = A[i]·B[K-1] + ACCUM[i] verified at
+  int32 value AND uint32 bit-pattern level over 6 random seeds (full int8
+  range, ACCUM ±10^6) plus edge cases (full-scale products, mixed signs,
+  all-negative B, ACCUM near ±2^30); OUT is sentinel-cleared before every
+  kick so stale data can never mask a mismatch.
+- Current status: 27 unit + 23 hw tests, all PASS on V10 silicon.
 
 ## Troubleshooting
 

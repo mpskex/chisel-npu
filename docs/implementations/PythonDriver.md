@@ -122,7 +122,7 @@ an sdist on the dev host for archiving.
 | `make py-test-hw` | FPGA host (via SSH) | hardware suite, native pytest |
 | `make py-deploy` | FPGA host | install + selftest |
 
-The hardware suite (all PASS on V10 silicon, 14 tests):
+The hardware suite (all PASS on V10 silicon, 23 tests):
 
 - `test_ctrl_lite.py` — control word access, kick→done, done-latch
   persistence.
@@ -130,7 +130,12 @@ The hardware suite (all PASS on V10 silicon, 14 tests):
   integrity through the pybind boundary) plus typed int32 read-back.
 - `test_mmalu_compute.py` — the six MMALU compute tests
   (zero-in/zero-out, ACCUM passthrough, A=0 kills multiplier, multiplier
-  alive, and the analytical `OUT[i] = A[i]·B[K-1] + ACCUM[i]` check).
+  alive, and the analytical `OUT[i] = A[i]·B[K-1] + ACCUM[i]` check) plus
+  a formal **bit-exactness suite**: 6 random trials over the full int8
+  range (ACCUM ±10^6), full-scale products (16384 / 16129 on every lane),
+  mixed-sign operands, all-negative B, and ACCUM near ±2^30 — each
+  verified at both the int32 value level and the raw uint32 bit-pattern
+  level, with the OUT region sentinel-cleared to prove real write-back.
 
 Unit tests inject a pure-Python `FakeNative`
 (`tests/fake_native.py`) that mirrors the native module's validation

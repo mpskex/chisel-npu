@@ -101,7 +101,7 @@ make py-test-hw      # runs the hw suite natively on the FPGA host via SSH
 | `test_npu_mock.py` | unit | mmalu orchestration, size rejection, timeouts |
 | `test_ctrl_lite.py` | hw | control word access, kick→done, done latch |
 | `test_loopback.py` | hw | staged round-trips (DDR3 data integrity) |
-| `test_mmalu_compute.py` | hw | the 6 MMALU compute tests |
+| `test_mmalu_compute.py` | hw | 16 MMALU compute + bit-exact formula tests |
 
 Hardware tests are skipped automatically when no `/dev/xdma0_*` nodes
 exist. `tests/fake_native.py` provides a scriptable stand-in for the
