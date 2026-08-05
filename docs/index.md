@@ -51,6 +51,8 @@ Confusing them causes hard-to-debug hardware elaboration errors.
 
 - [FPGA Verification Platform (xc7k480t)](implementations/FPGA_XC7K480T.md) — PCIe Gen2×8 + dual DDR3 + K=32 MMALU on Kintex-7; timing closure history and 200 MHz fabric architecture
 
+- [Python Driver (chisel_npu_py)](implementations/PythonDriver.md) — userspace XDMA driver with a pybind11 address-owning C++ boundary and a numpy-first Python API
+
 ---
 
 ## Tutorials

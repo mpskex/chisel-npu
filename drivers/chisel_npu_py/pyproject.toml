@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=64", "pybind11>=2.12"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chisel-npu-py"
+version = "0.1.0"
+description = "Python userspace driver for the Chisel NPU over the Xilinx XDMA kernel driver"
+readme = "README.md"
+license = "GPL-2.0"
+requires-python = ">=3.9"
+# numpy<2: the FPGA host CPU (AMD G-T56N, no SSE4.2) cannot run numpy 2.x
+# wheels (x86-64-v2 baseline) — they die with SIGILL.
+dependencies = ["numpy>=1.24,<2"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: C++",
+    "Programming Language :: Python :: 3",
+    "Topic :: System :: Hardware",
+]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+packages = ["chisel_npu_py"]
+
+[tool.setuptools.package-data]
+chisel_npu_py = ["native_src/*.cpp", "native_src/*.h"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "hw: requires the FPGA board with XDMA device nodes (/dev/xdma0_*)",
+    "slow: slow tests (large DMA transfers)",
+]
