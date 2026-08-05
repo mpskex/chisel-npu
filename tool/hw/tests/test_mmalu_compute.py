@@ -77,7 +77,8 @@ def _kick_and_collect(xdma_dev: XDMADevice,
     OUT = np.frombuffer(out_bytes, dtype=np.int32).copy()
     # Sentinel check: any OUT word still 0xCCCCCCCC means c2h read fired
     # before write-back completed, or the NPU never wrote at all.
-    sentinel = np.int32(0xCCCCCCCC)
+    # 0xCCCCCCCC as int32 = -858993460 (numpy rejects the unsigned literal).
+    sentinel = np.int32(-858993460)
     assert not np.any(OUT == sentinel), (
         f"OUT[{np.where(OUT == sentinel)[0].tolist()}] still 0xCCCCCCCC — "
         "DMA write-back did not happen for those lanes."

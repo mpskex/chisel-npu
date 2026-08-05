@@ -1,13 +1,11 @@
 """CtrlLite — NPU control register protocol.
 
-The ctrl_lite register lives at BAR2 (bypass BAR) offset 0x00:
+The ctrl_lite register lives inside the native module at a fixed BAR
+offset; Python only sees the bit protocol:
 
   bit 0  start  W    write 1 → one-cycle start pulse (self-clears, edge-triggered)
   bit 1  done   RO   latched 1 when the NPU DMA master finishes (cleared on next start)
   bit 2  busy   RO   level; 1 while the NPU DMA master FSM is active
-
-Register reads/writes go through the native module; only the bit protocol
-lives here so it can be unit-tested without hardware.
 """
 
 from __future__ import annotations
@@ -22,10 +20,10 @@ class CtrlLite:
         self._dev = dev
 
     def read(self) -> int:
-        return self._dev.reg_read(consts.CTRL_REG)
+        return self._dev.ctrl_read()
 
     def write(self, value: int) -> None:
-        self._dev.reg_write(consts.CTRL_REG, value)
+        self._dev.ctrl_write(value)
 
     def kick(self) -> None:
         """Write start=1 to trigger the NPU DMA+MMA cycle."""

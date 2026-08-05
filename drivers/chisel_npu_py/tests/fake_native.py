@@ -1,15 +1,18 @@
 """FakeNative — pure-Python stand-in for the pybind11 `_native` module.
 
-Implements the same public interface and the same validation invariants
-(alignment, length multiples, DDR window, staging size checks) so that the
-Python-side logic (XDMADevice / CtrlLite / ChiselNPU) can be unit-tested
-without the compiled extension or hardware.
+It is the test double of the C++ side, so it keeps DDR addresses INTERNAL
+(just like native.cpp); its public interface is the same data-only surface:
+write_staged/read_staged/operand_size/ctrl_read/ctrl_write.
+
+Validation invariants mirror native.cpp (alignment, length multiples,
+size-checked operands) so Python-side logic is unit-tested against the
+same contract.
 
 Register behaviour is scriptable:
-  * by default, the ctrl_lite 'done' latch asserts after two register reads
-    following a kick (start bit set) — mirrors the hardware done latch;
-  * set `scripted_timeout = True` to keep 'busy' asserted forever (wait_done
-    must then time out).
+  * by default, the ctrl_lite 'done' latch asserts after two ctrl_read
+    calls following a kick (start bit set) — mirrors the hardware latch;
+  * set `scripted_timeout = True` to keep 'busy' asserted forever
+    (wait_done must then time out).
 """
 
 from __future__ import annotations
@@ -17,6 +20,19 @@ from __future__ import annotations
 import numpy as np
 
 from chisel_npu_py import consts
+
+# Internal staging table (addresses never cross the fake's public API) —
+# mirrors native.cpp's kStaging.
+_STAGING: dict[str, tuple[int, int]] = {
+    "A":     (0x4000_0000, 32),    # int8[K]
+    "B":     (0x4000_0100, 32),    # int8[K]
+    "ACCUM": (0x4000_0200, 128),   # int32[K]
+    "OUT":   (0x4000_0400, 128),   # int32[K]
+}
+
+_CTRL_REG = 0x00
+_DDR_BASE = 0x0000_0000
+_DDR_SIZE = 0x1_0000_0000
 
 _SENTINEL = b"\x00" * 4096
 
@@ -41,47 +57,26 @@ class FakeNative:
             raise ValueError("address must be 4-byte aligned")
         if nbytes % 4:
             raise ValueError("length must be a multiple of 4 bytes")
-        if addr < consts.DDR_BASE or addr + nbytes > consts.DDR_BASE + consts.DDR_SIZE:
+        if addr < _DDR_BASE or addr + nbytes > _DDR_BASE + _DDR_SIZE:
             raise ValueError("address range outside the 4 GB DDR window "
                              "(0x00000000..0xFFFFFFFF)")
 
-    def _raw_bytes(self, data) -> tuple[bytes, int]:
+    @staticmethod
+    def _raw_bytes(data) -> tuple[bytes, int]:
         arr = np.ascontiguousarray(data)
         return arr.tobytes(), int(arr.nbytes)
 
-    # ── DMA ─────────────────────────────────────────────────────────────────
-
-    def dma_write(self, data, addr: int) -> int:
-        raw, nbytes = self._raw_bytes(data)
-        self._validate(int(addr), nbytes)
-        self.mem[int(addr)] = raw
-        return nbytes
-
-    def dma_read_raw(self, addr: int, nbytes: int) -> bytes:
-        self._validate(int(addr), int(nbytes))
-        return self.mem.get(int(addr), _SENTINEL)[: int(nbytes)]
-
-    def dma_read_into(self, out, addr: int) -> int:
-        addr = int(addr)
-        if isinstance(out, np.ndarray):
-            raw = self.mem.get(addr, b"\x00" * out.nbytes)[: out.nbytes]
-            out[...] = np.frombuffer(raw, dtype=out.dtype).reshape(out.shape)
-            return out.nbytes
-        raw = self.mem.get(addr, b"\x00" * len(out))[: len(out)]
-        out[:] = raw
-        return len(out)
-
-    # ── staged operands ─────────────────────────────────────────────────────
-
-    def staging_map(self) -> dict[str, tuple[int, int]]:
-        return {name: (base, size) for name, (base, size) in consts.STAGING.items()}
+    # ── staged operands (data-only surface, like the real native module) ───
 
     def _staged_slot(self, operand: str) -> tuple[int, int]:
-        if operand not in consts.STAGING:
+        if operand not in _STAGING:
             raise ValueError(
                 f"unknown staging operand '{operand}' (expected one of: A, B, ACCUM, OUT)"
             )
-        return consts.STAGING[operand]
+        return _STAGING[operand]
+
+    def operand_size(self, operand: str) -> int:
+        return self._staged_slot(operand)[1]
 
     def write_staged(self, operand: str, data) -> int:
         base, size = self._staged_slot(operand)
@@ -95,28 +90,30 @@ class FakeNative:
 
     def read_staged(self, operand: str, out) -> int:
         base, size = self._staged_slot(operand)
-        if isinstance(out, np.ndarray):
-            if out.nbytes != size:
-                raise ValueError(
-                    f"operand '{operand}' must be exactly {size} bytes, got {out.nbytes}"
-                )
-            return self.dma_read_into(out, base)
-        raise TypeError("out must be a numpy array")
+        if not isinstance(out, np.ndarray):
+            raise TypeError("out must be a numpy array")
+        if out.nbytes != size:
+            raise ValueError(
+                f"operand '{operand}' must be exactly {size} bytes, got {out.nbytes}"
+            )
+        raw = self.mem.get(base, b"\x00" * size)
+        out[...] = np.frombuffer(raw, dtype=out.dtype).reshape(out.shape)
+        return size
 
-    # ── registers (scripted ctrl_lite) ──────────────────────────────────────
+    # ── ctrl_lite control word (scripted) ───────────────────────────────────
 
-    def reg_write(self, offset: int, value: int) -> None:
-        offset, value = int(offset), int(value)
-        self.regs[offset] = value
-        if offset == consts.CTRL_REG and (value & (1 << consts.CTRL_START_BIT)):
-            self._reads_after_kick = 0
-
-    def reg_read(self, offset: int) -> int:
-        offset = int(offset)
-        if offset == consts.CTRL_REG and self._reads_after_kick is not None:
+    def ctrl_read(self) -> int:
+        if self._reads_after_kick is not None:
             self._reads_after_kick += 1
             if self.scripted_timeout:
-                return self.regs.get(offset, 0) | (1 << consts.CTRL_BUSY_BIT)
+                return self.regs.get(_CTRL_REG, 0) | (1 << consts.CTRL_BUSY_BIT)
             if self._reads_after_kick >= 2:
-                self.regs[offset] = self.regs.get(offset, 0) | (1 << consts.CTRL_DONE_BIT)
-        return self.regs.get(offset, 0)
+                self.regs[_CTRL_REG] = self.regs.get(_CTRL_REG, 0) | (
+                    1 << consts.CTRL_DONE_BIT
+                )
+        return self.regs.get(_CTRL_REG, 0)
+
+    def ctrl_write(self, value: int) -> None:
+        self.regs[_CTRL_REG] = int(value)
+        if value & (1 << consts.CTRL_START_BIT):
+            self._reads_after_kick = 0

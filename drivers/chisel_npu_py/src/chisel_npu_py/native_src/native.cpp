@@ -2,10 +2,9 @@
  * native.cpp — pybind11 boundary for the Chisel NPU XDMA driver.
  *
  * This module is the ONLY place that handles file descriptors, raw DDR
- * addresses, register offsets and transfers.  The Python side only passes
- * buffers (numpy arrays, bytes, bytearray, memoryview) and — for raw DMA —
- * the address to use, which is validated here against the DDR window and
- * alignment rules.
+ * addresses, register offsets and transfers.  The Python side only moves
+ * buffers (numpy arrays, bytes, bytearray, memoryview) and names staged
+ * MMALU operands — no address ever crosses the boundary.
  *
  * Backing interface: the Xilinx xdma kernel driver device nodes
  *   /dev/xdma0_h2c_<ch>   host→card DMA (file offset = AXI address)
@@ -30,7 +29,6 @@
 #include <string>
 #include <sys/mman.h>
 #include <unistd.h>
-#include <vector>
 
 namespace py = pybind11;
 
@@ -153,28 +151,6 @@ class NativeXDMA {
 
     std::string prefix() const { return prefix_; }
 
-    // ── Raw DMA ────────────────────────────────────────────────────────────
-    size_t dma_write(py::handle data, uint64_t addr) {
-        py::array arr = to_contiguous(data, "data");
-        const size_t nbytes = static_cast<size_t>(arr.nbytes());
-        validate_transfer(addr, nbytes);
-        return do_pwrite(h2c_fd_, arr.data(), nbytes, addr);
-    }
-
-    size_t dma_read_into(py::handle out, uint64_t addr) {
-        py::array arr = to_contiguous(out, "out", true);
-        const size_t nbytes = static_cast<size_t>(arr.nbytes());
-        validate_transfer(addr, nbytes);
-        return do_pread(c2h_fd_, arr.mutable_data(), nbytes, addr);
-    }
-
-    py::bytes dma_read_raw(uint64_t addr, uint64_t nbytes) {
-        validate_transfer(addr, static_cast<size_t>(nbytes));
-        std::vector<char> buf(static_cast<size_t>(nbytes));
-        do_pread(c2h_fd_, buf.data(), buf.size(), addr);
-        return py::bytes(buf.data(), buf.size());
-    }
-
     // ── Staged MMALU operands (addresses owned here) ───────────────────────
     size_t write_staged(const std::string &operand, py::handle data) {
         const auto &slot = staged_slot(operand);
@@ -198,28 +174,24 @@ class NativeXDMA {
         return do_pread(c2h_fd_, arr.mutable_data(), nbytes, slot.first);
     }
 
-    py::dict staging_map() const {
-        py::dict d;
-        for (const auto &kv : kStaging)
-            d[py::str(kv.first)] =
-                py::make_tuple(kv.second.first, kv.second.second);
-        return d;
+    size_t operand_size(const std::string &operand) const {
+        return staged_slot(operand).second;
     }
 
-    // ── ctrl_lite registers (mmap'd bypass BAR) ────────────────────────────
-    uint32_t reg_read(uint64_t offset) {
-        check_reg_offset(offset);
-        return *reinterpret_cast<volatile uint32_t *>(
-            static_cast<char *>(reg_map_) + offset);
+    // ── ctrl_lite register (mmap'd bypass BAR) ─────────────────────────────
+    // Address-free view for Python: the ctrl_lite block is a single register
+    // at BAR offset 0; all addressing stays here.
+    uint32_t ctrl_read() {
+        return read_reg(kCtrlOffset);
     }
 
-    void reg_write(uint64_t offset, uint32_t value) {
-        check_reg_offset(offset);
-        *reinterpret_cast<volatile uint32_t *>(static_cast<char *>(reg_map_) +
-                                               offset) = value;
+    void ctrl_write(uint32_t value) {
+        write_reg(kCtrlOffset, value);
     }
 
   private:
+    static constexpr uint64_t kCtrlOffset = 0x00;
+
     const std::pair<uint64_t, size_t> &staged_slot(
         const std::string &operand) const {
         auto it = kStaging.find(operand);
@@ -227,6 +199,18 @@ class NativeXDMA {
             throw py::value_error("unknown staging operand '" + operand +
                                   "' (expected one of: A, B, ACCUM, OUT)");
         return it->second;
+    }
+
+    uint32_t read_reg(uint64_t offset) const {
+        check_reg_offset(offset);
+        return *reinterpret_cast<volatile uint32_t *>(
+            static_cast<char *>(reg_map_) + offset);
+    }
+
+    void write_reg(uint64_t offset, uint32_t value) const {
+        check_reg_offset(offset);
+        *reinterpret_cast<volatile uint32_t *>(static_cast<char *>(reg_map_) +
+                                               offset) = value;
     }
 
     void check_reg_offset(uint64_t offset) const {
@@ -250,9 +234,10 @@ class NativeXDMA {
 };
 
 PYBIND11_MODULE(_native, m) {
-    m.doc() = "pybind11 boundary of chisel_npu_py: XDMA fds, DDR addresses, "
-              "ctrl_lite registers and MMALU staging — buffers in, transfers "
-              "out.";
+    m.doc() = "pybind11 boundary of chisel_npu_py: owns XDMA fds, DDR "
+              "addresses, ctrl_lite registers and the MMALU staging table. "
+              "Python only moves buffers (numpy/bytes/bytearray/memoryview) "
+              "and names operands.";
     m.attr("__version__") = "0.1.0";
 
     py::class_<NativeXDMA>(m, "NativeXDMA")
@@ -262,18 +247,11 @@ PYBIND11_MODULE(_native, m) {
              py::arg("prefix") = std::string("/dev/xdma0"), py::arg("h2c_ch") = 0,
              py::arg("c2h_ch") = 0)
         .def_property_readonly("prefix", &NativeXDMA::prefix)
-        .def("dma_write", &NativeXDMA::dma_write, py::arg("data"),
-             py::arg("addr"))
-        .def("dma_read_into", &NativeXDMA::dma_read_into, py::arg("out"),
-             py::arg("addr"))
-        .def("dma_read_raw", &NativeXDMA::dma_read_raw, py::arg("addr"),
-             py::arg("nbytes"))
         .def("write_staged", &NativeXDMA::write_staged, py::arg("operand"),
              py::arg("data"))
         .def("read_staged", &NativeXDMA::read_staged, py::arg("operand"),
              py::arg("out"))
-        .def("staging_map", &NativeXDMA::staging_map)
-        .def("reg_read", &NativeXDMA::reg_read, py::arg("offset"))
-        .def("reg_write", &NativeXDMA::reg_write, py::arg("offset"),
-             py::arg("value"));
+        .def("operand_size", &NativeXDMA::operand_size, py::arg("operand"))
+        .def("ctrl_read", &NativeXDMA::ctrl_read)
+        .def("ctrl_write", &NativeXDMA::ctrl_write, py::arg("value"));
 }

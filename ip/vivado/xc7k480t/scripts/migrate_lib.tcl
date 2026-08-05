@@ -5,6 +5,17 @@
 #   source [file join [file dirname [info script]] migrate_lib.tcl]
 ################################################################################
 
+# ── Jobs count from env (VIVADO_JOBS, default 8) ──────────────────────────────
+proc vivado_jobs {} {
+    if {[info exists ::env(VIVADO_JOBS)]} {
+        set n $::env(VIVADO_JOBS)
+    } else {
+        set n 8
+    }
+    puts "INFO: VIVADO_JOBS=$n"
+    return $n
+}
+
 # ── Resolve the reference XPR ─────────────────────────────────────────────────
 # Priority:
 #   1. XDMA_REF_XPR env var (legacy escape hatch; points at external XPR)
@@ -273,10 +284,12 @@ proc run_impl_and_write_bit {step_name bit_dst} {
     if {$use_launch_runs} {
         # Bootstrap case: use Vivado's run manager which properly links OOC IPs
         reset_run impl_1
-        set_property strategy             {Vivado Implementation Defaults} [get_runs impl_1]
+        set strategy_name [expr {[info exists ::env(VIVADO_IMPL_STRATEGY)] ? $::env(VIVADO_IMPL_STRATEGY) : "Vivado Implementation Defaults"}]
+        puts "INFO: Implementation strategy: $strategy_name"
+        set_property strategy $strategy_name [get_runs impl_1]
         set_property STEPS.ROUTE_DESIGN.ARGS.DIRECTIVE Explore [get_runs impl_1]
         set_property STEPS.POST_ROUTE_PHYS_OPT_DESIGN.IS_ENABLED true [get_runs impl_1]
-        launch_runs impl_1 -jobs 8
+        launch_runs impl_1 -jobs [vivado_jobs]
         wait_on_run impl_1
         set prog [get_property PROGRESS [get_runs impl_1]]
         if {$prog ne "100%"} {

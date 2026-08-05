@@ -5,10 +5,11 @@
 `chisel_npu_py` is the Python userspace driver for the NPU on the FPGA
 verification platform. It sits on top of the Xilinx XDMA kernel driver and
 speaks to the NPU through the same `ctrl_lite` + DMA-staging protocol as the
-C tools (`reg_rw`, `dma_to_device`, `dma_from_device`), but with a strict
+C tools (`reg_rw`, `dma_to_device`, `dma_from_device`), with a strict
 **pybind11 boundary**: the C++ module owns every file descriptor, DDR
 address, register offset and transfer; Python only moves buffers (numpy
-arrays, bytes, bytearray, memoryview).
+arrays, bytes, bytearray, memoryview) and names staged operands. **No DDR
+address or register offset ever appears on the Python side.**
 
 Source: `drivers/chisel_npu_py/` — installed on the FPGA host at
 `~/chisel_npu_py/` with a venv at `~/chisel_npu_py/.venv`.
@@ -19,34 +20,33 @@ tests (pytest, native on FPGA host)
 chisel_npu_py (Python: orchestration, bit protocol, injectable native)
    ├── ChiselNPU   — mmalu(A, B, ACCUM[, OUT]): stage → kick → wait → collect
    ├── CtrlLite    — start/done/busy bit protocol, wait_done
-   ├── XDMADevice  — typed numpy/bytes API over the native module
+   ├── XDMADevice  — write_staged/read_staged/operand_size/ctrl_read/write
    └── _native.so  ── pybind11 C++ module ── owns: fds, DDR addresses,
                                           staging table, alignment, transfers
                               │
                      /dev/xdma0_* (xdma.ko kernel driver)
 ```
 
-## Why a C++ boundary
+## The C++ boundary
 
-Passing raw DDR addresses and `bytes` objects from Python to a kernel
-character device is a footgun: nothing ties the address to the buffer, and
-nothing validates either. In `chisel_npu_py` the pybind11 module
-(`NativeXDMA`) is the **single authority on addresses**:
+The pybind11 module (`NativeXDMA`, in
+`src/chisel_npu_py/native_src/native.cpp`) is the **single authority on
+addresses**:
 
 - DMA uses `pwrite`/`pread` with the file offset as the AXI address — the
   exact semantics of the vendor tools (`cdev_sgdma.c` passes `*pos` into
-  `xdma_xfer_submit`). The C++ layer runs the full-transfer loop and checks
-  every transfer:
-    - `addr % 4 == 0` and `len % 4 == 0` (rejected with `ValueError`),
-    - address range inside the 4 GB DDR window (`0x0000_0000..0xFFFF_FFFF`),
-    - non-zero length.
+  `xdma_xfer_submit`). The C++ layer runs the full-transfer loop and
+  validates every transfer internally (alignment, lengths, address window).
 - Register access maps one page of `/dev/xdma0_bypass` (`bridge_mmap`) and
-  reads/writes 32-bit words at validated offsets — the same mechanism as
-  `reg_rw`.
-- The MMALU **staging table lives in C++** (`kStaging` in `native.cpp`):
-  operands are addressed by *name* (`"A"`, `"B"`, `"ACCUM"`, `"OUT"`) and
-  the byte size is checked against the table. Python cannot misaddress
-  staging memory; wrong-size buffers are rejected.
+  reads/writes the ctrl_lite control word at a fixed offset.
+- The MMALU **staging table lives in C++** (`kStaging`): Python addresses
+  operands by *name* (`"A"`, `"B"`, `"ACCUM"`, `"OUT"`) and the C++ checks
+  the byte size against the table. Wrong names or wrong-size buffers are
+  rejected — Python cannot misaddress staging memory.
+
+The module's public surface is fully address-free: `write_staged(operand,
+data)`, `read_staged(operand, out)`, `operand_size(operand)`,
+`ctrl_read()`, `ctrl_write(value)`.
 
 ## API
 
@@ -61,17 +61,16 @@ acc = np.zeros(32, dtype=np.int32)
 out = npu.mmalu(a, b, acc)                 # int32[32] result (stage→kick→wait→read)
 ```
 
-Lower-level pieces:
+Lower-level pieces (still no addresses):
 
 ```python
 from chisel_npu_py import XDMADevice, CtrlLite
 
 dev = XDMADevice()
-dev.dma_write(0x4000_0000, a)              # raw DMA; address validated in C++
-raw = dev.dma_read(0x4000_0400, 128)       # uint8 ndarray
-words = dev.read_i32(0x4000_0400, 32)      # typed int32 read
-dev.write_staged("A", a)                   # staged operands (size-checked)
-dev.read_staged("OUT", out)
+dev.write_staged("A", a)                   # stage an operand by name
+out = np.empty(32, dtype=np.int32)
+dev.read_staged("OUT", out)                # read an operand into a buffer
+dev.operand_size("ACCUM")                  # 128 (bytes)
 
 ctrl = CtrlLite(dev)
 ctrl.kick()                                # write start=1
@@ -81,23 +80,17 @@ ctrl.is_busy / ctrl.is_done
 
 Buffers accepted anywhere: numpy arrays (copied to C-contiguous when
 needed), `bytes`, `bytearray`, `memoryview`. Read-back into caller-provided
-arrays is zero-copy (`dma_read_into` / `read_staged` with an output buffer);
-non-contiguous or read-only output buffers are rejected rather than
-silently copied.
+arrays is zero-copy (`read_staged` with an output buffer); non-contiguous
+or read-only output buffers are rejected rather than silently copied.
 
-Buffer → device mapping (staging table, authoritative in `native.cpp`,
-mirrored in `chisel_npu_py/consts.py`):
+Staged MMALU operands (sizes are data-side facts; addresses stay in C++):
 
-| Operand | DDR address (MIG C0) | Size | Contents |
-|:--------|:---------------------|:-----|:---------|
-| A       | `0x4000_0000`        | 32 B  | 32 × int8 |
-| B       | `0x4000_0100`        | 32 B  | 32 × int8 |
-| ACCUM   | `0x4000_0200`        | 128 B | 32 × int32 |
-| OUT     | `0x4000_0400`        | 128 B | 32 × int32 |
-
-`XDMADevice.staging_map()` returns the runtime truth from the native
-module; `test_consts.py::test_staging_matches_native_when_built`
-cross-checks it against the Python mirror.
+| Operand | Size | Contents |
+|:--------|:-----|:---------|
+| A       | 32 B  | 32 × int8 |
+| B       | 32 B  | 32 × int8 |
+| ACCUM   | 128 B | 32 × int32 |
+| OUT     | 128 B | 32 × int32 |
 
 ## Deployment on the FPGA host
 
@@ -114,8 +107,8 @@ cross-checks it against the Python mirror.
    interpreter version).
 5. Installs the udev rule `SUBSYSTEM=="xdma", MODE="0666"` and chmods the
    live nodes, so driver and tests run **without sudo**.
-6. Runs `python -m chisel_npu_py selftest` (node discovery, ctrl_lite idle
-   read, 1 KB DDR3 loopback through the pybind boundary).
+6. Runs `python -m chisel_npu_py selftest` (node discovery, ctrl_lite
+   control word, staged OUT round-trip through the pybind boundary).
 
 The wheel produced on the host is
 `chisel_npu_py-0.1.0-cp312-cp312-linux_x86_64.whl`; `make py-build` builds
@@ -125,24 +118,25 @@ an sdist on the dev host for archiving.
 
 | Command | Where | What |
 |:--------|:------|:-----|
-| `make py-test-unit` | dev host | unit/mock tests (25), no hardware |
+| `make py-test-unit` | dev host | unit/mock tests (26), no hardware |
 | `make py-test-hw` | FPGA host (via SSH) | hardware suite, native pytest |
 | `make py-deploy` | FPGA host | install + selftest |
 
 The hardware suite (all PASS on V10 silicon, 14 tests):
 
-- `test_ctrl_lite.py` — BAR access, kick→done, done-latch persistence.
-- `test_loopback.py` — DDR3 C0 loopback 1 KB / 1 MB / 64 MB-high-addr, plus
-  typed `read_i32` round-trip.
+- `test_ctrl_lite.py` — control word access, kick→done, done-latch
+  persistence.
+- `test_loopback.py` — staged round-trips of every operand (DDR3 data
+  integrity through the pybind boundary) plus typed int32 read-back.
 - `test_mmalu_compute.py` — the six MMALU compute tests
   (zero-in/zero-out, ACCUM passthrough, A=0 kills multiplier, multiplier
   alive, and the analytical `OUT[i] = A[i]·B[K-1] + ACCUM[i]` check).
 
 Unit tests inject a pure-Python `FakeNative`
 (`tests/fake_native.py`) that mirrors the native module's validation
-invariants, so all orchestration logic is testable without the compiled
-module or hardware. Hardware tests skip automatically when
-`/dev/xdma0_*` is absent.
+invariants (addresses internal to it, exactly like the C++ side), so all
+orchestration logic is testable without the compiled module or hardware.
+Hardware tests skip automatically when `/dev/xdma0_*` is absent.
 
 ## Gotchas
 
@@ -157,3 +151,5 @@ module or hardware. Hardware tests skip automatically when
   (`make py-deploy` re-runs `pip install .`).
 - Device nodes are root-owned until the udev rule is applied; the deploy
   script fixes this once.
+- `consts.py` deliberately carries no addresses; if you need to know where
+  an operand lives, the staging table is in `native_src/native.cpp`.

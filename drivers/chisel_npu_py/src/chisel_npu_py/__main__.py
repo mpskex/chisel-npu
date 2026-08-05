@@ -3,10 +3,12 @@
 Verifies, in order:
   1. the compiled native extension is importable,
   2. the XDMA device nodes open,
-  3. the ctrl_lite register is readable (idle),
-  4. a 1 KB DDR3 loopback through the native module round-trips.
+  3. the ctrl_lite control word is readable,
+  4. a staged round-trip (write "OUT" → read "OUT") through the pybind11
+     boundary is byte-exact.
 
-Exit code 0 = all good.
+Exit code 0 = all good.  No DDR addresses appear here — the native module
+owns them.
 """
 
 from __future__ import annotations
@@ -14,7 +16,7 @@ from __future__ import annotations
 import sys
 
 
-def selftest(loopback_addr: int = 0x0, loopback_size: int = 1024) -> int:
+def selftest() -> int:
     import numpy as np
 
     from .errors import XDMAError
@@ -34,7 +36,7 @@ def selftest(loopback_addr: int = 0x0, loopback_size: int = 1024) -> int:
 
     print(f"  package version    : {__version__} (native {native_version})")
     print(f"  device prefix      : /dev/xdma0")
-    print(f"  staging table      : {consts.STAGING}")
+    print(f"  staged operands    : { {op: None for op in consts.OPERANDS} }")
 
     try:
         dev = XDMADevice()
@@ -42,7 +44,8 @@ def selftest(loopback_addr: int = 0x0, loopback_size: int = 1024) -> int:
         print(f"FAIL: cannot open device: {exc}")
         return 3
     print(f"  device nodes       : {len(XDMADevice.list_nodes())} present")
-    print(f"  native staging map : {dev.staging_map()}")
+    sizes = {op: dev.operand_size(op) for op in consts.OPERANDS}
+    print(f"  operand sizes (B)  : {sizes}")
 
     ctrl = CtrlLite(dev)
     idle = ctrl.read()
@@ -51,18 +54,20 @@ def selftest(loopback_addr: int = 0x0, loopback_size: int = 1024) -> int:
         print("FAIL: ctrl_lite read returned all-ones (PCIe/BAR error)")
         return 4
 
+    size = sizes["OUT"]
     rng = np.random.default_rng(0x5151)
-    data = rng.integers(0, 256, size=loopback_size, dtype=np.uint8)
+    data = rng.integers(0, 256, size=size, dtype=np.uint8)
     try:
-        dev.dma_write(loopback_addr, data)
-        readback = dev.dma_read(loopback_addr, loopback_size)
+        dev.write_staged("OUT", data)
+        got = np.empty(size, dtype=np.uint8)
+        dev.read_staged("OUT", got)
     except Exception as exc:
-        print(f"FAIL: loopback transfer failed: {exc}")
+        print(f"FAIL: staged round-trip failed: {exc}")
         return 5
-    if not np.array_equal(readback, data):
-        print("FAIL: 1 KB DDR3 loopback data mismatch")
+    if not np.array_equal(got, data):
+        print("FAIL: staged round-trip data mismatch")
         return 6
-    print(f"  DDR3 loopback      : {loopback_size} bytes @ 0x{loopback_addr:X} OK")
+    print(f"  staged round-trip  : 'OUT' {size} B write→read OK")
 
     print("PASS")
     return 0

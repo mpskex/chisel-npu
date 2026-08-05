@@ -2,14 +2,14 @@
 
 Port of tool/hw/tests/test_mmalu_compute.py onto the new driver API.  The
 six tests exercise the full cycle through the pybind11 boundary:
-stage A/B/ACCUM (native owns the DDR addresses) → kick → wait done → read
-OUT back into a numpy buffer.
+stage A/B/ACCUM (by name — the native module owns the DDR addresses) →
+kick → wait done → read OUT back into a numpy buffer.
 
-Memory map (MIG C0, see chisel_npu_py.consts.STAGING):
-    A     @ 0x4000_0000  32 B int8
-    B     @ 0x4000_0100  32 B int8
-    ACCUM @ 0x4000_0200 128 B int32
-    OUT   @ 0x4000_0400 128 B int32
+Staged operands (sizes only; addresses live in native.cpp):
+    A     int8[K]     K bytes
+    B     int8[K]     K bytes
+    ACCUM int32[K]    4·K bytes
+    OUT   int32[K]    4·K bytes
 """
 
 from __future__ import annotations

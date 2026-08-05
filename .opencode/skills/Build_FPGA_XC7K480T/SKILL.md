@@ -1,241 +1,199 @@
 ---
 name: build-fpga-xc7k480t
-description: Use when building the NPU FPGA bitstream for xc7k480tffg1156-2 — includes the squashed Vivado build flow (build_npu.tcl and build_npu_with_ila.tcl), bootstrap_project.tcl, the consolidated _apply_npu_topology.tcl BD library, ILA insertion, and bitstream configuration. Also use when modifying BD topology, RTL source (npu_ctrl_lite.v, npu_dma_master.v, npu_subsys.v), or Chisel top.sv regeneration.
+description: Use when building the NPU FPGA bitstream for xc7k480tffg1156-2 — includes the squashed Vivado build flow (build_npu.tcl and build_npu_with_ila.tcl), bootstrap_project.tcl, the consolidated _apply_npu_topology.tcl BD library, ILA insertion, bitstream configuration, MMALU pipeline timing closure, and Makefile quick-build targets.
 ---
 
 # FPGA Bitstream Build — xc7k480t (Vivado 2025.2)
 
-## Quick build (production, no ILA)
+## Environment setup
+
+Source `.env.sh` at repo root to set all paths:
 
 ```bash
-cd /path/to/chisel-npu
+source .env.sh    # sets VIVADO, FPGA_HOST, SSH_IDENTITY, CHIP, VIVADO_JOBS, VIVADO_IMPL_STRATEGY
+```
 
-# Step 1 (if Chisel sources changed): regenerate top.sv
-make build   # runs sbt inside fangruil/chisel-dev:amd64 Docker
+## Quick build via Makefile
 
-# Step 2: build bitstream (auto-bootstraps proj/ on first run, ~75 min cold)
-~/Xilinx/2025.2/Vivado/bin/vivado -mode batch \
-    -source  ip/vivado/xc7k480t/scripts/build_npu.tcl \
-    -journal ip/vivado/xc7k480t/scripts/build_npu.jou \
-    -log     ip/vivado/xc7k480t/scripts/build_npu.log
+```bash
+# Step 1: regenerate top.sv (if Chisel sources changed)
+make build                     # runs sbt inside Docker
+
+# Step 2: build bitstream via Vivado
+make build-fpga                # uses $VIVADO, $VIVADO_JOBS, $VIVADO_IMPL_STRATEGY
+
+# Step 3: build with ILA debugger
+make build-fpga-debug
+
+# Step 4: clean bootstrapped project
+make build-fpga-clean
+```
+
+Override variables:
+
+```bash
+make build-fpga VIVADO=~/Vivado/2025.2/Vivado/bin/vivado VIVADO_JOBS=2 VIVADO_IMPL_STRATEGY=Performance_Explore
 ```
 
 Output: `ip/vivado/xc7k480t/top_npu.bit` (~18 MB).
 
-## Quick build (with ILA debugger core)
+## Manual Vivado build
 
 ```bash
 ~/Xilinx/2025.2/Vivado/bin/vivado -mode batch \
-    -source  ip/vivado/xc7k480t/scripts/build_npu_with_ila.tcl \
-    -journal ip/vivado/xc7k480t/scripts/build_npu_with_ila.jou \
-    -log     ip/vivado/xc7k480t/scripts/build_npu_with_ila.log
+    -source  ip/vivado/xc7k480t/scripts/build_npu.tcl \
+    -journal build/build_npu_xc7k480t.jou \
+    -log     build/build_npu_xc7k480t.log
 ```
 
-Outputs:
-- `ip/vivado/xc7k480t/top_npu_with_ila.bit` (~18 MB)
-- `ip/vivado/xc7k480t/top_npu_with_ila.ltx` (~80 KB, probes file for HW Manager)
+## Environment variables
 
-Both scripts deliver the same NPU topology — only `build_npu_with_ila.tcl`
-inserts the `u_npu_ila` debug core wired to every `(* mark_debug *)` net.
+| Variable | Default | Description |
+|:---------|:--------|:------------|
+| `VIVADO` | `$HOME/Vivado/2025.2/Vivado/bin/vivado` | Vivado binary path |
+| `VIVADO_JOBS` | `4` | Parallel OOC synth + impl jobs; lower to `1` or `2` on memory-constrained hosts |
+| `VIVADO_IMPL_STRATEGY` | `Performance_Explore` | Vivado impl strategy; see Vivado docs for alternatives |
+| `CHIP` | `xc7k480t` | Target chip directory under `ip/vivado/` |
+| `FPGA_HOST` | `fpga` | SSH target for the FPGA server |
+| `SSH_IDENTITY` | `$HOME/.ssh/id_fpga_local` | SSH private key for FPGA server access |
+| `HW_SERVER` | `localhost:3121` | Vivado hw_server URL for JTAG |
 
----
+## Architecture
 
-## Directory layout
+### AXI topology (V10)
 
 ```
-ip/vivado/xc7k480t/         ← production NPU build (this directory)
-  scripts/
-    build_npu.tcl              ← PRODUCTION (no ILA)
-    build_npu_with_ila.tcl     ← DEBUG (with ILA)
-    _apply_npu_topology.tcl    ← squashed V1..V10 BD-delta library
-                                  (apply_npu_topology auto-detects state)
-    _apply_npu_ila.tcl         ← post-synth ILA insertion helper
-    bootstrap_project.tcl      ← first-run project bootstrap (auto-called)
-    migrate_lib.tcl            ← shared helpers
-  src/
-    npu_ctrl_lite.v            ← AXI4-Lite CTRL/STATUS slave (BAR2+0x0)
-    npu_dma_master.v           ← AXI4 master FSM, K=32 — contains the V10
-                                  S_WR_W write-phase fix and mark_debug tags
-    npu_subsys.v               ← wrapper (ctrl_lite + dma_master + MMALU)
-                                  — instantiated as a single BD cell
-  top_npu_with_ila.ltx          ← committed reference probes file
+Host PCIe Gen2 x8
+  │
+  XDMA 4.2 (125 MHz)
+  ├── M_AXI ─► axi_cc_xdma_in (125→200) ─► axi_clkconv_xdma (200→133) ─► axi_dwidth_xdma (128→512) ─► axi_xbar.S00
+  │                                                                                                        │
+  ├── M_AXI_BYPASS ─► axi_clkconv_byp (125→200) ─► byp_dw (128→32) ─► byp_pc ─► npu_subsys/s_axil        │
+  │                                                                                                        │
+  axi_xbar (2S:2M, 4 GB address space: 0x0000_0000 → C0, 0x8000_0000 → C1)
+    ├── M00 ─► MIG C0 (DDR3, 2 GB)
+    └── M01 ─► MIG C1 (DDR3, 2 GB)
 
-ip/vivado/xc7k480t.reference/   ← committed XCI/BD sources for bootstrap
-  src/bd/top.bd               ← V7-equivalent BD JSON
-  src/bd/ip/                  ← IP XCI descriptors
-  src/mig_a.prj               ← MIG DDR3 memory config
-  scripts/recreate_bd.tcl     ← BD recreation recipe (write_bd_tcl output)
-  constrs/IO_Port.xdc         ← pin assignments
-
-ip/vivado/xc7k480t/proj/      ← gitignored, generated by bootstrap
-top.sv                        ← Chisel MMALU netlist (repo root, generated)
+npu_subsys (200 MHz fabric):
+  ctrl_lite + npu_dma_master + MMALU(K=32, N=8, acc=32)
+    m_axi ─► axi_clkconv_npu (200→133) ─► axi_dwidth_npu (128→512) ─► axi_xbar.S01
 ```
 
----
+### Clock domains
 
-## Bootstrap (first-run project creation)
+| Domain | Frequency | Source |
+|:-------|:---------:|:-------|
+| axi_aclk | 125 MHz | XDMA PCIe refclock |
+| fabric_aclk (clk_out1) | 200 MHz | clk_wiz_fabric MMCM (8×/5 from 125 MHz) |
+| c0_ui_clk | 133 MHz | MIG C0 PLL |
+| c1_ui_clk | 133 MHz | MIG C1 PLL |
 
-`bootstrap_project.tcl` is called automatically when
-`ip/vivado/xc7k480t/proj/npu_migrate.xpr` does not exist. It:
+## MMALU timing closure history
 
-1. Creates a fresh Vivado project (part `xc7k480tffg1156-2`).
-2. Sources `xc7k480t.reference/scripts/recreate_bd.tcl` — creates the
-   V7-equivalent BD with all cells via `create_bd_cell` TCL.
-3. Copies `mig_a.prj` alongside the MIG XCI (required for MIG to load).
-4. Runs `generate_target all` (~10–20 min cold cache).
-5. Runs `make_wrapper`, `launch_runs synth_1 -jobs 8`, waits for ALL runs.
-6. Copies IP DCPs from gen/ → srcs/ (Vivado INBB-3 workaround for impl).
-7. `open_run synth_1` + `write_checkpoint` to merge OOC DCPs.
+### Initial failure (2026-07-30)
 
-**If bootstrap fails:** delete `proj/` and retry:
+First build of V10 (K=32) at 200 MHz showed:
+
+| Metric | Value |
+|:-------|:-----:|
+| WNS (clk_out1) | -0.151 ns |
+| TNS (clk_out1) | -1.203 ns |
+| Failing endpoints | 24 |
+| Critical path | `reg_h_731` → 8×CARRY4 + 5×LUT → `MMPE_755/res` |
+| Logic levels | 13 |
+| Route delay % | 60.8% |
+
+**Root cause**: The systolic array horizontal register (`reg_h` at position 731 in the 32×32 array) drove a combinatorial path through the PE's multiply-accumulate chain (32-bit adder = 8 CARRY4 + multiplier logic) directly to the PE's `res` register. With span across the die, routing delay dominated.
+
+### Fix: SA→PE pipeline registers
+
+Added one pipeline stage between the `SystolicArray2D` outputs and the `MMPE` inputs in `src/main/scala/alu/mma/mma.scala`:
+
+```scala
+val pipe_a    = RegInit(VecInit(Seq.fill(n * n)(0.S(nbits.W))))
+val pipe_b    = RegInit(VecInit(Seq.fill(n * n)(0.S(nbits.W))))
+val pipe_accum = RegInit(VecInit(Seq.fill(n)(0.S(accum_nbits.W))))
+val pipe_ctrl = RegInit(VecInit(Seq.fill(n * n)(0.U.asTypeOf(new NCoreMMALUCtrlBundle()))))
+val pipe_dat_clct  = RegNext(false.B)
+val pipe_use_accum = RegNext(false.B)
+val pipe_clct      = RegNext(false.B)
+```
+
+This breaks the critical path into two segments of ~6-7 logic levels each. Adds 1 cycle to MMALU latency (3n−1 instead of 3n−2).
+
+Pipe registers also added for:
+- `accum_in` (pipe_accum) — matches the data pipeline delay
+- `dat_clct`, `use_accum`, `clct` — matches the control pipeline delay
+
+### Test impact
+
+The MMALU test specs in `MMALUSpec.scala` and `MMALUStreamReduceSpec.scala` expect output at specific tick counts. All output windows shifted by +1:
+
+- `2n−2` → `2n−1` (first output tick)
+- `3n−2` → `3n−1` (loop bound and second window)
+- `4n−2` → `4n−1` (second output window end)
+- `(f+1)·K − 2` → `(f+1)·K − 1` (stream reduce frame base)
+
+### Result
+
+| Metric | Before | After | Improvement |
+|:-------|:------:|:-----:|:-----------:|
+| WNS | -0.151 ns | -0.051 ns | 66% reduction |
+| TNS | -1.203 ns | -2.712 ns | — |
+| Logic levels | 13 | 6-7 | 50% reduction |
+| Latency (K=32) | 3n−2 = 94 cyc | 3n−1 = 95 cyc | +1 cycle |
+
+### Remaining timing issues
+
+The remaining -0.051 ns violation may be further reduced by:
+- Adding another pipeline stage in the PE multiplier (register the multiply result)
+- Reducing the fabric clock to 175 MHz (5.714 ns period, giving ~0.7 ns margin)
+- Using `Performance_ExtraTimingOpt` impl strategy
+- Setting `phys_opt_design -retime` in the Vivado script
+
+## Memory management for OOC synthesis
+
+The XDMA IP OOC synthesis requires ~3.4 GB peak. With 20 OOC IPs running in parallel:
+
+| `VIVADO_JOBS` | Peak memory | Build time (first, cold cache) |
+|:-------------:|:-----------:|:------------------------------:|
+| 8 | >19 GB (OOM) | — |
+| 4 | ~15 GB | OOM on XDMA |
+| 2 | ~10 GB | ~110 min |
+| 1 | ~7 GB | ~140 min |
+
+**Recommendation**: `VIVADO_JOBS=2` for the first build (cold cache), `VIVADO_JOBS=4` for incremental builds on the bootstrapped project.
+
+## Bring-up flow (SSH-based)
+
+After bitstream built, use `python3 tool/hw/bringup_ssh.py`:
+
 ```bash
-rm -rf ip/vivado/xc7k480t/proj/
+source .env.sh
+# Flash BPI + JTAG SRAM + reboot + run tests:
+python3 tool/hw/bringup_ssh.py --host "$FPGA_HOST" ip/vivado/xc7k480t/top_npu.bit
+# Skip flash, skip JTAG (if bitstream already loaded):
+python3 tool/hw/bringup_ssh.py --host "$FPGA_HOST" --skip-flash --skip-jtag ip/vivado/xc7k480t/top_npu.bit
 ```
 
----
+Or step by step:
 
-## NPU topology (delivered by both build scripts)
-
+```bash
+make test-hw FPGA_HOST=10.16.0.31   # run pytest HW tests
 ```
-XDMA (axi_aclk = 125 MHz)
-  M_AXI        → axi_cc_xdma_in (125→200 MHz)
-                  → axi_clkconv_xdma (200→133 MHz)
-                  → axi_dwidth_xdma (128→512 bit)
-                  → axi_xbar.S00 (c0_ui_clk)
-  M_AXI_BYPASS → axi_clkconv_byp (125→200 MHz)
-                  → byp_dw (128→32) → byp_pc
-                  → npu_subsys/s_axil_* (ctrl_lite at BAR2+0x0)
-
-axi_xbar (axi_interconnect 2S:2M, c0_ui_clk, 512-bit):
-  S00 ◄── XDMA path                                   (c0_ui_clk)
-  S01 ◄── axi_dwidth_npu/M_AXI (NPU path)             (c0_ui_clk)
-  M00 ──► mig_7series_0/S0_AXI  (MIG C0)              (c0_ui_clk)
-  M01 ──► mig_7series_0/S1_AXI  (MIG C1, async-FIFO CDC)  (c1_ui_clk)
-
-  Address map (identical on both slaves):
-    0x0000_0000..0x7FFF_FFFF → MIG C0 (2 GB)
-    0x8000_0000..0xFFFF_FFFF → MIG C1 (2 GB)
-
-npu_subsys (single BD module cell, fabric_aclk = 200 MHz):
-  ctrl_lite (CTRL/STATUS @ BAR2+0x0)
-  npu_dma_master (AXI4 master, 128-bit, K=32, fixed S_WR_W)
-  MMALU (K=32, N=8, 32-bit accumulators; from top.sv)
-
-  m_axi → axi_clkconv_npu (200→133 MHz, c0_ui_clk M-side)
-        → axi_dwidth_npu  (128→512 bit, c0_ui_clk both sides)
-        → axi_xbar.S01
-
-  Default operand region (in MIG C0):
-    A     @ 0x0_4000_0000   32 B  (int8 × 32)
-    B     @ 0x0_4000_0100   32 B  (int8 × 32)
-    ACCUM @ 0x0_4000_0200  128 B  (int32 × 32)
-    OUT   @ 0x0_4000_0400  128 B  (int32 × 32)
-```
-
-The V0 vendor reference used a SmartConnect; V6 removed it because routing
-M00_AXI through an external CDC broke its `aclk1` domain inference. The
-current topology uses standalone `axi_clkconv` + `axi_dwidth` chains on
-both XDMA and NPU paths and a single `axi_interconnect` (V10) crossbar to
-the MIG channels.
-
----
-
-## Bring-up history (V0..V10, squashed)
-
-`_apply_npu_topology.tcl` defines internal `_npu_step_*` procs that
-encapsulate each historical step. They are called by the public
-`apply_npu_topology` proc, which detects which steps are already done and
-applies only the missing ones.
-
-| Step | Internal proc | What it adds |
-|:-----|:--------------|:-------------|
-| V0 baseline | (vendor reference) | XDMA + MIG + MicroBlaze + SmartConnect |
-| V1 | `_npu_step_remove_mb` | Drop MicroBlaze + clk_wiz; replace MIG S\*\_AXI\_CTRL with idle VIP |
-| V2 | `_npu_step_bypass_ctrl` | BYPASS-BAR path + `ctrl_lite` |
-| V3 | `_npu_step_mmcm` | `clk_wiz_fabric` (125→200 MHz) + `rst_fabric_200M` |
-| V4 | `_npu_step_byp_cdc` | `axi_clkconv_byp` + move BYPASS chain to fabric |
-| V5 | `_npu_step_xdma_cc` | `axi_cc_xdma_in` (125→200) on M_AXI path |
-| V6 | `_npu_step_remove_smc` | Drop `axi_smc`, install flat clkconv+dwidth chain to MIG C0 |
-| V7 | `_npu_step_dma_master` | `npu_dma_master` + AXI chain to MIG C1 |
-| V10 | `_npu_step_xbar_and_subsys` | Squash separate cells into `npu_subsys`, insert `axi_xbar` 2S:2M, unify 4 GB address map |
-
-The bootstrap project starts at V7-equivalent state, so on a fresh build
-only `_npu_step_xbar_and_subsys` actually executes.
-
----
-
-## Key bitstream settings
-
-Applied in `migrate_lib.tcl::run_impl_and_write_bit` before `write_bitstream`:
-
-```tcl
-set_property CONFIG_MODE                 SPIx1 [current_design]
-set_property BITSTREAM.CONFIG.CONFIGRATE 3     [current_design]
-```
-
-Target COR0 = `0x02003fe5` (no `PERSIST=YES` — that bit delays DONE and
-breaks AMD FCH cold-boot training). Check with:
-
-```python
-python3 -c "
-import struct
-data = open('ip/vivado/xc7k480t/top_npu.bit','rb').read(400)
-for i in range(len(data)-4):
-    if data[i:i+4] == b'\xaa\x99\x55\x66':
-        for j in range(i+4, i+100, 4):
-            if struct.unpack('>I',data[j:j+4])[0]==0x30008001:
-                print(hex(struct.unpack('>I',data[j+4:j+8])[0]))
-        break
-"
-```
-
----
-
-## RTL source files
-
-### `npu_ctrl_lite.v`
-AXI4-Lite slave at BAR2+0x0. Single 32-bit CTRL register:
-- bit[0] W: `start` — 1-cycle pulse to DMA master (self-clears)
-- bit[1] RO: `done` — asserted when DMA write-back finishes
-- bit[2] RO: `busy` — asserted while DMA is active
-
-### `npu_dma_master.v`
-AXI4 master (128-bit, 64-bit addr, K=32). Reads matrices A/B/ACCUM from
-MIG C0 (default base `0x0_4000_0000`), kicks MMALU, waits for `io_clct`,
-writes result back. Uses pipelined AXI read beats (ARLEN=1 for 32 B
-matrices, ARLEN=7 for 128 B accumulator/result).
-
-Contains:
-- **V10 S_WR_W write-phase fix**: pre-loads `m_axi_wdata` at the
-  `S_WR_AW → S_WR_W` transition and advances to `out_buf[(beat_cnt+1)*4]`
-  inside the IF branch. This fixed the off-by-one OUT shift that was
-  observed during V10 bring-up.
-- `(* mark_debug = "true" *)` tags on `state`, `beat_cnt`, `rpipe_valid`,
-  `rlast_pipe`, `rdata_pipe`, and AXI handshake shadow regs. These are
-  picked up by `_apply_npu_ila.tcl` when building with ILA.
-
-### `npu_subsys.v`
-Wrapper instantiating `npu_ctrl_lite` + `npu_dma_master` + `MMALU` (from
-`top.sv`). Exposed as a BD module cell with flat `s_axil_*` and `m_axi_*`
-ports plus `c0/c1_init_calib_complete` status inputs. This is the V10
-consolidation that ensures the MMALU is actually wired into the BD.
-
-### `top.sv` (repo root)
-Chisel-generated SystemVerilog for the `MMALU` module (K=32, N=8, 32-bit
-accumulators). Generated by `make build` inside `fangruil/chisel-dev:amd64`
-Docker. 1.7 MB, firtool-1.62.1.
-
----
 
 ## Troubleshooting
 
 | Problem | Fix |
 |:--------|:----|
-| Build exits immediately — no project | Run `bootstrap_project.tcl` manually in Vivado TCL, or `rm -rf proj/` and re-run `build_npu.tcl` |
-| OOC synthesis stalls | Check `proj/npu_migrate.runs/top_xdma_0_0_synth_1/runme.log` |
-| WNS < 0 after impl on the MMALU PE path | Expected variability; the failing path is inside an MMALU MAC carry chain, not on the V10 data plane. The DMA/control plane still operates correctly |
-| Black-box errors (`INBB-3`) during impl | IP DCPs not copied to `IP_DIR`; the build script handles this — verify `proj/.../sources_1/bd/top/ip/*/...dcp` files exist after synth |
+| Build exits immediately — no project | Run `bootstrap_project.tcl` manually, or `rm -rf proj/` and re-run `build_npu.tcl` |
+| OOC XDMA gets killed (OOM) | Reduce `VIVADO_JOBS` to 1 or 2 |
+| `reset_run synth_1` fails (process not found) | `rm -f proj/npu_migrate.runs/synth_1/*.wdf` |
+| `reset_run` followed by `launch_runs` fails | `rm -f proj/.../runs/synth_1/top_wrapper.dcp` first |
+| WNS < 0 after impl on MMALU PE path | Expected; pipeline registers in `mma.scala` mitigate. For full closure, add PE multiplier pipeline or reduce fabric clock to 175 MHz |
+| Black-box errors (`INBB-3`) during impl | IP DCPs not copied to `IP_DIR`; verify `proj/.../sources_1/bd/top/ip/*/dcp` exist after synth |
 | `module top_wrapper not found` | `top_wrapper.v` not in fileset; re-run bootstrap |
-| `is not addressable by /xdma_0/M_AXI_BYPASS` (warning) | Non-fatal info from the V1 step — the MIG S\*\_AXI\_CTRL segments are intentionally excluded from BYPASS now |
-| Chisel `top.sv` compile errors (Scala) | The Scala sources have compile errors in some test specs; the `top.Main` entry point still elaborates the MMALU. Use the existing `top.sv` if it already exists |
-| Sources already connected error during BD apply | `apply_npu_topology` detects state but if proj/ is in a half-applied state from a killed prior build, `rm -rf proj/` and rebuild from scratch |
+| `is not addressable by /xdma_0/M_AXI_BYPASS` | Non-fatal info from V1 step |
+| Sources already connected during BD apply | `rm -rf proj/` and rebuild from scratch |
+| PCIe not found after warm reboot | Passwordless sudo not configured on FPGA host: `echo "mpsk ALL=(ALL) NOPASSWD: ALL" \| sudo tee /etc/sudoers.d/mpsk` |
+| xdma.ko `Invalid module format` | Kernel updated; rebuild: `cd ~/dma_ip_drivers/XDMA/linux-kernel/xdma && make` |

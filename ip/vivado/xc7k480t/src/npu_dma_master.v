@@ -162,6 +162,18 @@ module npu_dma_master #(
     (* mark_debug = "true" *) reg                       rlast_pipe;
     (* mark_debug = "true" *) reg                       rpipe_valid;
 
+    // -----------------------------------------------------------------------
+    // Fix B: read-timeout retry.  The 128→512 axi_dwidth_npu converter +
+    // axi_xbar S01 path intermittently DROPS an entire AXI read transaction
+    // (the AR is accepted but RVALID never comes back — observed as the FSM
+    // stuck in S_READ_B_R with rvalid=0 forever).  A retry counter in each
+    // read-data state re-issues the AR when no beat arrives for
+    // READ_TIMEOUT_MAX cycles.  Since the lost transaction never responds,
+    // re-issuing cannot produce duplicate data.
+    // -----------------------------------------------------------------------
+    localparam [15:0] READ_TIMEOUT_MAX = 16'h4000;   // 16384 cyc @ 200 MHz = 82 µs
+    (* mark_debug = "true" *) reg [15:0] read_timeout_cnt;
+
     // ──────────────────────────────────────────────────────────────────────
     // ILA debug shadows for the AXI read-handshake signals (which are
     // module ports — we can't tag them directly with mark_debug, so we
@@ -244,6 +256,7 @@ module npu_dma_master #(
             busy              <= 1'b0;
             done              <= 1'b0;
             beat_cnt          <= 4'd0;
+            read_timeout_cnt  <= 16'h0;
             m_axi_arvalid     <= 1'b0;
             m_axi_rready      <= 1'b0;
             m_axi_awvalid     <= 1'b0;
@@ -291,15 +304,27 @@ module npu_dma_master #(
                     beat_cnt      <= 4'd0;
                     if (m_axi_arready && m_axi_arvalid) begin
                         m_axi_arvalid <= 1'b0;
+                        // Keep rready asserted across read phases: deasserting it
+                        // between A's rlast and the next AR handshake lets the
+                        // dwidth-converter/xbar chain stall and LOSE the first
+                        // beat of the next burst (intermittent S_READ_B_R hang).
                         m_axi_rready  <= 1'b1;
                         state         <= S_READ_A_R;
                     end
                 end
 
                 S_READ_A_R: begin
-                    // Deassert rready on rlast (AXI rready handshake)
-                    if (m_axi_rvalid && m_axi_rready && m_axi_rlast)
-                        m_axi_rready <= 1'b0;
+                    // Do NOT deassert rready on rlast — see S_READ_A_AR comment.
+                    // Read-timeout retry: re-issue the AR if the transaction is
+                    // dropped by the xbar/dwidth chain (no beat for a long time).
+                    if (rpipe_use)
+                        read_timeout_cnt <= 16'h0;
+                    else if (read_timeout_cnt != READ_TIMEOUT_MAX)
+                        read_timeout_cnt <= read_timeout_cnt + 16'h1;
+                    if (read_timeout_cnt == READ_TIMEOUT_MAX) begin
+                        read_timeout_cnt <= 16'h0;
+                        state            <= S_READ_A_AR;
+                    end
                     // Buffer unpack from pipeline register (1 cycle after acceptance)
                     if (rpipe_use) begin
                         // beat N: bytes [beat_cnt*16 .. beat_cnt*16+15]
@@ -335,14 +360,22 @@ module npu_dma_master #(
                     beat_cnt      <= 4'd0;
                     if (m_axi_arready && m_axi_arvalid) begin
                         m_axi_arvalid <= 1'b0;
-                        m_axi_rready  <= 1'b1;
+                        // rready stays asserted (see S_READ_A_AR comment)
                         state         <= S_READ_B_R;
                     end
                 end
 
                 S_READ_B_R: begin
-                    if (m_axi_rvalid && m_axi_rready && m_axi_rlast)
-                        m_axi_rready <= 1'b0;
+                    // rready stays asserted (see S_READ_A_AR comment)
+                    // Read-timeout retry: re-issue the B AR if dropped.
+                    if (rpipe_use)
+                        read_timeout_cnt <= 16'h0;
+                    else if (read_timeout_cnt != READ_TIMEOUT_MAX)
+                        read_timeout_cnt <= read_timeout_cnt + 16'h1;
+                    if (read_timeout_cnt == READ_TIMEOUT_MAX) begin
+                        read_timeout_cnt <= 16'h0;
+                        state            <= S_READ_B_AR;
+                    end
                     if (rpipe_use) begin
                         b_buf[beat_cnt*16 + 0]  <= rdata_pipe[7:0];
                         b_buf[beat_cnt*16 + 1]  <= rdata_pipe[15:8];
@@ -376,14 +409,22 @@ module npu_dma_master #(
                     beat_cnt      <= 4'd0;
                     if (m_axi_arready && m_axi_arvalid) begin
                         m_axi_arvalid <= 1'b0;
-                        m_axi_rready  <= 1'b1;
+                        // rready stays asserted (see S_READ_A_AR comment)
                         state         <= S_READ_ACC_R;
                     end
                 end
 
                 S_READ_ACC_R: begin
-                    if (m_axi_rvalid && m_axi_rready && m_axi_rlast)
-                        m_axi_rready <= 1'b0;
+                    // rready stays asserted (see S_READ_A_AR comment)
+                    // Read-timeout retry: re-issue the ACCUM AR if dropped.
+                    if (rpipe_use)
+                        read_timeout_cnt <= 16'h0;
+                    else if (read_timeout_cnt != READ_TIMEOUT_MAX)
+                        read_timeout_cnt <= read_timeout_cnt + 16'h1;
+                    if (read_timeout_cnt == READ_TIMEOUT_MAX) begin
+                        read_timeout_cnt <= 16'h0;
+                        state            <= S_READ_ACC_AR;
+                    end
                     if (rpipe_use) begin
                         // 4 words per beat
                         acc_buf[beat_cnt*4 + 0] <= rdata_pipe[31:0];

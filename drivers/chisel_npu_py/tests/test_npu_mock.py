@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from chisel_npu_py import ChiselNPU, CtrlLite, NPUError, NPUTimeoutError, XDMADevice, consts
+from chisel_npu_py import ChiselNPU, NPUError, NPUTimeoutError, XDMADevice, consts
 
 from .fake_native import FakeNative
 
@@ -31,11 +31,10 @@ def test_mmalu_full_flow(npu: ChiselNPU):
 
 
 def test_mmalu_returns_expected_data(npu: ChiselNPU):
-    """The fake's staged OUT region is readable back (data path round-trip)."""
+    """Pre-seeded OUT region is readable back (data path round-trip)."""
     A, B, ACCUM = _operands()
     expected = np.arange(consts.K, dtype=np.int32) * 3 + 1
-    out_slot = npu.dev.staging_map()["OUT"]
-    npu.dev.native.mem[int(out_slot[0])] = expected.tobytes()
+    npu.dev.write_staged("OUT", expected)  # staged through the same API
     out = npu.mmalu(A, B, ACCUM, timeout_s=0.5)
     np.testing.assert_array_equal(out, expected)
 
@@ -49,13 +48,23 @@ def test_mmalu_fills_caller_out_buffer(npu: ChiselNPU):
     np.testing.assert_array_equal(out, np.zeros(consts.K, dtype=np.int32))
 
 
-def test_operands_staged_at_correct_addresses(npu: ChiselNPU):
-    A, B, ACCUM = _operands()
-    npu.stage_operands(A, B, ACCUM)
-    for name in ("A", "B", "ACCUM"):
-        base, size = npu.dev.staging_map()[name]
-        assert base in npu.dev.native.mem
-        assert len(npu.dev.native.mem[base]) == size
+def test_operand_sizes_exposed(npu: ChiselNPU):
+    assert npu.dev.operand_size("A") == consts.K
+    assert npu.dev.operand_size("B") == consts.K
+    assert npu.dev.operand_size("ACCUM") == 4 * consts.K
+    assert npu.dev.operand_size("OUT") == 4 * consts.K
+
+
+def test_staged_roundtrip_per_operand(npu: ChiselNPU):
+    """Each operand round-trips byte-exact through the staged API."""
+    A = np.arange(consts.K, dtype=np.int8)
+    B = np.full(consts.K, 7, dtype=np.int8)
+    ACCUM = np.arange(consts.K, dtype=np.int32) * 100
+    for name, data in (("A", A), ("B", B), ("ACCUM", ACCUM)):
+        npu.dev.write_staged(name, data)
+        got = np.empty_like(data)
+        npu.dev.read_staged(name, got)
+        np.testing.assert_array_equal(got, data)
 
 
 def test_wrong_size_operand_rejected(npu: ChiselNPU):
@@ -71,7 +80,7 @@ def test_unknown_operand_rejected(npu: ChiselNPU):
 
 
 def test_busy_before_kick_raises(npu: ChiselNPU):
-    npu.dev.native.regs[consts.CTRL_REG] = 1 << consts.CTRL_BUSY_BIT
+    npu.ctrl.write(1 << consts.CTRL_BUSY_BIT)
     A, B, ACCUM = _operands()
     with pytest.raises(NPUError, match="busy"):
         npu.mmalu(A, B, ACCUM, timeout_s=0.5)

@@ -109,7 +109,7 @@ proc bootstrap_ref_project {} {
     # Run synthesis — launch all OOC sub-runs + top_wrapper synthesis
     puts "INFO: Running synthesis (synth_1 + all OOC sub-runs)..."
     reset_run synth_1
-    launch_runs synth_1 -jobs 8
+    launch_runs synth_1 -jobs [vivado_jobs]
 
     # Wait for ALL synthesis runs (OOC sub-runs + top_wrapper synth_1)
     # so the DCP doesn't have black boxes when impl opens it.

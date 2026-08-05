@@ -17,7 +17,7 @@
 //  For an M-cycle continuous feed with keep=true, the collector emits a
 //  sequence of staircased K×K frames at output cycles
 //
-//      frame f (f = 1..ceil(M/K))   T ∈ [(f+1)·K − 1, (f+2)·K − 2]
+//      frame f (f = 1..ceil(M/K))   T ∈ [(f+1)·K, (f+2)·K − 1]
 //
 //  where the entries of frame f are
 //
@@ -28,7 +28,11 @@
 //  Using the same "i_tick" convention as MMALUSpec — i_tick = T − 1, i.e. the
 //  loop variable poked BEFORE `dut.clock.step()` — frame f lives at
 //
-//      i_tick ∈ [(f+1)·K − 2, (f+2)·K − 2)         (K iterations)
+//      i_tick ∈ [(f+1)·K − 1, (f+2)·K − 1)         (K iterations)
+//
+//  Note: the SA→PE pipeline registers (added 2026-07-30) shift the output
+//  window by +1 cycle relative to the original timing model.  The formulas
+//  above reflect the updated pipeline depth.
 //
 //  Test 1 (M = 2K): verify frame 1 (K-partial) and frame 2 (2K full).
 //  Test 2 (M = 3K): verify frames 1, 2, 3.
@@ -151,7 +155,7 @@ class MMALUStreamReduceSpec extends AnyFlatSpec {
       label:   String,
       msgs:    StringBuilder
   ): Int = {
-    val base = (f + 1) * K - 2
+    val base = (f + 1) * K - 1
     var failures = 0
     for (step <- 0 until K) {
       val iTick = base + step
@@ -320,7 +324,7 @@ class MMALUStreamReduceSpec extends AnyFlatSpec {
 
       // Contrast assertion: frame 2 must NOT match the full 2K-sum, otherwise
       // the test would not distinguish the two protocols.
-      val base = 3 * K - 2  // frame 2 first i_tick
+      val base = 3 * K - 1  // frame 2 first i_tick (SA→PE pipeline: +1)
       var matchesFull = true
       var lanesDiffer = 0
       for (step <- 0 until K; lane <- 0 until K) {

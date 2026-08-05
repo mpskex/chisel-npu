@@ -32,8 +32,7 @@ class ChiselNPU:
         self.dev = dev if dev is not None else XDMADevice()
         self.ctrl = ctrl if ctrl is not None else CtrlLite(self.dev)
         self.timeout_s = timeout_s
-        out_slot = self.dev.staging_map()["OUT"]
-        self._out_nbytes = int(out_slot[1])
+        self._out_nbytes = self.dev.operand_size("OUT")
 
     # ── step helpers ────────────────────────────────────────────────────────
 

@@ -1,10 +1,15 @@
-"""XDMADevice — high-level Python access to the NPU's XDMA interface.
+"""XDMADevice — Python access to the NPU's XDMA interface (data side only).
 
-All address handling, descriptor work and transfers happen inside the
-pybind11 `_native` module (class `NativeXDMA`); Python only passes buffers
-(numpy arrays, bytes, bytearray, memoryview) and, for raw transfers, the
-DDR address — which the native module validates (window + alignment)
-before touching the device.
+All address handling happens inside the pybind11 `_native` module
+(class `NativeXDMA`); Python never sees a DDR address or a register
+offset.  This class only moves buffers:
+
+  * `write_staged("A", buf)` / `read_staged("OUT", out)` — MMALU operands
+    are addressed by NAME; the native module checks the name and the exact
+    byte size against its staging table;
+  * `operand_size("ACCUM")` — buffer sizes, for allocating arrays;
+  * `ctrl_read()` / `ctrl_write(value)` — the ctrl_lite register is a
+    single control word at a fixed offset inside the native module.
 """
 
 from __future__ import annotations
@@ -14,7 +19,6 @@ from typing import Optional, Union
 
 import numpy as np
 
-from . import consts
 from .errors import XDMAError
 
 try:
@@ -43,9 +47,8 @@ def _require_native():
 class XDMADevice:
     """A handle to one XDMA card's device nodes.
 
-    Opens ``<prefix>_h2c_<ch>``, ``<prefix>_c2h_<ch>`` and
-    ``<prefix>_bypass`` in the native module and keeps them for the
-    lifetime of the object.
+    Opens the h2c/c2h DMA channels and the bypass BAR inside the native
+    module and keeps them for the lifetime of the object.
     """
 
     def __init__(
@@ -80,58 +83,30 @@ class XDMADevice:
         """The underlying native module object (injectable for tests)."""
         return self._native
 
-    def staging_map(self) -> dict[str, tuple[int, int]]:
-        """Return the native module's MMALU staging table (name → addr, nbytes)."""
-        return dict(self._native.staging_map())
-
-    # ── raw DMA (addresses validated by the native module) ──────────────────
-
-    def dma_write(self, ddr_addr: int, data: Buffer) -> int:
-        """Write *data* (numpy array or bytes-like) to *ddr_addr*. Returns bytes written."""
-        return int(self._native.dma_write(data, int(ddr_addr)))
-
-    def dma_read_raw(self, ddr_addr: int, nbytes: int) -> bytes:
-        """Read *nbytes* raw bytes from *ddr_addr*."""
-        return self._native.dma_read_raw(int(ddr_addr), int(nbytes))
-
-    def dma_read_into(self, ddr_addr: int, out: Buffer) -> int:
-        """Read into caller-provided buffer *out* (zero-copy for numpy arrays)."""
-        return int(self._native.dma_read_into(out, int(ddr_addr)))
-
-    def dma_read(self, ddr_addr: int, nbytes: int) -> np.ndarray:
-        """Read raw bytes from *ddr_addr* as a uint8 ndarray."""
-        return np.frombuffer(self.dma_read_raw(ddr_addr, nbytes), dtype=np.uint8)
-
-    def read_i32(self, ddr_addr: int, count: int) -> np.ndarray:
-        """Read *count* int32 words from *ddr_addr*."""
-        out = np.empty(count, dtype=np.int32)
-        self.dma_read_into(ddr_addr, out)
-        return out
-
-    def write_i32(self, ddr_addr: int, values: np.ndarray) -> int:
-        """Write an int32 ndarray to *ddr_addr*."""
-        return self.dma_write(ddr_addr, np.ascontiguousarray(values, dtype=np.int32))
-
-    # ── staged MMALU operands (addresses owned by the native module) ────────
+    # ── staged MMALU operands (addressed by name; addresses owned natively) ─
 
     def write_staged(self, operand: str, data: Buffer) -> int:
-        """Stage operand *operand* ('A'|'B'|'ACCUM'|'OUT') to DDR.
+        """Stage operand *operand* ('A'|'B'|'ACCUM'|'OUT') to the NPU memory.
 
         The native module checks the name AND the exact byte size; the
-        address itself is never visible to Python.
+        address itself never appears on the Python side.
         """
         return int(self._native.write_staged(operand, data))
 
     def read_staged(self, operand: str, out: Buffer) -> int:
-        """Read operand *operand* from DDR into *out* (size-checked)."""
+        """Read operand *operand* back into *out* (size-checked, zero-copy)."""
         return int(self._native.read_staged(operand, out))
 
-    # ── ctrl_lite registers ─────────────────────────────────────────────────
+    def operand_size(self, operand: str) -> int:
+        """Byte size of the staged operand *operand* (as owned by native)."""
+        return int(self._native.operand_size(operand))
 
-    def reg_read(self, offset: int) -> int:
-        """Read a 32-bit ctrl_lite register at *offset* (BAR2 bypass)."""
-        return int(self._native.reg_read(int(offset)))
+    # ── ctrl_lite control word (single register, offset owned natively) ─────
 
-    def reg_write(self, offset: int, value: int) -> None:
-        """Write a 32-bit ctrl_lite register at *offset* (BAR2 bypass)."""
-        self._native.reg_write(int(offset), int(value))
+    def ctrl_read(self) -> int:
+        """Read the ctrl_lite control word (start/done/busy bits)."""
+        return int(self._native.ctrl_read())
+
+    def ctrl_write(self, value: int) -> None:
+        """Write the ctrl_lite control word."""
+        self._native.ctrl_write(int(value))
