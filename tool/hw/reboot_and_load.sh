@@ -16,9 +16,14 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-FPGA_HOST="${1:-fpga}"
-BITSTREAM="${2:-$REPO_ROOT/ip/vivado/xc7k480t/npu_fpga/npu_fpga.runs/impl_1/top_npu.bit}"
-XSDB="${XSDB:-$HOME/Xilinx/2025.2/Vivado/bin/xsdb}"
+FPGA_HOST="${FPGA_HOST:-${1:-fpga}}"
+BITSTREAM="${BITSTREAM:-${2:-$REPO_ROOT/ip/vivado/xc7k480t/npu_fpga/npu_fpga.runs/impl_1/top_npu.bit}}"
+VIVADO="${VIVADO:-$HOME/Xilinx/2025.2/Vivado/bin/vivado}"
+XSDB="${XSDB:-$(dirname "$VIVADO")/xsdb}"
+SSH_IDENTITY="${SSH_IDENTITY:-}"
+_SSH_OPTS="-o ConnectTimeout=5 -o BatchMode=yes -o StrictHostKeyChecking=no"
+[ -n "$SSH_IDENTITY" ] && _SSH_OPTS="$_SSH_OPTS -i $SSH_IDENTITY"
+
 LOAD_SCRIPT="~/dma_ip_drivers/XDMA/linux-kernel/tests/load_driver.sh"
 
 PCIe_BRIDGE="00:15.0"          # AMD FCH PCIe bridge to FPGA slot
@@ -29,7 +34,7 @@ MIG_WAIT=10                     # extra seconds for DDR3 MIG calibration
 if [[ ! -f "$BITSTREAM" ]]; then
     echo "ERROR: Bitstream not found: $BITSTREAM" >&2; exit 1
 fi
-if ! ssh -o ConnectTimeout=5 -o BatchMode=yes "$FPGA_HOST" true 2>/dev/null; then
+if ! ssh $_SSH_OPTS "$FPGA_HOST" true 2>/dev/null; then
     echo "ERROR: Cannot reach $FPGA_HOST" >&2; exit 1
 fi
 
@@ -45,7 +50,7 @@ TCLEOF
 
 # ── Step 2: Force PCIe re-enumeration via Secondary Bus Reset ─────────────
 echo "INFO: Step 2/3 — PCIe Secondary Bus Reset on bridge $PCIe_BRIDGE..."
-ssh -o BatchMode=yes "$FPGA_HOST" "
+ssh $_SSH_OPTS "$FPGA_HOST" "
     # Assert Secondary Bus Reset (bit 6 of Bridge Control register)
     sudo setpci -s $PCIe_BRIDGE BRIDGE_CONTROL=0x0040
     sleep 0.5
@@ -58,7 +63,7 @@ ssh -o BatchMode=yes "$FPGA_HOST" "
 "
 
 # Verify PCIe device appeared
-DEV=$(ssh -o BatchMode=yes "$FPGA_HOST" "lspci -d 10ee:7028 2>/dev/null" || true)
+DEV=$(ssh $_SSH_OPTS "$FPGA_HOST" "lspci -d 10ee:7028 2>/dev/null" || true)
 if [[ -z "$DEV" ]]; then
     echo "ERROR: Xilinx PCIe device did not appear after SBR." >&2
     echo "       Check: ssh $FPGA_HOST 'lspci'" >&2
@@ -68,11 +73,11 @@ echo "INFO: PCIe device found: $DEV"
 
 # ── Step 3: Load XDMA driver ───────────────────────────────────────────────
 echo "INFO: Step 3/3 — Loading XDMA driver..."
-ssh -o BatchMode=yes "$FPGA_HOST" \
+ssh $_SSH_OPTS "$FPGA_HOST" \
     "cd ~/dma_ip_drivers/XDMA/linux-kernel/tests && sudo ./load_driver.sh 0"
 
 # Verify
-NODES=$(ssh -o BatchMode=yes "$FPGA_HOST" "ls /dev/xdma0_* 2>/dev/null | wc -l" || echo 0)
+NODES=$(ssh $_SSH_OPTS "$FPGA_HOST" "ls /dev/xdma0_* 2>/dev/null | wc -l" || echo 0)
 if [[ "$NODES" -lt 4 ]]; then
     echo "ERROR: Expected ≥4 /dev/xdma0_* nodes, got $NODES" >&2
     echo "       Run: ssh $FPGA_HOST 'sudo journalctl -k | grep xdma | tail -20'" >&2
@@ -81,6 +86,6 @@ fi
 
 echo ""
 echo "INFO: FPGA box ready."
-echo "  PCIe  : $(ssh -o BatchMode=yes "$FPGA_HOST" "lspci -d 10ee:7028" 2>/dev/null)"
+echo "  PCIe  : $(ssh $_SSH_OPTS "$FPGA_HOST" "lspci -d 10ee:7028" 2>/dev/null)"
 echo "  Nodes : $NODES /dev/xdma0_* devices"
-echo "  Driver: $(ssh -o BatchMode=yes "$FPGA_HOST" "lsmod | grep ^xdma" 2>/dev/null)"
+echo "  Driver: $(ssh $_SSH_OPTS "$FPGA_HOST" "lsmod | grep ^xdma" 2>/dev/null)"

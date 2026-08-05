@@ -87,7 +87,7 @@ update_compile_order -fileset sources_1
 #    OOC IP all get DCPs and impl can link them ─────────────────────────────
 puts "INFO: launching synth_1 + OOC sub-runs..."
 reset_run synth_1
-launch_runs synth_1 -jobs 8
+launch_runs synth_1 -jobs [vivado_jobs]
 set all_synth [get_runs -filter {IS_SYNTHESIS == 1}]
 puts "INFO: waiting for [llength $all_synth] synthesis run(s)..."
 wait_on_run $all_synth

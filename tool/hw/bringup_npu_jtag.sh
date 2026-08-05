@@ -19,6 +19,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 VIVADO="${VIVADO:-$HOME/Xilinx/2025.2/Vivado/bin/vivado}"
 FPGA_HOST="${FPGA_HOST:-fpga}"
+SSH_IDENTITY="${SSH_IDENTITY:-}"
 HW_SERVER="${HW_SERVER:-localhost:3121}"
 NPU_BIT="${NPU_BIT:-$REPO_ROOT/ip/vivado/xc7k480t/npu_fpga/npu_fpga.runs/impl_1/top_npu.bit}"
 REF_BIT="${REF_BIT:-$REPO_ROOT/ip/vivado/xc7k480t.reference/top_wrapper.bit}"
@@ -26,18 +27,19 @@ MAX_ATTEMPTS="${1:-5}"
 XDMA_DRV_DIR="~/dma_ip_drivers/XDMA/linux-kernel/xdma"
 BRIDGE="00:15.0"
 
+SSH_OPTS="-o ConnectTimeout=5 -o BatchMode=yes -o StrictHostKeyChecking=no"
+[ -n "$SSH_IDENTITY" ] && SSH_OPTS="$SSH_OPTS -i $SSH_IDENTITY"
+
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
 
 check_pcie() {
-    ssh -o ConnectTimeout=5 -o BatchMode=yes -o StrictHostKeyChecking=no \
-        "$FPGA_HOST" 'sudo lspci -nn 2>/dev/null | grep "10ee:7028"' 2>/dev/null
+    ssh $SSH_OPTS "$FPGA_HOST" 'sudo lspci -nn 2>/dev/null | grep "10ee:7028"' 2>/dev/null
 }
 
 wait_ssh() {
     local timeout=${1:-120}
     local elapsed=0
-    while ! ssh -o ConnectTimeout=4 -o BatchMode=yes -o StrictHostKeyChecking=no \
-            "$FPGA_HOST" 'echo UP' &>/dev/null; do
+    while ! ssh $SSH_OPTS "$FPGA_HOST" 'echo UP' &>/dev/null; do
         sleep 5; elapsed=$((elapsed+5))
         [ $elapsed -ge $timeout ] && return 1
         echo -n "."
@@ -48,7 +50,7 @@ wait_ssh() {
 
 reboot_fpga() {
     log "Rebooting $FPGA_HOST..."
-    ssh -o BatchMode=yes -o StrictHostKeyChecking=no "$FPGA_HOST" 'sudo /sbin/reboot' 2>/dev/null || true
+    ssh $SSH_OPTS "$FPGA_HOST" 'sudo /sbin/reboot' 2>/dev/null || true
     sleep 75
     log "Waiting for SSH..."
     wait_ssh 120 || { log "ERROR: SSH timeout after reboot"; return 1; }

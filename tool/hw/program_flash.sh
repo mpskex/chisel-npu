@@ -20,7 +20,7 @@
 # Prerequisites (dev host):
 #   - FT4232H JTAG USB cable plugged in (lsusb shows 0403:6011)
 #   - hw_server running on 127.0.0.1:3121 (Vivado 2025.2)
-#   - ~/Xilinx/2025.2/Vivado/bin/vivado available
+#   - ~/Xilinx/2025.2/Vivado/bin/vivado available (override via VIVADO env var)
 #   - bpi_xc7k480t_pullnone.bit extracted from Vivado cfgmem zip (done automatically)
 
 set -euo pipefail
@@ -29,7 +29,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 VIVADO="${VIVADO:-$HOME/Xilinx/2025.2/Vivado/bin/vivado}"
 HW_SERVER="${HW_SERVER:-localhost:3121}"
 FLASH_PART="mt28gu512aax1e-bpi-x16"
-BITFILE_ZIP="$HOME/Xilinx/2025.2/Vivado/data/xicom/cfgmem/bitfile.zip"
+BITFILE_ZIP="${VIVADO_CFGMEM_ZIP:-$(dirname "$(dirname "$VIVADO")")/data/xicom/cfgmem/bitfile.zip}"
 HELPER_BIT="/tmp/bpi_xc7k480t_pullnone.bit"
 TCL_SCRIPT="/tmp/program_flash_$$.tcl"
 
@@ -42,7 +42,7 @@ if [[ ! -f "$BITSTREAM" ]]; then
     exit 1
 fi
 if [[ ! -x "$VIVADO" ]]; then
-    echo "ERROR: vivado not found at $VIVADO" >&2
+    echo "ERROR: vivado not found at $VIVADO. Set VIVADO env var to override." >&2
     exit 1
 fi
 

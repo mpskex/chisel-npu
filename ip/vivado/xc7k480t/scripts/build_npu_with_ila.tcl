@@ -83,7 +83,7 @@ update_compile_order -fileset sources_1
 
 puts "INFO: launching synth_1 + OOC sub-runs..."
 reset_run synth_1
-launch_runs synth_1 -jobs 8
+launch_runs synth_1 -jobs [vivado_jobs]
 set all_synth [get_runs -filter {IS_SYNTHESIS == 1}]
 wait_on_run $all_synth
 

@@ -46,8 +46,8 @@ class MMALUSpec extends AnyFlatSpec {
             println("+++++ MAT C +++++")
             print_helper.printMatrix(_expected, _n)
 
-            // systolic arrays has latency of 3 * _n - 2
-            for (i_tick <- 0 until 3 * _n - 2) {
+            // systolic arrays has latency of 3 * _n - 1 (SA→PE pipeline adds 1 cycle)
+            for (i_tick <- 0 until 3 * _n - 1) {
 
                 // poke the input vector
                 // with data feeder the data latency is just n ticks
@@ -83,8 +83,8 @@ class MMALUSpec extends AnyFlatSpec {
                 // ideally, the array will give _n (diagnal) results per tick
                 dut.clock.step()
 
-                // systolic array will start to spit out after _n - 1 ticks
-                if (i_tick >= 2 * _n - 2) {
+                // SA→PE pipeline adds 1 cycle: first output at 2*_n-1 instead of 2*_n-2
+                if (i_tick >= 2 * _n - 1) {
                     for (_i <- 0 until _n) {
                         _res(step * _n + _i) = dut.io.out(_i).peek().litValue.toInt
                         println("Tick @ " + i_tick + " producing at location (" + _i + ", " + step + "): " + _res(step * _n + _i))
@@ -148,9 +148,9 @@ class MMALUSpec extends AnyFlatSpec {
             println("+++++ MAT F +++++")
             print_helper.printMatrix(_expected_f, _n)
 
-            // systolic arrays has latency of 3 * _n - 2
-            // and the second work period is 2 * n - 1
-            for (i_tick <- 0 until 3 * _n - 2 + _n) {
+            // systolic arrays has latency of 3 * _n - 1 (SA→PE pipeline adds 1 cycle)
+            // and the second work period is 2 * n
+            for (i_tick <- 0 until 3 * _n - 1 + _n) {
 
                 // poke the input vector
                 // with data feeder the data latency is just n ticks
@@ -194,9 +194,9 @@ class MMALUSpec extends AnyFlatSpec {
                 // ideally, the array will give _n (diagnal) results per tick
                 dut.clock.step()
 
-                // systolic array will start to spit out after _n - 1 ticks for mat_c
+                // SA→PE pipeline adds 1 cycle: first output at 2*_n-1
                 println("Tick @ " + i_tick + " clct signal " + dut.io.clct.peek().litValue.toInt)
-                if (i_tick >= 2 * _n - 2 && i_tick < 3 * _n - 2) {
+                if (i_tick >= 2 * _n - 1 && i_tick < 3 * _n - 1) {
                     for (_i <- 0 until _n) {
                         _res_c(step * _n + _i) = dut.io.out(_i).peek().litValue.toInt
                         println("Tick @ " + i_tick + " Mat C producing at location (" + _i + ", " + step + "): " + _res_c(step * _n + _i))
@@ -204,8 +204,8 @@ class MMALUSpec extends AnyFlatSpec {
                     }
                     step = step + 1
                 } 
-                // systolic array will start to generate again after 3 * _n - 2 ticks
-                if (i_tick >= 3 * _n - 2 && i_tick < 4 * _n - 2){
+                // systolic array will start to generate again after 3 * _n - 1 ticks
+                if (i_tick >= 3 * _n - 1 && i_tick < 4 * _n - 1){
                     for (_i <- 0 until _n) {
                         _res_f((step % _n) * _n + _i) = dut.io.out(_i).peek().litValue.toInt
                         println("OUT Tick @ " + i_tick + " Mat F producing at location (" + _i + ", " + step % _n + "): " + _res_f((step % _n) * _n + _i))
@@ -262,8 +262,8 @@ class MMALUSpec extends AnyFlatSpec {
             println("+++++ MAT C +++++")
             print_helper.printMatrix(_expected, _n)
 
-            // systolic arrays has latency of 3 * _n - 2
-            for (i_tick <- 0 until 3 * _n - 2) {
+            // systolic arrays has latency of 3 * _n - 1 (SA→PE pipeline adds 1 cycle)
+            for (i_tick <- 0 until 3 * _n - 1) {
 
                 // poke the input vector
                 // with data feeder the data latency is just n ticks
@@ -302,8 +302,8 @@ class MMALUSpec extends AnyFlatSpec {
                 // ideally, the array will give _n (diagnal) results per tick
                 dut.clock.step()
 
-                // systolic array will start to spit out after _n - 1 ticks
-                if (i_tick >= 2 * _n - 2) {
+                // SA→PE pipeline adds 1 cycle: first output at 2*_n-1
+                if (i_tick >= 2 * _n - 1) {
                     for (_i <- 0 until _n) {
                         _res(step * _n + _i) = dut.io.out(_i).peek().litValue.toInt
                         println("Tick @ " + i_tick + " producing at location (" + _i + ", " + step + "): " + _res(step * _n + _i))
@@ -376,9 +376,9 @@ class MMALUSpec extends AnyFlatSpec {
             println("+++++ MAT F +++++")
             print_helper.printMatrix(_expected_f, _n)
 
-            // systolic arrays has latency of 3 * _n - 2
-            // and the second work period is 2 * n - 1
-            for (i_tick <- 0 until 3 * _n - 2 + _n) {
+            // systolic arrays has latency of 3 * _n - 1 (SA→PE pipeline adds 1 cycle)
+            // and the second work period is 2 * n
+            for (i_tick <- 0 until 3 * _n - 1 + _n) {
 
                 // poke the input vector
                 // with data feeder the data latency is just n ticks
@@ -422,9 +422,9 @@ class MMALUSpec extends AnyFlatSpec {
                 // ideally, the array will give _n (diagnal) results per tick
                 dut.clock.step()
 
-                // systolic array will start to spit out after _n - 1 ticks for mat_c
+                // SA→PE pipeline adds 1 cycle: first output at 2*_n-1
                 println("Tick @ " + i_tick + " clct signal " + dut.io.clct.peek().litValue.toInt)
-                if (i_tick >= 2 * _n - 2 && i_tick < 3 * _n - 2) {
+                if (i_tick >= 2 * _n - 1 && i_tick < 3 * _n - 1) {
                     for (_i <- 0 until _n) {
                         _res_c(step * _n + _i) = dut.io.out(_i).peek().litValue.toInt
                         println("Tick @ " + i_tick + " Mat C producing at location (" + _i + ", " + step + "): " + _res_c(step * _n + _i))
@@ -432,8 +432,8 @@ class MMALUSpec extends AnyFlatSpec {
                     }
                     step = step + 1
                 } 
-                // systolic array will start to generate again after 3 * _n - 2 ticks
-                if (i_tick >= 3 * _n - 2 && i_tick < 4 * _n - 2){
+                // systolic array will start to generate again after 3 * _n - 1 ticks
+                if (i_tick >= 3 * _n - 1 && i_tick < 4 * _n - 1){
                     for (_i <- 0 until _n) {
                         _res_f((step % _n) * _n + _i) = dut.io.out(_i).peek().litValue.toInt
                         println("OUT Tick @ " + i_tick + " Mat F producing at location (" + _i + ", " + step % _n + "): " + _res_f((step % _n) * _n + _i))

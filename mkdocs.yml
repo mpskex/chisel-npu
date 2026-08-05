@@ -17,6 +17,7 @@ nav:
     - Vector ALU: implementations/VectorALU.md
     - Register Files: implementations/Registers.md
     - Quantization Pipeline: implementations/Quantization.md
+    - Python Driver (chisel_npu_py): implementations/PythonDriver.md
   - Tutorials:
     - GEMM + Softmax Quantization: tutorials/gemm_softmax_quantization.md
 

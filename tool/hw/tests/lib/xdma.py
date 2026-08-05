@@ -55,10 +55,12 @@ class XDMADevice:
         """
         cmd = f"sudo {TOOLS_DIR}/reg_rw {device} {hex(offset)} w"
         out = ssh.check_output(self.host, cmd, timeout=10)
-        # reg_rw output: "Read 32-bit value at address 0x0: 0xDEADBEEF"
-        for part in out.split():
-            if part.startswith("0x") or part.startswith("0X"):
-                return int(part, 16)
+        # reg_rw output: "Read 32-bit value at address 0x0 (0x7f...): 0xDEADBEEF"
+        # Parse the LAST 0x token (the value), NOT the first (the address).
+        import re as _re
+        matches = _re.findall(r"0x[0-9a-fA-F]+", out)
+        if matches:
+            return int(matches[-1], 16)
         raise XDMAError(f"Cannot parse reg_rw output: {out!r}")
 
     def reg_write(self, device: str, offset: int, value: int) -> None:
