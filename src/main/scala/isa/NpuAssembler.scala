@@ -224,22 +224,35 @@ object NpuAssembler {
 
   // ---- MMA (opcode=0x03) ---------------------------------------------------
 
-  /** mma rd=outVR, rs1=A_VX_base, rs2=B_VX_base; keep in funct7[4] (sat bit). */
+  /** mma rd=outVR, rs1=A_VX, rs2=B_VX; keep in funct7[4] (sat bit). */
   def mma(rd: Int, rs1: Int, rs2: Int, keep: Boolean = true): Int =
     encR(0x03, 0, f7(VR, sat=keep), rd, rs1, rs2)
-  def mmaLast(rd: Int, rs1: Int, rs2: Int): Int =
-    encR(0x03, 1, f7(VR), rd, rs1, rs2)
+
+  /** mma.last — feed + drain; keep in funct7[4] (keep=true accumulates). */
+  def mmaLast(rd: Int, rs1: Int, rs2: Int, keep: Boolean = true): Int =
+    encR(0x03, 1, f7(VR, sat=keep), rd, rs1, rs2)
+
+  /** mma.reset — clear PE accumulators. */
   def mmaReset(rd: Int, rs1: Int, rs2: Int): Int =
     encR(0x03, 2, f7(VR), rd, rs1, rs2)
 
-  // ---- LD / ST (opcodes 0x01 / 0x02) --------------------------------------
+  // ---- LD / ST (opcodes 0x07 / 0x27, RISC-V V-aligned) --------------------
+  // Unit-stride whole-register vector transfers between the L3 DATA section
+  // and VX/VE/VR.  I-format: rs1 = section selector (0=A, 1=B, 2=ACCUM,
+  // 3=OUT), imm = unsigned byte offset within the section.
+  // Load:  rd  = destination register.  Store: rd  = source register.
 
-  def ldVx(rd: Int, base: Int, offset: Int = 0): Int = encI(0x01, 3, rd, base, offset)
-  def ldVe(rd: Int, base: Int, offset: Int = 0): Int = encI(0x01, 4, rd, base, offset)
-  def ldVr(rd: Int, base: Int, offset: Int = 0): Int = encI(0x01, 5, rd, base, offset)
-  def stVx(rs2: Int, base: Int, offset: Int = 0): Int = encI(0x02, 3, 0, base, offset)
-  def stVe(rs2: Int, base: Int, offset: Int = 0): Int = encI(0x02, 4, 0, base, offset)
-  def stVr(rs2: Int, base: Int, offset: Int = 0): Int = encI(0x02, 5, 0, base, offset)
+  val SECT_A     = 0  // DATA section: A     (K×K int8,  1 KiB)
+  val SECT_B     = 1  // DATA section: B     (K×K int8,  1 KiB)
+  val SECT_ACCUM = 2  // DATA section: ACCUM (K×1 int32, 128 B)
+  val SECT_OUT   = 3  // DATA section: OUT   (K×K int32, 4 KiB)
+
+  def vle8 (rd: Int, sect: Int, off: Int = 0): Int = encI(0x07, 0, rd, sect, off)  // vle8.v  → VX
+  def vle16(rd: Int, sect: Int, off: Int = 0): Int = encI(0x07, 1, rd, sect, off)  // vle16.v → VE
+  def vle32(rd: Int, sect: Int, off: Int = 0): Int = encI(0x07, 2, rd, sect, off)  // vle32.v → VR
+  def vse8 (src: Int, sect: Int, off: Int = 0): Int = encI(0x27, 0, src, sect, off) // vse8.v  ← VX
+  def vse16(src: Int, sect: Int, off: Int = 0): Int = encI(0x27, 1, src, sect, off) // vse16.v ← VE
+  def vse32(src: Int, sect: Int, off: Int = 0): Int = encI(0x27, 2, src, sect, off) // vse32.v ← VR
 
   // ---- Convenience: convert Scala Int to Chisel UInt -----------------------
   implicit class IntToUInt(val v: Int) {

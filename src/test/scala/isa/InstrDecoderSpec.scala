@@ -1,5 +1,6 @@
 // See README.md for license details.
-// Tests for InstrDecoder: encode 32-bit words with NpuAssembler, verify decoded fields.
+// Tests for InstrDecoder: encode 32-bit words with NpuAssembler, verify
+// decoded fields.  Table-driven across all families × funct3.
 
 package isa
 
@@ -14,6 +15,11 @@ class InstrDecoderSpec extends AnyFlatSpec {
   // Width constants (0=VX, 1=VE, 2=VR) — matches VecWidth enum values
   val WX = 0; val WE = 1; val WR = 2
 
+  // Peek a ChiselEnum field via peekValue() (testableData[T <: Data] in
+  // PeekPokeAPI); peek() only exists for SInt/UInt/Bool in Chisel 6.7.
+  private def enumLit(dut: InstrDecoder, field: chisel3.Data): BigInt =
+    field.peekValue().asBigInt
+
   def check(dut: InstrDecoder, instr: Int,
             expFamily: OpFamily.Type,
             expOp: VecOp.Type,
@@ -21,6 +27,7 @@ class InstrDecoderSpec extends AnyFlatSpec {
             expSat: Boolean = false,
             expRound: Int = RNE,
             expRd: Int = 0, expRs1: Int = 0, expRs2: Int = 0,
+            expMemWidth: Int = -1, expMemOff: Int = -1,
             expectIllegal: Boolean = false): Unit = {
     dut.io.instr.poke((instr.toLong & 0xFFFFFFFFL).U)
     dut.clock.step(0)  // combinational
@@ -28,6 +35,9 @@ class InstrDecoderSpec extends AnyFlatSpec {
       assert(dut.io.illegal.peek().litToBoolean, s"Expected illegal for 0x${instr.toHexString}")
     } else {
       assert(!dut.io.illegal.peek().litToBoolean, s"Unexpected illegal for 0x${instr.toHexString}")
+      val gotFamily = enumLit(dut, dut.io.decoded.family)
+      assert(gotFamily == expFamily.litValue,
+        s"family mismatch for 0x${instr.toHexString}: got $gotFamily want ${expFamily.litValue}")
       // Check all UInt decoded fields
       dut.io.decoded.valu.regCls.expect(expWidth.U)
       dut.io.decoded.valu.saturate.expect(expSat.B)
@@ -35,12 +45,23 @@ class InstrDecoderSpec extends AnyFlatSpec {
       dut.io.decoded.rd.expect(expRd.U)
       dut.io.decoded.rs1.expect(expRs1.U)
       dut.io.decoded.rs2.expect(expRs2.U)
-      // ChiselEnum fields (family, op, dtype) are verified indirectly:
-      // correct VecOp decode is tested by the VALU functional specs which poke
-      // the ctrl bundle via the same decoder and verify outputs.
+      if (expMemWidth >= 0) dut.io.decoded.mem_width.expect(expMemWidth.U)
+      if (expMemOff >= 0)   dut.io.decoded.mem_off.expect(expMemOff.U)
     }
   }
 
+  // ==========================================================================
+  // NOP
+  // ==========================================================================
+  "InstrDecoder" should "decode NOP" in {
+    simulate(new InstrDecoder) { dut =>
+      check(dut, nop, OpFamily.NOP, VecOp.vadd, expRd=0, expRs1=0, expRs2=0)
+    }
+  }
+
+  // ==========================================================================
+  // VALU_ARITH
+  // ==========================================================================
   "InstrDecoder" should "decode vadd VX" in {
     simulate(new InstrDecoder) { dut =>
       check(dut, vadd(rd=1, rs1=2, rs2=3, width=VX),
@@ -85,6 +106,17 @@ class InstrDecoderSpec extends AnyFlatSpec {
     }
   }
 
+  "InstrDecoder" should "decode vmax/vmin/vrsub" in {
+    simulate(new InstrDecoder) { dut =>
+      check(dut, vmax(rd=0, rs1=1, rs2=2), OpFamily.VALU_ARITH, VecOp.vmax, expRs1=1, expRs2=2)
+      check(dut, vmin(rd=0, rs1=1, rs2=2), OpFamily.VALU_ARITH, VecOp.vmin, expRs1=1, expRs2=2)
+      check(dut, vrsub(rd=0, rs1=1, rs2=2), OpFamily.VALU_ARITH, VecOp.vrsub, expRs1=1, expRs2=2)
+    }
+  }
+
+  // ==========================================================================
+  // VALU_LOGIC
+  // ==========================================================================
   "InstrDecoder" should "decode vand/vor/vxor/vnot" in {
     simulate(new InstrDecoder) { dut =>
       check(dut, vand(rd=1, rs1=2, rs2=3), OpFamily.VALU_LOGIC, VecOp.vand, expRd=1, expRs1=2, expRs2=3)
@@ -94,14 +126,18 @@ class InstrDecoderSpec extends AnyFlatSpec {
     }
   }
 
-  "InstrDecoder" should "decode vsll/vsrl/vsra" in {
+  "InstrDecoder" should "decode vsll/vsrl/vsra/vrol" in {
     simulate(new InstrDecoder) { dut =>
       check(dut, vsll(rd=0, rs1=1, rs2=2), OpFamily.VALU_LOGIC, VecOp.vsll, expRs1=1, expRs2=2)
       check(dut, vsrl(rd=0, rs1=1, rs2=2), OpFamily.VALU_LOGIC, VecOp.vsrl, expRs1=1, expRs2=2)
       check(dut, vsra(rd=0, rs1=1, rs2=2), OpFamily.VALU_LOGIC, VecOp.vsra, expRs1=1, expRs2=2)
+      check(dut, vrol(rd=0, rs1=1, rs2=2), OpFamily.VALU_LOGIC, VecOp.vrol, expRs1=1, expRs2=2)
     }
   }
 
+  // ==========================================================================
+  // VALU_REDUCE
+  // ==========================================================================
   "InstrDecoder" should "decode vsum/vrmax on VX" in {
     simulate(new InstrDecoder) { dut =>
       check(dut, vsum(rd=0, rs1=1),  OpFamily.VALU_REDUCE, VecOp.vsum,  expRs1=1)
@@ -109,6 +145,20 @@ class InstrDecoderSpec extends AnyFlatSpec {
     }
   }
 
+  "InstrDecoder" should "flag reserved VALU_REDUCE funct3 (6,7) as illegal" in {
+    simulate(new InstrDecoder) { dut =>
+      for (f3 <- Seq(6, 7)) {
+        val instr = encR(0x12, f3, f7(VX), 0, 1, 0)
+        dut.io.instr.poke((instr.toLong & 0xFFFFFFFFL).U)
+        dut.clock.step(0)
+        assert(dut.io.illegal.peek().litToBoolean, s"VALU_REDUCE funct3=$f3 should be illegal")
+      }
+    }
+  }
+
+  // ==========================================================================
+  // VALU_LUT
+  // ==========================================================================
   "InstrDecoder" should "decode vlut (bank A and bank B)" in {
     simulate(new InstrDecoder) { dut =>
       // vlut bank A: funct3=0, round[0]=0
@@ -156,37 +206,9 @@ class InstrDecoderSpec extends AnyFlatSpec {
     }
   }
 
-  "InstrDecoder" should "decode vbcast reg and imm" in {
-    simulate(new InstrDecoder) { dut =>
-      check(dut, vbcast(rd=2, rs1=0, width=VR),
-            OpFamily.VALU_BCAST, VecOp.vbcast_reg, expWidth=WR, expRd=2)
-      // I-format: bits[24:20] carry imm[9:5]. imm=42=0b101010, so imm[4:0]=10.
-      check(dut, vbcastImm(rd=3, imm=42, width=VX),
-            OpFamily.VALU_BCAST, VecOp.vbcast_imm, expWidth=WX, expRd=3, expRs2=10)
-    }
-  }
-
-  "InstrDecoder" should "decode FP32 arith ops" in {
-    simulate(new InstrDecoder) { dut =>
-      check(dut, vfadd(rd=0, rs1=1, rs2=2), OpFamily.VALU_FP, VecOp.vfadd, expWidth=WR, expRs1=1, expRs2=2)
-      check(dut, vfsub(rd=0, rs1=1, rs2=2), OpFamily.VALU_FP, VecOp.vfsub, expWidth=WR, expRs1=1, expRs2=2)
-      check(dut, vfmul(rd=0, rs1=1, rs2=2), OpFamily.VALU_FP, VecOp.vfmul, expWidth=WR, expRs1=1, expRs2=2)
-      check(dut, vfneg(rd=0, rs1=1),         OpFamily.VALU_FP, VecOp.vfneg, expWidth=WR, expRs1=1)
-      check(dut, vfabs(rd=0, rs1=1),         OpFamily.VALU_FP, VecOp.vfabs, expWidth=WR, expRs1=1)
-    }
-  }
-
-  "InstrDecoder" should "decode vfma (S-format)" in {
-    simulate(new InstrDecoder) { dut =>
-      dut.io.instr.poke((vfma(rd=0, rs1=1, rs2=2, rs3=3).toLong & 0xFFFFFFFFL).U)
-      dut.clock.step(0)
-      assert(!dut.io.illegal.peek().litToBoolean)
-      // family/op verified indirectly; check rs3_idx decoding
-      // (family/op ChiselEnum peek not directly accessible in Chisel 6 EphemeralSimulator)
-      dut.io.decoded.valu.rs3_idx.expect(3.U)
-    }
-  }
-
+  // ==========================================================================
+  // VALU_CVT
+  // ==========================================================================
   "InstrDecoder" should "decode vcvt s32->f32" in {
     simulate(new InstrDecoder) { dut =>
       check(dut, vcvt_f32_s32(rd=1, rs1=0),
@@ -210,43 +232,18 @@ class InstrDecoderSpec extends AnyFlatSpec {
 
   "InstrDecoder" should "decode vcvt bf8 conversions (E4M3 and E5M2)" in {
     simulate(new InstrDecoder) { dut =>
-      // E4M3 (default)
       dut.io.instr.poke((vcvt_bf8_f32(rd=0, rs1=1, e5m2=false).toLong & 0xFFFFFFFFL).U)
       dut.clock.step(0)
-      assert(!dut.io.illegal.peek().litToBoolean)
-      // dtype is a ChiselEnum; check that illegal is not set (dtype correctness
-      // verified by VALUCvtSpec which exercises the BF8 conversion ops end-to-end)
       assert(!dut.io.illegal.peek().litToBoolean, "E4M3 vcvt should not be illegal")
 
-      // E5M2
       dut.io.instr.poke((vcvt_bf8_f32(rd=0, rs1=1, e5m2=true).toLong & 0xFFFFFFFFL).U)
       dut.clock.step(0)
       assert(!dut.io.illegal.peek().litToBoolean, "E5M2 vcvt should not be illegal")
     }
   }
 
-  "InstrDecoder" should "decode MMA instruction" in {
-    simulate(new InstrDecoder) { dut =>
-      dut.io.instr.poke((mma(rd=0, rs1=1, rs2=2, keep=true).toLong & 0xFFFFFFFFL).U)
-      dut.clock.step(0)
-      assert(!dut.io.illegal.peek().litToBoolean)
-      // MMA family verified via mma_keep flag below
-      dut.io.decoded.mma_keep.expect(true.B)
-    }
-  }
-
-  "InstrDecoder" should "assert illegal for reserved opcode" in {
-    simulate(new InstrDecoder) { dut =>
-      // opcode 0x7F is not a valid family
-      dut.io.instr.poke(0x7F.U)
-      dut.clock.step(0)
-      assert(dut.io.illegal.peek().litToBoolean, "Reserved opcode should be illegal")
-    }
-  }
-
   "InstrDecoder" should "assert illegal for vcvt same src==dst" in {
     simulate(new InstrDecoder) { dut =>
-      // src=F32 (3), dst=F32 (3) — same format
       val illegalCvt = encR(0x14, 3, f7Cvt(srcFmt=3), 0, 0, 0)
       dut.io.instr.poke((illegalCvt.toLong & 0xFFFFFFFFL).U)
       dut.clock.step(0)
@@ -265,6 +262,237 @@ class InstrDecoderSpec extends AnyFlatSpec {
       dut.io.instr.poke((instrFloor.toLong & 0xFFFFFFFFL).U)
       dut.clock.step(0)
       dut.io.decoded.valu.round.expect(FLOOR.U)
+    }
+  }
+
+  // ==========================================================================
+  // VALU_BCAST
+  // ==========================================================================
+  "InstrDecoder" should "decode vbcast reg and imm" in {
+    simulate(new InstrDecoder) { dut =>
+      check(dut, vbcast(rd=2, rs1=0, width=VR),
+            OpFamily.VALU_BCAST, VecOp.vbcast_reg, expWidth=WR, expRd=2)
+      // I-format: bits[24:20] carry imm[9:5]. imm=42=0b101010, so imm[4:0]=10.
+      check(dut, vbcastImm(rd=3, imm=42, width=VX),
+            OpFamily.VALU_BCAST, VecOp.vbcast_imm, expWidth=WX, expRd=3, expRs2=10)
+    }
+  }
+
+  "InstrDecoder" should "flag reserved VALU_BCAST funct3 (2..7) as illegal" in {
+    simulate(new InstrDecoder) { dut =>
+      for (f3 <- 2 to 7) {
+        val instr = encR(0x15, f3, f7(VX), 0, 1, 0)
+        dut.io.instr.poke((instr.toLong & 0xFFFFFFFFL).U)
+        dut.clock.step(0)
+        assert(dut.io.illegal.peek().litToBoolean, s"VALU_BCAST funct3=$f3 should be illegal")
+      }
+    }
+  }
+
+  // ==========================================================================
+  // VALU_FP
+  // ==========================================================================
+  "InstrDecoder" should "decode FP32 arith ops" in {
+    simulate(new InstrDecoder) { dut =>
+      check(dut, vfadd(rd=0, rs1=1, rs2=2), OpFamily.VALU_FP, VecOp.vfadd, expWidth=WR, expRs1=1, expRs2=2)
+      check(dut, vfsub(rd=0, rs1=1, rs2=2), OpFamily.VALU_FP, VecOp.vfsub, expWidth=WR, expRs1=1, expRs2=2)
+      check(dut, vfmul(rd=0, rs1=1, rs2=2), OpFamily.VALU_FP, VecOp.vfmul, expWidth=WR, expRs1=1, expRs2=2)
+      check(dut, vfneg(rd=0, rs1=1),         OpFamily.VALU_FP, VecOp.vfneg, expWidth=WR, expRs1=1)
+      check(dut, vfabs(rd=0, rs1=1),         OpFamily.VALU_FP, VecOp.vfabs, expWidth=WR, expRs1=1)
+      check(dut, vfmax(rd=0, rs1=1, rs2=2),  OpFamily.VALU_FP, VecOp.vfmax, expWidth=WR, expRs1=1, expRs2=2)
+      check(dut, vfmin(rd=0, rs1=1, rs2=2),  OpFamily.VALU_FP, VecOp.vfmin, expWidth=WR, expRs1=1, expRs2=2)
+    }
+  }
+
+  "InstrDecoder" should "flag reserved VALU_FP funct3 (7) as illegal" in {
+    simulate(new InstrDecoder) { dut =>
+      val instr = encR(0x16, 7, f7(VR, dtype=FP), 0, 1, 2)
+      dut.io.instr.poke((instr.toLong & 0xFFFFFFFFL).U)
+      dut.clock.step(0)
+      assert(dut.io.illegal.peek().litToBoolean, "VALU_FP funct3=7 should be illegal")
+    }
+  }
+
+  // ==========================================================================
+  // VALU_FP_FMA
+  // ==========================================================================
+  "InstrDecoder" should "decode vfma (S-format)" in {
+    simulate(new InstrDecoder) { dut =>
+      dut.io.instr.poke((vfma(rd=0, rs1=1, rs2=2, rs3=3).toLong & 0xFFFFFFFFL).U)
+      dut.clock.step(0)
+      assert(!dut.io.illegal.peek().litToBoolean)
+      dut.io.decoded.valu.rs3_idx.expect(3.U)
+    }
+  }
+
+  "InstrDecoder" should "flag reserved VALU_FP_FMA funct3 (4..7) as illegal" in {
+    simulate(new InstrDecoder) { dut =>
+      for (f3 <- 4 to 7) {
+        val instr = encS(0x17, f3, 0, 1, 2, 3)
+        dut.io.instr.poke((instr.toLong & 0xFFFFFFFFL).U)
+        dut.clock.step(0)
+        assert(dut.io.illegal.peek().litToBoolean, s"VALU_FP_FMA funct3=$f3 should be illegal")
+      }
+    }
+  }
+
+  // ==========================================================================
+  // VALU_MOV
+  // ==========================================================================
+  "InstrDecoder" should "decode vmov/vmovi/vmovh" in {
+    simulate(new InstrDecoder) { dut =>
+      check(dut, vmov(rd=1, rs1=2), OpFamily.VALU_MOV, VecOp.vmov, expRd=1, expRs1=2)
+      // I-format: rs2 field carries imm[4:0]
+      check(dut, vmovi(rd=1, imm=5), OpFamily.VALU_MOV, VecOp.vmovi, expRd=1, expRs2=5)
+      check(dut, vmovh(rd=1, imm=5), OpFamily.VALU_MOV, VecOp.vmovh, expRd=1, expRs2=5)
+    }
+  }
+
+  "InstrDecoder" should "flag reserved VALU_MOV funct3 (3..7) as illegal" in {
+    simulate(new InstrDecoder) { dut =>
+      for (f3 <- 3 to 7) {
+        val instr = encR(0x18, f3, f7(VX), 0, 1, 0)
+        dut.io.instr.poke((instr.toLong & 0xFFFFFFFFL).U)
+        dut.clock.step(0)
+        assert(dut.io.illegal.peek().litToBoolean, s"VALU_MOV funct3=$f3 should be illegal")
+      }
+    }
+  }
+
+  // ==========================================================================
+  // MMA
+  // ==========================================================================
+  "InstrDecoder" should "decode mma with keep" in {
+    simulate(new InstrDecoder) { dut =>
+      dut.io.instr.poke((mma(rd=0, rs1=1, rs2=2, keep=true).toLong & 0xFFFFFFFFL).U)
+      dut.clock.step(0)
+      assert(!dut.io.illegal.peek().litToBoolean)
+      dut.io.decoded.mma_keep.expect(true.B)
+      dut.io.decoded.mma_last.expect(false.B)
+      dut.io.decoded.mma_reset.expect(false.B)
+    }
+  }
+
+  "InstrDecoder" should "decode mma with keep=false (PE reset feed)" in {
+    simulate(new InstrDecoder) { dut =>
+      dut.io.instr.poke((mma(rd=0, rs1=1, rs2=2, keep=false).toLong & 0xFFFFFFFFL).U)
+      dut.clock.step(0)
+      assert(!dut.io.illegal.peek().litToBoolean)
+      dut.io.decoded.mma_keep.expect(false.B)
+    }
+  }
+
+  "InstrDecoder" should "decode mma.last honouring funct7[4] keep" in {
+    simulate(new InstrDecoder) { dut =>
+      // keep=true: accumulate-then-drain
+      dut.io.instr.poke((mmaLast(rd=0, rs1=1, rs2=2, keep=true).toLong & 0xFFFFFFFFL).U)
+      dut.clock.step(0)
+      assert(!dut.io.illegal.peek().litToBoolean)
+      dut.io.decoded.mma_last.expect(true.B)
+      dut.io.decoded.mma_keep.expect(true.B)
+
+      // keep=false: reset-then-drain
+      dut.io.instr.poke((mmaLast(rd=0, rs1=1, rs2=2, keep=false).toLong & 0xFFFFFFFFL).U)
+      dut.clock.step(0)
+      assert(!dut.io.illegal.peek().litToBoolean)
+      dut.io.decoded.mma_last.expect(true.B)
+      dut.io.decoded.mma_keep.expect(false.B)
+    }
+  }
+
+  "InstrDecoder" should "decode mma.reset" in {
+    simulate(new InstrDecoder) { dut =>
+      dut.io.instr.poke((mmaReset(rd=0, rs1=1, rs2=2).toLong & 0xFFFFFFFFL).U)
+      dut.clock.step(0)
+      assert(!dut.io.illegal.peek().litToBoolean)
+      dut.io.decoded.mma_reset.expect(true.B)
+      dut.io.decoded.mma_last.expect(false.B)
+      dut.io.decoded.mma_keep.expect(false.B)
+    }
+  }
+
+  "InstrDecoder" should "flag reserved MMA funct3 (3..7) as illegal" in {
+    simulate(new InstrDecoder) { dut =>
+      for (f3 <- 3 to 7) {
+        val instr = encR(0x03, f3, f7(VR), 0, 1, 2)
+        dut.io.instr.poke((instr.toLong & 0xFFFFFFFFL).U)
+        dut.clock.step(0)
+        assert(dut.io.illegal.peek().litToBoolean, s"MMA funct3=$f3 should be illegal")
+      }
+    }
+  }
+
+  // ==========================================================================
+  // LD / ST (RVV-aligned vle/vse)
+  // ==========================================================================
+  "InstrDecoder" should "decode vle8/vle16/vle32 loads" in {
+    simulate(new InstrDecoder) { dut =>
+      // I-format: rs2 field carries imm[4:0]
+      check(dut, vle8 (rd=5,  sect=SECT_A, off=0x123),
+            OpFamily.LD, VecOp.vadd, expRd=5, expRs1=SECT_A, expRs2=0x123&0x1F, expMemWidth=0, expMemOff=0x123)
+      check(dut, vle16(rd=3,  sect=SECT_B, off=0x400),
+            OpFamily.LD, VecOp.vadd, expRd=3, expRs1=SECT_B, expRs2=0x400&0x1F, expMemWidth=1, expMemOff=0x400)
+      check(dut, vle32(rd=0,  sect=SECT_OUT, off=0xF80),
+            OpFamily.LD, VecOp.vadd, expRd=0, expRs1=SECT_OUT, expRs2=0xF80&0x1F, expMemWidth=2, expMemOff=0xF80)
+    }
+  }
+
+  "InstrDecoder" should "decode vse8/vse16/vse32 stores" in {
+    simulate(new InstrDecoder) { dut =>
+      check(dut, vse8 (src=7,  sect=SECT_A, off=0),
+            OpFamily.ST, VecOp.vadd, expRd=7, expRs1=SECT_A, expRs2=0, expMemWidth=0, expMemOff=0)
+      check(dut, vse16(src=4,  sect=SECT_ACCUM, off=0),
+            OpFamily.ST, VecOp.vadd, expRd=4, expRs1=SECT_ACCUM, expRs2=0, expMemWidth=1, expMemOff=0)
+      check(dut, vse32(src=2,  sect=SECT_OUT, off=0x080),
+            OpFamily.ST, VecOp.vadd, expRd=2, expRs1=SECT_OUT, expRs2=0x080&0x1F, expMemWidth=2, expMemOff=0x080)
+    }
+  }
+
+  "InstrDecoder" should "flag reserved LD/ST funct3 (3..7) as illegal" in {
+    simulate(new InstrDecoder) { dut =>
+      for (op <- Seq(0x07, 0x27); f3 <- 3 to 7) {
+        val instr = encI(op, f3, 1, 0, 0)
+        dut.io.instr.poke((instr.toLong & 0xFFFFFFFFL).U)
+        dut.clock.step(0)
+        assert(dut.io.illegal.peek().litToBoolean, s"opcode=0x$op funct3=$f3 should be illegal")
+      }
+    }
+  }
+
+  // ==========================================================================
+  // Global illegal detection
+  // ==========================================================================
+  "InstrDecoder" should "assert illegal for reserved opcode" in {
+    simulate(new InstrDecoder) { dut =>
+      // 0x01/0x02 (legacy LD/ST) are now reserved
+      dut.io.instr.poke(0x01.U)
+      dut.clock.step(0)
+      assert(dut.io.illegal.peek().litToBoolean, "Legacy LD opcode 0x01 should be illegal")
+      dut.io.instr.poke(0x02.U)
+      dut.clock.step(0)
+      assert(dut.io.illegal.peek().litToBoolean, "Legacy ST opcode 0x02 should be illegal")
+      // fully reserved opcode
+      dut.io.instr.poke(0x7F.U)
+      dut.clock.step(0)
+      assert(dut.io.illegal.peek().litToBoolean, "Reserved opcode 0x7F should be illegal")
+    }
+  }
+
+  "InstrDecoder" should "flag reserved width (funct7[1:0]=3) as illegal" in {
+    simulate(new InstrDecoder) { dut =>
+      val instr = encR(0x10, 0, f7(width=3), 0, 1, 2)
+      dut.io.instr.poke((instr.toLong & 0xFFFFFFFFL).U)
+      dut.clock.step(0)
+      assert(dut.io.illegal.peek().litToBoolean, "width=3 should be illegal")
+    }
+  }
+
+  "InstrDecoder" should "flag reserved dtype (funct7[6:5]=3) as illegal" in {
+    simulate(new InstrDecoder) { dut =>
+      val instr = encR(0x10, 0, f7(dtype=3), 0, 1, 2)
+      dut.io.instr.poke((instr.toLong & 0xFFFFFFFFL).U)
+      dut.clock.step(0)
+      assert(dut.io.illegal.peek().litToBoolean, "dtype=3 should be illegal")
     }
   }
 }

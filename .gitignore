@@ -119,3 +119,5 @@ ip/vivado/xc7k480t/proj/
 drivers/chisel_npu_py/dist/
 drivers/chisel_npu_py/build/
 drivers/chisel_npu_py/*.so
+
+*.out
