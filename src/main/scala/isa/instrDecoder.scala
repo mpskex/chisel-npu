@@ -85,146 +85,28 @@ class InstrDecoder extends Module {
 
   // ---------- VALU op decode (opcode+funct3 → VecOp) ----------
 
-  // Map (family, funct3) → VecOp.  Use a big MuxCase to stay Chisel-idiomatic.
-  // Default = vadd (harmless; illegal flag suppresses write-back)
+  // Fold (opcode, funct3) → VecOp over InstrTable.byOpcode: InstrTable is the
+  // single source of truth for the legal decode map.  CVT (opcode 0x14) is the
+  // exception — its legality is a correlated (dst, src) format pair rather than
+  // funct3 membership — so it folds over InstrTable.cvtPairs instead.
+  // Default = vadd (harmless; illegal flag suppresses write-back).
   val vecOp = WireDefault(VecOp.vadd)
-  // f3OK tracks whether funct3 is legal for the decoded family.  Default true:
-  // NOP and families whose funct3 space is fully populated need no reserved
-  // cases; families with reserved funct3 values clear it in their branch.
+  // f3OK tracks whether funct3 is legal for the decoded opcode.  It defaults
+  // true so NOP (opcode 0x00), the sole funct3 don't-care opcode, is legal for
+  // every funct3 value.  Table opcodes clear it and re-assert it only on a
+  // funct3 match.  Reserved opcodes are rejected by familyOK regardless of
+  // f3OK, so the true default cannot leak an unaliased reserved word.
   val f3OK = WireDefault(true.B)
-
-  switch (family) {
-    is (OpFamily.VALU_ARITH) {
-      switch (f3) {
-        is (Funct3Arith.ADD)  { vecOp := VecOp.vadd  }
-        is (Funct3Arith.SUB)  { vecOp := VecOp.vsub  }
-        is (Funct3Arith.MUL)  { vecOp := VecOp.vmul  }
-        is (Funct3Arith.NEG)  { vecOp := VecOp.vneg  }
-        is (Funct3Arith.ABS)  { vecOp := VecOp.vabs  }
-        is (Funct3Arith.MAX)  { vecOp := VecOp.vmax  }
-        is (Funct3Arith.MIN)  { vecOp := VecOp.vmin  }
-        is (Funct3Arith.RSUB) { vecOp := VecOp.vrsub }
-      }
+  for ((opcode, defs) <- InstrTable.byOpcode if opcode != 0x00 && opcode != 0x14) {
+    when (opBits === opcode.U) {
+      f3OK := false.B
+      for (d <- defs) when (f3 === d.funct3.U) { vecOp := d.op; f3OK := true.B }
     }
-    is (OpFamily.VALU_LOGIC) {
-      switch (f3) {
-        is (Funct3Logic.SLL) { vecOp := VecOp.vsll }
-        is (Funct3Logic.SRL) { vecOp := VecOp.vsrl }
-        is (Funct3Logic.SRA) { vecOp := VecOp.vsra }
-        is (Funct3Logic.ROL) { vecOp := VecOp.vrol }
-        is (Funct3Logic.XOR) { vecOp := VecOp.vxor }
-        is (Funct3Logic.NOT) { vecOp := VecOp.vnot }
-        is (Funct3Logic.OR)  { vecOp := VecOp.vor  }
-        is (Funct3Logic.AND) { vecOp := VecOp.vand }
-      }
-    }
-    is (OpFamily.VALU_REDUCE) {
-      switch (f3) {
-        is (Funct3Reduce.SUM)  { vecOp := VecOp.vsum  }
-        is (Funct3Reduce.RMAX) { vecOp := VecOp.vrmax }
-        is (Funct3Reduce.RMIN) { vecOp := VecOp.vrmin }
-        is (Funct3Reduce.RAND) { vecOp := VecOp.vrand }
-        is (Funct3Reduce.ROR)  { vecOp := VecOp.vror  }
-        is (Funct3Reduce.RXOR) { vecOp := VecOp.vrxor }
-      }
-      when (f3 === 6.U || f3 === 7.U) { f3OK := false.B }
-    }
-    is (OpFamily.VALU_LUT) {
-      // vlut (funct3=0/1): R-type lookup. Bank A (0) or B (1) via funct3[0],
-      //   propagated as round[0] in the decoded bundle.
-      // vsetlut (funct3=4/5): I-type segment write. Bank A (4) or B (5).
-      //   imm carries the segment index; no register-file write.
-      // funct3 2, 3, 6, 7: reserved — flag as illegal.
-      switch (f3) {
-        is (Funct3Lut.VLUT_A)    { vecOp := VecOp.vlut    }
-        is (Funct3Lut.VLUT_B)    { vecOp := VecOp.vlut    }
-        is (Funct3Lut.VSETLUT_A) { vecOp := VecOp.vsetlut }
-        is (Funct3Lut.VSETLUT_B) { vecOp := VecOp.vsetlut }
-      }
-      // illegal: reserved funct3 values 2, 3, 6, 7
-      when (f3 === 2.U || f3 === 3.U || f3 === 6.U || f3 === 7.U) {
-        f3OK := false.B
-      }
-    }
-    is (OpFamily.VALU_CVT) {
-      // funct3 = dst format; funct7[2:0] = src format
-      val dst = f3
-      val src = f7CvtSrc
-      val bf8 = f7Bf8
-      // decode into VecOp
-      vecOp := MuxCase(VecOp.vadd, Seq(
-        (dst === FmtCode.S8  && src === FmtCode.S32)  -> VecOp.vcvt_s8_s32,
-        (dst === FmtCode.S32 && src === FmtCode.S8)   -> VecOp.vcvt_s32_s8,
-        (dst === FmtCode.S32 && src === FmtCode.F32)  -> VecOp.vcvt_s32_f32,
-        (dst === FmtCode.F32 && src === FmtCode.S32)  -> VecOp.vcvt_f32_s32,
-        (dst === FmtCode.F32 && src === FmtCode.S8)   -> VecOp.vcvt_f32_s8,
-        (dst === FmtCode.S8  && src === FmtCode.F32)  -> VecOp.vcvt_s8_f32,
-        (dst === FmtCode.F32 && src === FmtCode.BF16) -> VecOp.vcvt_f32_bf16,
-        (dst === FmtCode.BF16 && src === FmtCode.F32) -> VecOp.vcvt_bf16_f32,
-        (dst === FmtCode.F32 && src === FmtCode.BF8)  -> VecOp.vcvt_f32_bf8,
-        (dst === FmtCode.BF8 && src === FmtCode.F32)  -> VecOp.vcvt_bf8_f32,
-        (dst === FmtCode.S16 && src === FmtCode.S32)  -> VecOp.vcvt_s16_s32,
-        (dst === FmtCode.S32 && src === FmtCode.S16)  -> VecOp.vcvt_s32_s16,
-      ))
-      // illegal: only the 12 correlated (dst, src) format pairs are valid
-      val cvtValid = Seq(
-        (FmtCode.S8, FmtCode.S32), (FmtCode.S32, FmtCode.S8),
-        (FmtCode.S32, FmtCode.F32), (FmtCode.F32, FmtCode.S32),
-        (FmtCode.F32, FmtCode.S8), (FmtCode.S8, FmtCode.F32),
-        (FmtCode.F32, FmtCode.BF16), (FmtCode.BF16, FmtCode.F32),
-        (FmtCode.F32, FmtCode.BF8), (FmtCode.BF8, FmtCode.F32),
-        (FmtCode.S16, FmtCode.S32), (FmtCode.S32, FmtCode.S16)
-      ).map { case (d, s) => (f3 === d && f7CvtSrc === s) }.reduce(_ || _)
-      when (!cvtValid) { f3OK := false.B }
-    }
-    is (OpFamily.VALU_BCAST) {
-      switch (f3) {
-        is (Funct3Bcast.REG) { vecOp := VecOp.vbcast_reg }
-        is (Funct3Bcast.IMM) { vecOp := VecOp.vbcast_imm }
-        // default: f3OK stays true but vecOp harmless; non-listed values not hit via safe
-      }
-      when (f3 >= 2.U) { f3OK := false.B }
-    }
-    is (OpFamily.VALU_FP) {
-      switch (f3) {
-        is (Funct3Fp.FADD) { vecOp := VecOp.vfadd }
-        is (Funct3Fp.FSUB) { vecOp := VecOp.vfsub }
-        is (Funct3Fp.FMUL) { vecOp := VecOp.vfmul }
-        is (Funct3Fp.FNEG) { vecOp := VecOp.vfneg }
-        is (Funct3Fp.FABS) { vecOp := VecOp.vfabs }
-        is (Funct3Fp.FMAX) { vecOp := VecOp.vfmax }
-        is (Funct3Fp.FMIN) { vecOp := VecOp.vfmin }
-      }
-      when (f3 === 7.U) { f3OK := false.B }
-    }
-    is (OpFamily.VALU_FP_FMA) {
-      switch (f3) {
-        is (Funct3Fma.FMA)  { vecOp := VecOp.vfma  }
-        is (Funct3Fma.FMS)  { vecOp := VecOp.vfms  }
-        is (Funct3Fma.NFMA) { vecOp := VecOp.vnfma }
-        is (Funct3Fma.NFMS) { vecOp := VecOp.vnfms }
-      }
-      when (f3 >= 4.U) { f3OK := false.B }
-    }
-    is (OpFamily.VALU_MOV) {
-      switch (f3) {
-        is (Funct3Mov.MOV)  { vecOp := VecOp.vmov  }
-        is (Funct3Mov.MOVI) { vecOp := VecOp.vmovi }
-        is (Funct3Mov.MOVH) { vecOp := VecOp.vmovh }
-      }
-      when (f3 >= 3.U) { f3OK := false.B }
-    }
-    is (OpFamily.MMA) {
-      // vecOp stays at default (not used); only funct3 legality is tracked.
-      when (f3 >= 3.U) { f3OK := false.B }
-    }
-    is (OpFamily.LD) {
-      when (f3 >= 3.U) { f3OK := false.B }
-    }
-    is (OpFamily.ST) {
-      when (f3 >= 3.U) { f3OK := false.B }
-    }
-    // NOP: f3OK stays true for all funct3
+  }
+  when (opBits === 0x14.U) {          // CVT: legality from correlated (dst, src)
+    f3OK := false.B
+    for (p <- InstrTable.cvtPairs)
+      when (f3 === p.dst.U && f7CvtSrc === p.src.U) { vecOp := p.op; f3OK := true.B }
   }
 
   // ---------- Width decode — drive as raw UInt(2.W) to match NCoreVALUBundle ----------
