@@ -482,7 +482,7 @@ class InstrDecoderSpec extends AnyFlatSpec {
 
   "InstrDecoder" should "flag opcodes with bit 6 set as illegal (no aliasing)" in {
     simulate(new InstrDecoder) { dut =>
-      for (op <- Seq(0x40, 0x41, 0x50, 0x60, 0x7F)) {
+      for (op <- Seq(0x40, 0x41, 0x43, 0x47, 0x50, 0x57, 0x60, 0x67, 0x7F)) {
         val instr = encR(op, 0, f7(VX), 0, 1, 2)
         dut.io.instr.poke((instr.toLong & 0xFFFFFFFFL).U)
         dut.clock.step(0)

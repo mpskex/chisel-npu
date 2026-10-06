@@ -75,14 +75,13 @@ class InstrDecoder extends Module {
 
   // Decode opcode family from the full 7-bit opcode field.
   // OpFamily auto-infers its width from the maximum enum value (0x27 = 39
-  // → 6 bits), so it cannot represent opcodes with bit 6 set.  Checking the
-  // truncated field would alias 0x40..0x7F onto valid families (0x40 → NOP).
-  // Validate against the full field with an explicit membership test.
-  val familyOK = Seq(0x00, 0x03, 0x07, 0x10, 0x11, 0x12, 0x13,
-                     0x14, 0x15, 0x16, 0x17, 0x18, 0x27)
-    .map(o => opBits === o.U).reduce(_ || _)
-  // Every valid opcode is ≤ 0x27, so the low 6 bits carry the family value.
-  val family = OpFamily.safe(opBits(5, 0))._1
+  // → 6 bits), so it cannot represent opcodes with bit 6 set.  Truncating the
+  // field before decode would alias 0x40..0x7F onto valid families
+  // (0x40 → NOP).  Both the validity check and the family value are derived
+  // from OpFamily.all, the single source of truth for the member set.
+  val familyOK = OpFamily.all.map(v => opBits === v.litValue.U).reduce(_ || _)
+  val family   = MuxCase(OpFamily.NOP: OpFamily.Type,
+                         OpFamily.all.map(v => (opBits === v.litValue.U) -> v))
 
   // ---------- VALU op decode (opcode+funct3 → VecOp) ----------
 
