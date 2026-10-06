@@ -96,42 +96,100 @@ object NpuAssembler {
 
   // ---- VALU_ARITH (opcode=0x10) --------------------------------------------
 
-  def vadd (rd: Int, rs1: Int, rs2: Int, width: Int = VX, sat: Boolean = false): Int =
-    encR(0x10, 0, f7(width, sat=sat), rd, rs1, rs2)
-  def vsub (rd: Int, rs1: Int, rs2: Int, width: Int = VX, sat: Boolean = false): Int =
-    encR(0x10, 1, f7(width, sat=sat), rd, rs1, rs2)
-  def vmul (rd: Int, rs1: Int, rs2: Int, width: Int = VX, sat: Boolean = false): Int =
-    encR(0x10, 2, f7(width, sat=sat), rd, rs1, rs2)
-  def vneg (rd: Int, rs1: Int, width: Int = VX, sat: Boolean = false): Int =
-    encR(0x10, 3, f7(width, sat=sat), rd, rs1, 0)
-  def vabs (rd: Int, rs1: Int, width: Int = VX, sat: Boolean = false): Int =
-    encR(0x10, 4, f7(width, sat=sat), rd, rs1, 0)
-  def vmax (rd: Int, rs1: Int, rs2: Int, width: Int = VX): Int =
-    encR(0x10, 5, f7(width), rd, rs1, rs2)
-  def vmin (rd: Int, rs1: Int, rs2: Int, width: Int = VX): Int =
-    encR(0x10, 6, f7(width), rd, rs1, rs2)
-  def vrsub(rd: Int, rs1: Int, rs2: Int, width: Int = VX, sat: Boolean = false): Int =
-    encR(0x10, 7, f7(width, sat=sat), rd, rs1, rs2)
+  def vadd (rd: Int, rs1: Int, rs2: Int, width: Int = VX, sat: Boolean = false): Int = {
+    val d = InstrTable.byMnemonic("vadd")
+    encR(d.opcode, d.funct3, f7(width, sat=sat), rd, rs1, rs2)
+  }
+  def vsub (rd: Int, rs1: Int, rs2: Int, width: Int = VX, sat: Boolean = false): Int = {
+    val d = InstrTable.byMnemonic("vsub")
+    encR(d.opcode, d.funct3, f7(width, sat=sat), rd, rs1, rs2)
+  }
+  def vmul (rd: Int, rs1: Int, rs2: Int, width: Int = VX, sat: Boolean = false): Int = {
+    val d = InstrTable.byMnemonic("vmul")
+    encR(d.opcode, d.funct3, f7(width, sat=sat), rd, rs1, rs2)
+  }
+  def vneg (rd: Int, rs1: Int, width: Int = VX, sat: Boolean = false): Int = {
+    val d = InstrTable.byMnemonic("vneg")
+    encR(d.opcode, d.funct3, f7(width, sat=sat), rd, rs1, 0)
+  }
+  def vabs (rd: Int, rs1: Int, width: Int = VX, sat: Boolean = false): Int = {
+    val d = InstrTable.byMnemonic("vabs")
+    encR(d.opcode, d.funct3, f7(width, sat=sat), rd, rs1, 0)
+  }
+  def vmax (rd: Int, rs1: Int, rs2: Int, width: Int = VX): Int = {
+    val d = InstrTable.byMnemonic("vmax")
+    encR(d.opcode, d.funct3, f7(width), rd, rs1, rs2)
+  }
+  def vmin (rd: Int, rs1: Int, rs2: Int, width: Int = VX): Int = {
+    val d = InstrTable.byMnemonic("vmin")
+    encR(d.opcode, d.funct3, f7(width), rd, rs1, rs2)
+  }
+  def vrsub(rd: Int, rs1: Int, rs2: Int, width: Int = VX, sat: Boolean = false): Int = {
+    val d = InstrTable.byMnemonic("vrsub")
+    encR(d.opcode, d.funct3, f7(width, sat=sat), rd, rs1, rs2)
+  }
 
   // ---- VALU_LOGIC (opcode=0x11) --------------------------------------------
 
-  def vsll(rd: Int, rs1: Int, rs2: Int, width: Int = VX): Int = encR(0x11, 0, f7(width), rd, rs1, rs2)
-  def vsrl(rd: Int, rs1: Int, rs2: Int, width: Int = VX): Int = encR(0x11, 1, f7(width), rd, rs1, rs2)
-  def vsra(rd: Int, rs1: Int, rs2: Int, width: Int = VX): Int = encR(0x11, 2, f7(width), rd, rs1, rs2)
-  def vrol(rd: Int, rs1: Int, rs2: Int, width: Int = VX): Int = encR(0x11, 3, f7(width), rd, rs1, rs2)
-  def vxor(rd: Int, rs1: Int, rs2: Int, width: Int = VX): Int = encR(0x11, 4, f7(width), rd, rs1, rs2)
-  def vnot(rd: Int, rs1: Int, width: Int = VX): Int            = encR(0x11, 5, f7(width), rd, rs1, 0)
-  def vor (rd: Int, rs1: Int, rs2: Int, width: Int = VX): Int  = encR(0x11, 6, f7(width), rd, rs1, rs2)
-  def vand(rd: Int, rs1: Int, rs2: Int, width: Int = VX): Int  = encR(0x11, 7, f7(width), rd, rs1, rs2)
+  def vsll(rd: Int, rs1: Int, rs2: Int, width: Int = VX): Int = {
+    val d = InstrTable.byMnemonic("vsll")
+    encR(d.opcode, d.funct3, f7(width), rd, rs1, rs2)
+  }
+  def vsrl(rd: Int, rs1: Int, rs2: Int, width: Int = VX): Int = {
+    val d = InstrTable.byMnemonic("vsrl")
+    encR(d.opcode, d.funct3, f7(width), rd, rs1, rs2)
+  }
+  def vsra(rd: Int, rs1: Int, rs2: Int, width: Int = VX): Int = {
+    val d = InstrTable.byMnemonic("vsra")
+    encR(d.opcode, d.funct3, f7(width), rd, rs1, rs2)
+  }
+  def vrol(rd: Int, rs1: Int, rs2: Int, width: Int = VX): Int = {
+    val d = InstrTable.byMnemonic("vrol")
+    encR(d.opcode, d.funct3, f7(width), rd, rs1, rs2)
+  }
+  def vxor(rd: Int, rs1: Int, rs2: Int, width: Int = VX): Int = {
+    val d = InstrTable.byMnemonic("vxor")
+    encR(d.opcode, d.funct3, f7(width), rd, rs1, rs2)
+  }
+  def vnot(rd: Int, rs1: Int, width: Int = VX): Int = {
+    val d = InstrTable.byMnemonic("vnot")
+    encR(d.opcode, d.funct3, f7(width), rd, rs1, 0)
+  }
+  def vor (rd: Int, rs1: Int, rs2: Int, width: Int = VX): Int = {
+    val d = InstrTable.byMnemonic("vor")
+    encR(d.opcode, d.funct3, f7(width), rd, rs1, rs2)
+  }
+  def vand(rd: Int, rs1: Int, rs2: Int, width: Int = VX): Int = {
+    val d = InstrTable.byMnemonic("vand")
+    encR(d.opcode, d.funct3, f7(width), rd, rs1, rs2)
+  }
 
   // ---- VALU_REDUCE (opcode=0x12) -------------------------------------------
 
-  def vsum (rd: Int, rs1: Int, width: Int = VX): Int = encR(0x12, 0, f7(width), rd, rs1, 0)
-  def vrmax(rd: Int, rs1: Int, width: Int = VX): Int = encR(0x12, 1, f7(width), rd, rs1, 0)
-  def vrmin(rd: Int, rs1: Int, width: Int = VX): Int = encR(0x12, 2, f7(width), rd, rs1, 0)
-  def vrand(rd: Int, rs1: Int, width: Int = VX): Int = encR(0x12, 3, f7(width), rd, rs1, 0)
-  def vror (rd: Int, rs1: Int, width: Int = VX): Int = encR(0x12, 4, f7(width), rd, rs1, 0)
-  def vrxor(rd: Int, rs1: Int, width: Int = VX): Int = encR(0x12, 5, f7(width), rd, rs1, 0)
+  def vsum (rd: Int, rs1: Int, width: Int = VX): Int = {
+    val d = InstrTable.byMnemonic("vsum")
+    encR(d.opcode, d.funct3, f7(width), rd, rs1, 0)
+  }
+  def vrmax(rd: Int, rs1: Int, width: Int = VX): Int = {
+    val d = InstrTable.byMnemonic("vrmax")
+    encR(d.opcode, d.funct3, f7(width), rd, rs1, 0)
+  }
+  def vrmin(rd: Int, rs1: Int, width: Int = VX): Int = {
+    val d = InstrTable.byMnemonic("vrmin")
+    encR(d.opcode, d.funct3, f7(width), rd, rs1, 0)
+  }
+  def vrand(rd: Int, rs1: Int, width: Int = VX): Int = {
+    val d = InstrTable.byMnemonic("vrand")
+    encR(d.opcode, d.funct3, f7(width), rd, rs1, 0)
+  }
+  def vror (rd: Int, rs1: Int, width: Int = VX): Int = {
+    val d = InstrTable.byMnemonic("vror")
+    encR(d.opcode, d.funct3, f7(width), rd, rs1, 0)
+  }
+  def vrxor(rd: Int, rs1: Int, width: Int = VX): Int = {
+    val d = InstrTable.byMnemonic("vrxor")
+    encR(d.opcode, d.funct3, f7(width), rd, rs1, 0)
+  }
 
   // ---- VALU_LUT (opcode=0x13) — programmable two-bank LUT -------------------
   // Bank select: 0=A (default), 1=B.
@@ -140,8 +198,10 @@ object NpuAssembler {
    * Per-lane lookup: out[i] = lut_bank[in_a_vx[i]].
    * bank=0 → bank A (funct3=0), bank=1 → bank B (funct3=1).
    */
-  def vlut(rd: Int, rs1: Int, bank: Int = 0): Int =
-    encR(0x13, bank & 1, f7(VX), rd, rs1, 0)
+  def vlut(rd: Int, rs1: Int, bank: Int = 0): Int = {
+    val d = InstrTable.byMnemonic(if ((bank & 1) == 0) "vlut.A" else "vlut.B")
+    encR(d.opcode, d.funct3, f7(VX), rd, rs1, 0)
+  }
 
   /**
    * Write one K×4-byte segment from VR[rs1] into the selected LUT bank.
@@ -149,8 +209,10 @@ object NpuAssembler {
    * bank=0 → bank A (funct3=4), bank=1 → bank B (funct3=5).
    * I-type: rd=0 (no register-file destination); imm=segment.
    */
-  def vsetlut(rs1: Int, segment: Int, bank: Int = 0): Int =
-    encI(0x13, 4 + (bank & 1), 0, rs1, segment)
+  def vsetlut(rs1: Int, segment: Int, bank: Int = 0): Int = {
+    val d = InstrTable.byMnemonic(if ((bank & 1) == 0) "vsetlut.A" else "vsetlut.B")
+    encI(d.opcode, d.funct3, 0, rs1, segment)
+  }
 
   // ---- VALU_CVT (opcode=0x14) ----------------------------------------------
   // funct3 = dst fmt code; f7 encodes src + sat + round + bf8 variant
@@ -158,8 +220,11 @@ object NpuAssembler {
   def vcvt(rd: Int, rs1: Int,
            dstFmt: Int, srcFmt: Int,
            sat: Boolean = true, round: Int = RNE,
-           bf8E5M2: Boolean = false): Int =
+           bf8E5M2: Boolean = false): Int = {
+    require(InstrTable.cvtPairs.exists(p => p.dst == dstFmt && p.src == srcFmt),
+      s"vcvt: no legal CVT pair (dst=$dstFmt, src=$srcFmt)")
     encR(0x14, dstFmt, f7Cvt(srcFmt, sat, round, bf8E5M2), rd, rs1, 0)
+  }
 
   // Convenience aliases
   def vcvt_s8_s32 (rd: Int, rs1: Int, sat: Boolean = true,  round: Int = RNE): Int = vcvt(rd, rs1, S8,   S32, sat, round)
@@ -178,63 +243,108 @@ object NpuAssembler {
   // ---- VALU_BCAST (opcode=0x15) --------------------------------------------
 
   /** Broadcast lane 0 of rs1 to all K lanes of rd (R-format). */
-  def vbcast(rd: Int, rs1: Int, width: Int = VX): Int =
-    encR(0x15, 0, f7(width), rd, rs1, 0)
+  def vbcast(rd: Int, rs1: Int, width: Int = VX): Int = {
+    val d = InstrTable.byMnemonic("vbcast")
+    encR(d.opcode, d.funct3, f7(width), rd, rs1, 0)
+  }
 
   /** Broadcast sign-extended 12-bit immediate to all K lanes of rd (I-format). */
-  def vbcastImm(rd: Int, imm: Int, width: Int = VX): Int =
-    encI(0x15, 1, rd, 0, imm)
+  def vbcastImm(rd: Int, imm: Int, width: Int = VX): Int = {
+    val d = InstrTable.byMnemonic("vbcast.imm")
+    encI(d.opcode, d.funct3, rd, 0, imm)
+  }
 
   // ---- VALU_FP (opcode=0x16) — FP32 on VR ---------------------------------
 
-  def vfadd(rd: Int, rs1: Int, rs2: Int, round: Int = RNE): Int =
-    encR(0x16, 0, f7(VR, round=round, dtype=FP), rd, rs1, rs2)
-  def vfsub(rd: Int, rs1: Int, rs2: Int, round: Int = RNE): Int =
-    encR(0x16, 1, f7(VR, round=round, dtype=FP), rd, rs1, rs2)
-  def vfmul(rd: Int, rs1: Int, rs2: Int, round: Int = RNE): Int =
-    encR(0x16, 2, f7(VR, round=round, dtype=FP), rd, rs1, rs2)
-  def vfneg(rd: Int, rs1: Int): Int =
-    encR(0x16, 3, f7(VR, dtype=FP), rd, rs1, 0)
-  def vfabs(rd: Int, rs1: Int): Int =
-    encR(0x16, 4, f7(VR, dtype=FP), rd, rs1, 0)
-  def vfmax(rd: Int, rs1: Int, rs2: Int): Int =
-    encR(0x16, 5, f7(VR, dtype=FP), rd, rs1, rs2)
-  def vfmin(rd: Int, rs1: Int, rs2: Int): Int =
-    encR(0x16, 6, f7(VR, dtype=FP), rd, rs1, rs2)
+  def vfadd(rd: Int, rs1: Int, rs2: Int, round: Int = RNE): Int = {
+    val d = InstrTable.byMnemonic("vfadd")
+    encR(d.opcode, d.funct3, f7(VR, round=round, dtype=FP), rd, rs1, rs2)
+  }
+  def vfsub(rd: Int, rs1: Int, rs2: Int, round: Int = RNE): Int = {
+    val d = InstrTable.byMnemonic("vfsub")
+    encR(d.opcode, d.funct3, f7(VR, round=round, dtype=FP), rd, rs1, rs2)
+  }
+  def vfmul(rd: Int, rs1: Int, rs2: Int, round: Int = RNE): Int = {
+    val d = InstrTable.byMnemonic("vfmul")
+    encR(d.opcode, d.funct3, f7(VR, round=round, dtype=FP), rd, rs1, rs2)
+  }
+  def vfneg(rd: Int, rs1: Int): Int = {
+    val d = InstrTable.byMnemonic("vfneg")
+    encR(d.opcode, d.funct3, f7(VR, dtype=FP), rd, rs1, 0)
+  }
+  def vfabs(rd: Int, rs1: Int): Int = {
+    val d = InstrTable.byMnemonic("vfabs")
+    encR(d.opcode, d.funct3, f7(VR, dtype=FP), rd, rs1, 0)
+  }
+  def vfmax(rd: Int, rs1: Int, rs2: Int): Int = {
+    val d = InstrTable.byMnemonic("vfmax")
+    encR(d.opcode, d.funct3, f7(VR, dtype=FP), rd, rs1, rs2)
+  }
+  def vfmin(rd: Int, rs1: Int, rs2: Int): Int = {
+    val d = InstrTable.byMnemonic("vfmin")
+    encR(d.opcode, d.funct3, f7(VR, dtype=FP), rd, rs1, rs2)
+  }
 
   // ---- VALU_FP_FMA (opcode=0x17) — S-format -------------------------------
 
-  def vfma (rd: Int, rs1: Int, rs2: Int, rs3: Int, round: Int = RNE): Int =
-    encS(0x17, 0, rd, rs1, rs2, rs3, round)
-  def vfms (rd: Int, rs1: Int, rs2: Int, rs3: Int, round: Int = RNE): Int =
-    encS(0x17, 1, rd, rs1, rs2, rs3, round)
-  def vnfma(rd: Int, rs1: Int, rs2: Int, rs3: Int, round: Int = RNE): Int =
-    encS(0x17, 2, rd, rs1, rs2, rs3, round)
-  def vnfms(rd: Int, rs1: Int, rs2: Int, rs3: Int, round: Int = RNE): Int =
-    encS(0x17, 3, rd, rs1, rs2, rs3, round)
+  def vfma (rd: Int, rs1: Int, rs2: Int, rs3: Int, round: Int = RNE): Int = {
+    val d = InstrTable.byMnemonic("vfma")
+    encS(d.opcode, d.funct3, rd, rs1, rs2, rs3, round)
+  }
+  def vfms (rd: Int, rs1: Int, rs2: Int, rs3: Int, round: Int = RNE): Int = {
+    val d = InstrTable.byMnemonic("vfms")
+    encS(d.opcode, d.funct3, rd, rs1, rs2, rs3, round)
+  }
+  def vnfma(rd: Int, rs1: Int, rs2: Int, rs3: Int, round: Int = RNE): Int = {
+    val d = InstrTable.byMnemonic("vnfma")
+    encS(d.opcode, d.funct3, rd, rs1, rs2, rs3, round)
+  }
+  def vnfms(rd: Int, rs1: Int, rs2: Int, rs3: Int, round: Int = RNE): Int = {
+    val d = InstrTable.byMnemonic("vnfms")
+    encS(d.opcode, d.funct3, rd, rs1, rs2, rs3, round)
+  }
 
   // ---- VALU_MOV (opcode=0x18) ----------------------------------------------
 
-  def vmov (rd: Int, rs1: Int, width: Int = VX): Int =
-    encR(0x18, 0, f7(width), rd, rs1, 0)
-  def vmovi(rd: Int, imm: Int, width: Int = VX): Int =
-    encI(0x18, 1, rd, 0, imm)
-  def vmovh(rd: Int, imm: Int): Int =
-    encI(0x18, 2, rd, 0, imm)
+  def vmov (rd: Int, rs1: Int, width: Int = VX): Int = {
+    val d = InstrTable.byMnemonic("vmov")
+    encR(d.opcode, d.funct3, f7(width), rd, rs1, 0)
+  }
+  def vmovi(rd: Int, imm: Int, width: Int = VX): Int = {
+    val d = InstrTable.byMnemonic("vmovi")
+    encI(d.opcode, d.funct3, rd, 0, imm)
+  }
+  def vmovh(rd: Int, imm: Int): Int = {
+    val d = InstrTable.byMnemonic("vmovh")
+    encI(d.opcode, d.funct3, rd, 0, imm)
+  }
 
   // ---- MMA (opcode=0x03) ---------------------------------------------------
+  // S-format register-level MAC:  vd = A·B + C  (one K×1 collect per mma)
+  //   vs1 = A (VX, K×1 column), vs2 = B (VX, K×1 row),
+  //   vs3 = C (VR accumulator; x0 = no C), rd = vd (VR).
+  // Accumulation across instructions is software C-chaining (vs3 = previous
+  // output); each mma's feed resets the PEs (keep=0).  mma.last is the group
+  // marker (drain + collect) — the engine executes both identically.
 
-  /** mma rd=outVR, rs1=A_VX, rs2=B_VX; keep in funct7[4] (sat bit). */
-  def mma(rd: Int, rs1: Int, rs2: Int, keep: Boolean = true): Int =
-    encR(0x03, 0, f7(VR, sat=keep), rd, rs1, rs2)
+  /** mma vd, vs1, vs2, vs3 — vd = A·B + C. */
+  def mma(rd: Int, vs1: Int, vs2: Int, vs3: Int): Int = {
+    val d = InstrTable.byMnemonic("mma")
+    encS(d.opcode, d.funct3, rd, vs1, vs2, vs3)
+  }
 
-  /** mma.last — feed + drain; keep in funct7[4] (keep=true accumulates). */
-  def mmaLast(rd: Int, rs1: Int, rs2: Int, keep: Boolean = true): Int =
-    encR(0x03, 1, f7(VR, sat=keep), rd, rs1, rs2)
+  /** mma.last vd, vs1, vs2, vs3 — last of the group: collect + drain marker. */
+  def mmaLast(rd: Int, vs1: Int, vs2: Int, vs3: Int): Int = {
+    val d = InstrTable.byMnemonic("mma.last")
+    encS(d.opcode, d.funct3, rd, vs1, vs2, vs3)
+  }
 
-  /** mma.reset — clear PE accumulators. */
-  def mmaReset(rd: Int, rs1: Int, rs2: Int): Int =
-    encR(0x03, 2, f7(VR), rd, rs1, rs2)
+  /** Legacy mma.reset (R-format) — reserved by the new model; decodes but the
+    * engine flags it illegal.  Kept for decoder coverage only. */
+  def mmaReset(rd: Int, rs1: Int, rs2: Int): Int = {
+    val d = InstrTable.byMnemonic("mma.reset")
+    encR(d.opcode, d.funct3, f7(VR), rd, rs1, rs2)
+  }
 
   // ---- LD / ST (opcodes 0x07 / 0x27, RISC-V V-aligned) --------------------
   // Unit-stride whole-register vector transfers between the L3 DATA section
@@ -247,12 +357,51 @@ object NpuAssembler {
   val SECT_ACCUM = 2  // DATA section: ACCUM (K×1 int32, 128 B)
   val SECT_OUT   = 3  // DATA section: OUT   (K×K int32, 4 KiB)
 
-  def vle8 (rd: Int, sect: Int, off: Int = 0): Int = encI(0x07, 0, rd, sect, off)  // vle8.v  → VX
-  def vle16(rd: Int, sect: Int, off: Int = 0): Int = encI(0x07, 1, rd, sect, off)  // vle16.v → VE
-  def vle32(rd: Int, sect: Int, off: Int = 0): Int = encI(0x07, 2, rd, sect, off)  // vle32.v → VR
-  def vse8 (src: Int, sect: Int, off: Int = 0): Int = encI(0x27, 0, src, sect, off) // vse8.v  ← VX
-  def vse16(src: Int, sect: Int, off: Int = 0): Int = encI(0x27, 1, src, sect, off) // vse16.v ← VE
-  def vse32(src: Int, sect: Int, off: Int = 0): Int = encI(0x27, 2, src, sect, off) // vse32.v ← VR
+  def vle8 (rd: Int, sect: Int, off: Int = 0): Int = {  // vle8.v  → VX
+    val d = InstrTable.byMnemonic("vle8")
+    encI(d.opcode, d.funct3, rd, sect, off)
+  }
+  def vle16(rd: Int, sect: Int, off: Int = 0): Int = {  // vle16.v → VE
+    val d = InstrTable.byMnemonic("vle16")
+    encI(d.opcode, d.funct3, rd, sect, off)
+  }
+  def vle32(rd: Int, sect: Int, off: Int = 0): Int = {  // vle32.v → VR
+    val d = InstrTable.byMnemonic("vle32")
+    encI(d.opcode, d.funct3, rd, sect, off)
+  }
+  def vse8 (src: Int, sect: Int, off: Int = 0): Int = {  // vse8.v  ← VX
+    val d = InstrTable.byMnemonic("vse8")
+    encI(d.opcode, d.funct3, src, sect, off)
+  }
+  def vse16(src: Int, sect: Int, off: Int = 0): Int = {  // vse16.v ← VE
+    val d = InstrTable.byMnemonic("vse16")
+    encI(d.opcode, d.funct3, src, sect, off)
+  }
+  def vse32(src: Int, sect: Int, off: Int = 0): Int = {  // vse32.v ← VR
+    val d = InstrTable.byMnemonic("vse32")
+    encI(d.opcode, d.funct3, src, sect, off)
+  }
+
+  // ---- Generic table-driven encoding (used by the disassembler round-trip) --
+
+  /**
+   * Assemble a 32-bit word for any `InstrTable` entry using the format recorded
+   * in `d`.  Parameter meaning depends on `d.fmt`:
+   *   - R: `rd`, `rs1`, `rs2` are register indices; funct7 is built from
+   *        `width`, `round`, `sat` and `dtype`.
+   *   - I: `rd` is the destination, `rs1` is the I-type rs1 field, and `rs2`
+   *        carries the 12-bit immediate.
+   *   - S: `rd`, `rs1`, `rs2`, `rs3` are register indices; `round` is the mode.
+   *   - NoFmt: no operands — returns 0x00.
+   */
+  def encode(d: InstrDef, rd: Int, rs1: Int = 0, rs2: Int = 0, rs3: Int = 0,
+             width: Int = VX, round: Int = RNE, sat: Boolean = false, dtype: Int = INT): Int =
+    d.fmt match {
+      case Fmt.R     => encR(d.opcode, d.funct3, f7(width, round, sat, dtype), rd, rs1, rs2)
+      case Fmt.I     => encI(d.opcode, d.funct3, rd, rs1, rs2)
+      case Fmt.S     => encS(d.opcode, d.funct3, rd, rs1, rs2, rs3, round)
+      case Fmt.NoFmt => 0x00
+    }
 
   // ---- Convenience: convert Scala Int to Chisel UInt -----------------------
   implicit class IntToUInt(val v: Int) {
