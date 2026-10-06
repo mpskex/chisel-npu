@@ -75,8 +75,8 @@ as saturate. See `src/main/scala/isa/instrFormat.scala` for the full `CvtFunct7`
 | Family | Opcode | funct3 subops |
 |:---|:---:|:---|
 | NOP | 0x00 | — |
-| LD / ST | 0x01/0x02 | funct3 = transfer width |
-| MMA | 0x03 | 0=mma, 1=mma.last, 2=mma.reset |
+| LD / ST | 0x07/0x27 | funct3 = transfer width (0=VX, 1=VE, 2=VR) |
+| MMA | 0x03 | 0=mma, 1=mma.last, 2=mma.reset (decoder-legal; engine rejects) |
 | VALU_ARITH | 0x10 | add/sub/mul/neg/abs/max/min/rsub |
 | VALU_LOGIC | 0x11 | sll/srl/sra/rol/xor/not/or/and |
 | VALU_REDUCE | 0x12 | sum/rmax/rmin/rand/ror/rxor |
