@@ -18,6 +18,8 @@ nav:
     - Register Files: implementations/Registers.md
     - Quantization Pipeline: implementations/Quantization.md
     - Python Driver (chisel_npu_py): implementations/PythonDriver.md
+    - FPGA Bring-up (Virtex UltraScale+ xcvu9p): implementations/FPGA_VU9P.md
+    - FPGA Bring-up (Kintex-7 xc7k480t): implementations/FPGA_XC7K480T.md
   - Tutorials:
     - GEMM + Softmax Quantization: tutorials/gemm_softmax_quantization.md
 

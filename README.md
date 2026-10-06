@@ -28,6 +28,12 @@ This is a chisel workbench designed for someone who like docker containers and v
 - **FPGA reference platform**: Kintex-7 `xc7k480tffg1156-2` with PCIe Gen2×8 +
   dual DDR3 + K=32 MMALU at 200 MHz fabric / 250 MHz NPU. See
   [docs/implementations/FPGA_XC7K480T.md](docs/implementations/FPGA_XC7K480T.md).
+- **FPGA bring-up on Virtex UltraScale+**: `xcvu9p-flgb2104-2-e` (Alivu9p) with
+  PCIe Gen3×8 XDMA + 4× DDR4 MIG + K=16 program engine, built with local
+  Vivado and programmed remotely via `hw_server`. The `chisel_npu_py` HW suite
+  passes 7/7. See
+  [docs/implementations/FPGA_VU9P.md](docs/implementations/FPGA_VU9P.md) and
+  [`ip/vivado/xcvu9p/README.md`](ip/vivado/xcvu9p/README.md).
 
 ## Usage
 

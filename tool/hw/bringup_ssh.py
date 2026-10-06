@@ -34,8 +34,12 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 _VIVADO     = os.environ.get("VIVADO", str(Path.home() / "Vivado/2025.2/bin/vivado"))
 _HW_SERVER  = os.environ.get("HW_SERVER", "localhost:3121")
 _IDENTITY   = os.environ.get("SSH_IDENTITY", str(Path.home() / ".ssh/id_fpga_local"))
-_BRIDGE     = "00:15.0"
-_XDMA_VID   = "10ee:7028"
+# Per-chip values (defaults are the xc7k480t board; VU9P overrides via env):
+#   JTAG_DEVICE=xcvu9p_0  XDMA_VID_DID=10ee:903f  SBR_BRIDGE=<root port>
+_BRIDGE     = os.environ.get("SBR_BRIDGE", "00:15.0")
+_XDMA_VID   = os.environ.get("XDMA_VID_DID", "10ee:7028")
+_JTAG_DEVICE = os.environ.get("JTAG_DEVICE", "xc7k480t_0")
+_XDMA_DRV_DIR = os.environ.get("XDMA_DRV_DIR", "~/dma_ip_drivers/XDMA/linux-kernel/xdma")
 _MAX_ATTEMPTS = 6
 
 PASS = "\033[32mPASS\033[0m"
@@ -57,7 +61,7 @@ def flash_bpi(bit: Path) -> None:
 
 def jtag_load_sram(bit: Path) -> None:
     """Load bitstream into FPGA SRAM via JTAG so PCIe hard block is live."""
-    log(f"JTAG-loading {bit.name} into FPGA SRAM...")
+    log(f"JTAG-loading {bit.name} into FPGA SRAM ({_JTAG_DEVICE})...")
     _run_vivado_tcl(_tcl_jtag_sram(bit), "jtag_sram")
 
 
@@ -91,7 +95,7 @@ connect_hw_server -url {_HW_SERVER} -allow_non_jtag
 current_hw_target [lindex [get_hw_targets] 0]
 set_property PARAM.FREQUENCY 15000000 [current_hw_target]
 open_hw_target
-current_hw_device [lindex [get_hw_devices xc7k480t_0] 0]
+current_hw_device [lindex [get_hw_devices {_JTAG_DEVICE}] 0]
 set_property PROGRAM.FILE {{{bit}}} [current_hw_device]
 program_hw_devices [current_hw_device]
 refresh_hw_device [current_hw_device]
@@ -121,7 +125,7 @@ connect_hw_server -url {_HW_SERVER} -allow_non_jtag
 current_hw_target [lindex [get_hw_targets] 0]
 set_property PARAM.FREQUENCY 15000000 [current_hw_target]
 open_hw_target
-current_hw_device [lindex [get_hw_devices xc7k480t_0] 0]
+current_hw_device [lindex [get_hw_devices {_JTAG_DEVICE}] 0]
 puts "=== load BPI helper ==="
 set_property PROGRAM.FILE {{{helper}}} [current_hw_device]
 program_hw_devices [current_hw_device]
@@ -206,7 +210,7 @@ def do_sbr(host: str, identity: str | None = None) -> None:
 def load_xdma(host: str, identity: str | None = None) -> int:
     log("Loading XDMA driver...")
     _ssh_run(host,
-             "cd ~/dma_ip_drivers/XDMA/linux-kernel/xdma && "
+             f"cd {_XDMA_DRV_DIR} && "
              "sudo rmmod xdma 2>/dev/null; sudo insmod xdma.ko",
              identity, timeout=30, check=False)
     time.sleep(2)
