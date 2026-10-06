@@ -88,7 +88,10 @@ class InstrDecoder extends Module {
   // Map (family, funct3) → VecOp.  Use a big MuxCase to stay Chisel-idiomatic.
   // Default = vadd (harmless; illegal flag suppresses write-back)
   val vecOp = WireDefault(VecOp.vadd)
-  val f3Valid = WireDefault(true.B)
+  // f3OK tracks whether funct3 is legal for the decoded family.  Default true:
+  // NOP and families whose funct3 space is fully populated need no reserved
+  // cases; families with reserved funct3 values clear it in their branch.
+  val f3OK = WireDefault(true.B)
 
   switch (family) {
     is (OpFamily.VALU_ARITH) {
@@ -124,6 +127,7 @@ class InstrDecoder extends Module {
         is (Funct3Reduce.ROR)  { vecOp := VecOp.vror  }
         is (Funct3Reduce.RXOR) { vecOp := VecOp.vrxor }
       }
+      when (f3 === 6.U || f3 === 7.U) { f3OK := false.B }
     }
     is (OpFamily.VALU_LUT) {
       // vlut (funct3=0/1): R-type lookup. Bank A (0) or B (1) via funct3[0],
@@ -139,7 +143,7 @@ class InstrDecoder extends Module {
       }
       // illegal: reserved funct3 values 2, 3, 6, 7
       when (f3 === 2.U || f3 === 3.U || f3 === 6.U || f3 === 7.U) {
-        f3Valid := false.B
+        f3OK := false.B
       }
     }
     is (OpFamily.VALU_CVT) {
@@ -171,14 +175,15 @@ class InstrDecoder extends Module {
         (FmtCode.F32, FmtCode.BF8), (FmtCode.BF8, FmtCode.F32),
         (FmtCode.S16, FmtCode.S32), (FmtCode.S32, FmtCode.S16)
       ).map { case (d, s) => (f3 === d && f7CvtSrc === s) }.reduce(_ || _)
-      when (!cvtValid) { f3Valid := false.B }
+      when (!cvtValid) { f3OK := false.B }
     }
     is (OpFamily.VALU_BCAST) {
       switch (f3) {
         is (Funct3Bcast.REG) { vecOp := VecOp.vbcast_reg }
         is (Funct3Bcast.IMM) { vecOp := VecOp.vbcast_imm }
-        // default: f3Valid = true but vecOp harmless; non-listed values not hit via safe
+        // default: f3OK stays true but vecOp harmless; non-listed values not hit via safe
       }
+      when (f3 >= 2.U) { f3OK := false.B }
     }
     is (OpFamily.VALU_FP) {
       switch (f3) {
@@ -190,6 +195,7 @@ class InstrDecoder extends Module {
         is (Funct3Fp.FMAX) { vecOp := VecOp.vfmax }
         is (Funct3Fp.FMIN) { vecOp := VecOp.vfmin }
       }
+      when (f3 === 7.U) { f3OK := false.B }
     }
     is (OpFamily.VALU_FP_FMA) {
       switch (f3) {
@@ -198,6 +204,7 @@ class InstrDecoder extends Module {
         is (Funct3Fma.NFMA) { vecOp := VecOp.vnfma }
         is (Funct3Fma.NFMS) { vecOp := VecOp.vnfms }
       }
+      when (f3 >= 4.U) { f3OK := false.B }
     }
     is (OpFamily.VALU_MOV) {
       switch (f3) {
@@ -205,8 +212,19 @@ class InstrDecoder extends Module {
         is (Funct3Mov.MOVI) { vecOp := VecOp.vmovi }
         is (Funct3Mov.MOVH) { vecOp := VecOp.vmovh }
       }
+      when (f3 >= 3.U) { f3OK := false.B }
     }
-    // MMA, LD, ST, NOP: vecOp stays at default (not used)
+    is (OpFamily.MMA) {
+      // vecOp stays at default (not used); only funct3 legality is tracked.
+      when (f3 >= 3.U) { f3OK := false.B }
+    }
+    is (OpFamily.LD) {
+      when (f3 >= 3.U) { f3OK := false.B }
+    }
+    is (OpFamily.ST) {
+      when (f3 >= 3.U) { f3OK := false.B }
+    }
+    // NOP: f3OK stays true for all funct3
   }
 
   // ---------- Width decode — drive as raw UInt(2.W) to match NCoreVALUBundle ----------
@@ -240,12 +258,12 @@ class InstrDecoder extends Module {
     width := 2.U  // VR
   }
   // Width bits are repurposed for src format in CVT family; skip width check for CVT.
-  val widthIllegal = (f7Width === 3.U) &&
+  val widthOK = !((f7Width === 3.U) &&
     (family =/= OpFamily.VALU_FP) &&
     (family =/= OpFamily.VALU_FP_FMA) &&
     (family =/= OpFamily.VALU_CVT) &&
     (family =/= OpFamily.LD) &&
-    (family =/= OpFamily.ST)
+    (family =/= OpFamily.ST))
 
   // ---------- Dtype decode ----------
   // BF8 variant from funct7[6] (cvt family) or bf8E5M2 forced
@@ -263,9 +281,9 @@ class InstrDecoder extends Module {
     .otherwise           { dtype := VecDType.BF8E4M3  }
   }
 
-  val dtypeIllegal = (f7Dtype === 3.U) &&
+  val dtypeOK = !((f7Dtype === 3.U) &&
     (family =/= OpFamily.LD) &&
-    (family =/= OpFamily.ST)
+    (family =/= OpFamily.ST))
 
   // ---------- MMA control ----------
   val mmaKeep  = WireDefault(false.B)
@@ -283,26 +301,9 @@ class InstrDecoder extends Module {
   }
 
   // ---------- Illegal detection ----------
-  val illegal = WireDefault(false.B)
-  when (!familyOK)    { illegal := true.B }
-  when (!f3Valid)     { illegal := true.B }
-  when (widthIllegal) { illegal := true.B }
-  when (dtypeIllegal) { illegal := true.B }
-
-  // Reserved funct3 within each family (in addition to the per-family
-  // f3Valid checks above for LUT/CVT) → illegal.
-  when (family === OpFamily.VALU_REDUCE && (f3 === 6.U || f3 === 7.U)) {
-    f3Valid := false.B
-  }
-  when (family === OpFamily.VALU_BCAST && f3 >= 2.U) { f3Valid := false.B }
-  when (family === OpFamily.VALU_FP && f3 === 7.U)   { f3Valid := false.B }
-  when (family === OpFamily.VALU_FP_FMA && f3 >= 4.U){ f3Valid := false.B }
-  when (family === OpFamily.VALU_MOV && f3 >= 3.U)   { f3Valid := false.B }
-  when (family === OpFamily.MMA && f3 >= 3.U)        { f3Valid := false.B }
-  when ((family === OpFamily.LD || family === OpFamily.ST) && f3 >= 3.U) {
-    f3Valid := false.B
-  }
-  when (!f3Valid) { illegal := true.B }
+  // Single pass: family, funct3, width and dtype validity are each computed
+  // exactly once; an instruction is legal iff all four hold.
+  val illegal = !(familyOK && f3OK && widthOK && dtypeOK)
 
   // ---------- Drive outputs ----------
   io.illegal := illegal
