@@ -31,6 +31,7 @@ class DecodedMicroOp extends Bundle {
   val rd        = UInt(5.W)
   val rs1       = UInt(5.W)
   val rs2       = UInt(5.W)
+  val rs3       = UInt(5.W)       // S-format third source (MMA C accumulator)
   val mem_width = UInt(3.W)       // ld/st funct3 (SEW/register class)
   val mem_off   = UInt(12.W)      // ld/st raw imm[11:0] (unsigned section offset)
 }
@@ -72,16 +73,16 @@ class InstrDecoder extends Module {
   val f7CvtRnd = f7(InstrBits.F7_CVT_RND_HI, InstrBits.F7_CVT_RND_LO)
   val f7Bf8    = f7(InstrBits.F7_CVT_BF8)
 
-  // Try to decode opcode family.
-  // OpFamily auto-infers minimum bit width.  With LD=0x07 and ST=0x27 the
-  // max value is 0x27 = 39, which needs 6 bits.  opBits is 7 bits; truncate
-  // to match the enum width before safe-cast.
-  // 6 = ceil(log2(0x27 + 1)) computed at Scala level.
-  val OP_FAMILY_BITS = 6  // covers 0x00..0x27 = 0..39
-  val opBitsTrunc = opBits(OP_FAMILY_BITS - 1, 0)
-  val familyOpt = OpFamily.safe(opBitsTrunc)
-  val familyOK  = familyOpt._2
-  val family    = familyOpt._1
+  // Decode opcode family from the full 7-bit opcode field.
+  // OpFamily auto-infers its width from the maximum enum value (0x27 = 39
+  // → 6 bits), so it cannot represent opcodes with bit 6 set.  Checking the
+  // truncated field would alias 0x40..0x7F onto valid families (0x40 → NOP).
+  // Validate against the full field with an explicit membership test.
+  val familyOK = Seq(0x00, 0x03, 0x07, 0x10, 0x11, 0x12, 0x13,
+                     0x14, 0x15, 0x16, 0x17, 0x18, 0x27)
+    .map(o => opBits === o.U).reduce(_ || _)
+  // Every valid opcode is ≤ 0x27, so the low 6 bits carry the family value.
+  val family = OpFamily.safe(opBits(5, 0))._1
 
   // ---------- VALU op decode (opcode+funct3 → VecOp) ----------
 
@@ -303,6 +304,7 @@ class InstrDecoder extends Module {
   io.decoded.rd        := rdBits
   io.decoded.rs1       := rs1Bits
   io.decoded.rs2       := rs2Bits
+  io.decoded.rs3       := rs3Bits
   io.decoded.mem_width := f3
   io.decoded.mem_off   := io.instr(InstrBits.IMM_I_HI, InstrBits.IMM_I_LO)
 

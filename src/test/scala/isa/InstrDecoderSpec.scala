@@ -360,54 +360,38 @@ class InstrDecoderSpec extends AnyFlatSpec {
   }
 
   // ==========================================================================
-  // MMA
+  // MMA (S-format register-level MAC: vd = A·B + C)
   // ==========================================================================
-  "InstrDecoder" should "decode mma with keep" in {
+  "InstrDecoder" should "decode mma (S-format, rs3 = C accumulator)" in {
     simulate(new InstrDecoder) { dut =>
-      dut.io.instr.poke((mma(rd=0, rs1=1, rs2=2, keep=true).toLong & 0xFFFFFFFFL).U)
+      dut.io.instr.poke((mma(rd=0, vs1=1, vs2=2, vs3=3).toLong & 0xFFFFFFFFL).U)
       dut.clock.step(0)
       assert(!dut.io.illegal.peek().litToBoolean)
-      dut.io.decoded.mma_keep.expect(true.B)
       dut.io.decoded.mma_last.expect(false.B)
-      dut.io.decoded.mma_reset.expect(false.B)
+      dut.io.decoded.rd.expect(0.U)
+      dut.io.decoded.rs1.expect(1.U)
+      dut.io.decoded.rs2.expect(2.U)
+      dut.io.decoded.rs3.expect(3.U)
     }
   }
 
-  "InstrDecoder" should "decode mma with keep=false (PE reset feed)" in {
+  "InstrDecoder" should "decode mma.last (S-format) with its C operand" in {
     simulate(new InstrDecoder) { dut =>
-      dut.io.instr.poke((mma(rd=0, rs1=1, rs2=2, keep=false).toLong & 0xFFFFFFFFL).U)
-      dut.clock.step(0)
-      assert(!dut.io.illegal.peek().litToBoolean)
-      dut.io.decoded.mma_keep.expect(false.B)
-    }
-  }
-
-  "InstrDecoder" should "decode mma.last honouring funct7[4] keep" in {
-    simulate(new InstrDecoder) { dut =>
-      // keep=true: accumulate-then-drain
-      dut.io.instr.poke((mmaLast(rd=0, rs1=1, rs2=2, keep=true).toLong & 0xFFFFFFFFL).U)
+      dut.io.instr.poke((mmaLast(rd=4, vs1=5, vs2=6, vs3=7).toLong & 0xFFFFFFFFL).U)
       dut.clock.step(0)
       assert(!dut.io.illegal.peek().litToBoolean)
       dut.io.decoded.mma_last.expect(true.B)
-      dut.io.decoded.mma_keep.expect(true.B)
-
-      // keep=false: reset-then-drain
-      dut.io.instr.poke((mmaLast(rd=0, rs1=1, rs2=2, keep=false).toLong & 0xFFFFFFFFL).U)
-      dut.clock.step(0)
-      assert(!dut.io.illegal.peek().litToBoolean)
-      dut.io.decoded.mma_last.expect(true.B)
-      dut.io.decoded.mma_keep.expect(false.B)
+      dut.io.decoded.rs3.expect(7.U)
     }
   }
 
-  "InstrDecoder" should "decode mma.reset" in {
+  "InstrDecoder" should "decode legacy mma.reset but flag it via mma_reset" in {
     simulate(new InstrDecoder) { dut =>
       dut.io.instr.poke((mmaReset(rd=0, rs1=1, rs2=2).toLong & 0xFFFFFFFFL).U)
       dut.clock.step(0)
       assert(!dut.io.illegal.peek().litToBoolean)
       dut.io.decoded.mma_reset.expect(true.B)
       dut.io.decoded.mma_last.expect(false.B)
-      dut.io.decoded.mma_keep.expect(false.B)
     }
   }
 
@@ -493,6 +477,18 @@ class InstrDecoderSpec extends AnyFlatSpec {
       dut.io.instr.poke((instr.toLong & 0xFFFFFFFFL).U)
       dut.clock.step(0)
       assert(dut.io.illegal.peek().litToBoolean, "dtype=3 should be illegal")
+    }
+  }
+
+  "InstrDecoder" should "flag opcodes with bit 6 set as illegal (no aliasing)" in {
+    simulate(new InstrDecoder) { dut =>
+      for (op <- Seq(0x40, 0x41, 0x50, 0x60, 0x7F)) {
+        val instr = encR(op, 0, f7(VX), 0, 1, 2)
+        dut.io.instr.poke((instr.toLong & 0xFFFFFFFFL).U)
+        dut.clock.step(0)
+        assert(dut.io.illegal.peek().litToBoolean,
+          s"opcode 0x${op.toHexString} must be illegal, not alias")
+      }
     }
   }
 }
