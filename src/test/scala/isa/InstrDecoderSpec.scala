@@ -491,4 +491,15 @@ class InstrDecoderSpec extends AnyFlatSpec {
       }
     }
   }
+
+  "InstrDecoder" should "flag invalid CVT combinations as illegal" in {
+    simulate(new InstrDecoder) { dut =>
+      for (dst <- Seq(6, 7)) // reserved dst format codes
+        check(dut, encR(0x14, dst, f7Cvt(srcFmt = S32), 0, 1, 0),
+          OpFamily.VALU_CVT, VecOp.vadd, expectIllegal = true)
+      for ((dst, src) <- Seq((S16, S8), (F32, S16), (S8, S16))) // uncorrelated
+        check(dut, encR(0x14, dst, f7Cvt(srcFmt = src), 0, 1, 0),
+          OpFamily.VALU_CVT, VecOp.vadd, expectIllegal = true)
+    }
+  }
 }

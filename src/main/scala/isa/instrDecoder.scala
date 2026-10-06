@@ -162,8 +162,16 @@ class InstrDecoder extends Module {
         (dst === FmtCode.S16 && src === FmtCode.S32)  -> VecOp.vcvt_s16_s32,
         (dst === FmtCode.S32 && src === FmtCode.S16)  -> VecOp.vcvt_s32_s16,
       ))
-      // illegal: same src and dst
-      when (dst === src) { f3Valid := false.B }
+      // illegal: only the 12 correlated (dst, src) format pairs are valid
+      val cvtValid = Seq(
+        (FmtCode.S8, FmtCode.S32), (FmtCode.S32, FmtCode.S8),
+        (FmtCode.S32, FmtCode.F32), (FmtCode.F32, FmtCode.S32),
+        (FmtCode.F32, FmtCode.S8), (FmtCode.S8, FmtCode.F32),
+        (FmtCode.F32, FmtCode.BF16), (FmtCode.BF16, FmtCode.F32),
+        (FmtCode.F32, FmtCode.BF8), (FmtCode.BF8, FmtCode.F32),
+        (FmtCode.S16, FmtCode.S32), (FmtCode.S32, FmtCode.S16)
+      ).map { case (d, s) => (f3 === d && f7CvtSrc === s) }.reduce(_ || _)
+      when (!cvtValid) { f3Valid := false.B }
     }
     is (OpFamily.VALU_BCAST) {
       switch (f3) {
