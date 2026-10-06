@@ -28,6 +28,7 @@ class InstrDecoderSpec extends AnyFlatSpec {
             expRound: Int = RNE,
             expRd: Int = 0, expRs1: Int = 0, expRs2: Int = 0,
             expMemWidth: Int = -1, expMemOff: Int = -1,
+            expDtype: Option[VecDType.Type] = None,
             expectIllegal: Boolean = false): Unit = {
     dut.io.instr.poke((instr.toLong & 0xFFFFFFFFL).U)
     dut.clock.step(0)  // combinational
@@ -47,6 +48,13 @@ class InstrDecoderSpec extends AnyFlatSpec {
       dut.io.decoded.rs2.expect(expRs2.U)
       if (expMemWidth >= 0) dut.io.decoded.mem_width.expect(expMemWidth.U)
       if (expMemOff >= 0)   dut.io.decoded.mem_off.expect(expMemOff.U)
+      val gotOp = enumLit(dut, dut.io.decoded.valu.op)
+      assert(gotOp == expOp.litValue,
+        s"op mismatch for 0x${instr.toHexString}: got $gotOp want ${expOp.litValue}")
+      expDtype.foreach { d =>
+        val gotD = enumLit(dut, dut.io.decoded.valu.dtype)
+        assert(gotD == d.litValue, s"dtype mismatch for 0x${instr.toHexString}")
+      }
     }
   }
 
@@ -66,7 +74,7 @@ class InstrDecoderSpec extends AnyFlatSpec {
     simulate(new InstrDecoder) { dut =>
       check(dut, vadd(rd=1, rs1=2, rs2=3, width=VX),
             OpFamily.VALU_ARITH, VecOp.vadd,
-            expWidth=WX, expRd=1, expRs1=2, expRs2=3)
+            expWidth=WX, expRd=1, expRs1=2, expRs2=3, expDtype=Some(VecDType.S8C4))
     }
   }
 
@@ -142,6 +150,10 @@ class InstrDecoderSpec extends AnyFlatSpec {
     simulate(new InstrDecoder) { dut =>
       check(dut, vsum(rd=0, rs1=1),  OpFamily.VALU_REDUCE, VecOp.vsum,  expRs1=1)
       check(dut, vrmax(rd=0, rs1=1), OpFamily.VALU_REDUCE, VecOp.vrmax, expRs1=1)
+      check(dut, vrmin(rd=0, rs1=1), OpFamily.VALU_REDUCE, VecOp.vrmin, expRs1=1)
+      check(dut, vrand(rd=0, rs1=1), OpFamily.VALU_REDUCE, VecOp.vrand, expRs1=1)
+      check(dut, vror(rd=0, rs1=1),  OpFamily.VALU_REDUCE, VecOp.vror,  expRs1=1)
+      check(dut, vrxor(rd=0, rs1=1), OpFamily.VALU_REDUCE, VecOp.vrxor, expRs1=1)
     }
   }
 
@@ -239,6 +251,9 @@ class InstrDecoderSpec extends AnyFlatSpec {
       dut.io.instr.poke((vcvt_bf8_f32(rd=0, rs1=1, e5m2=true).toLong & 0xFFFFFFFFL).U)
       dut.clock.step(0)
       assert(!dut.io.illegal.peek().litToBoolean, "E5M2 vcvt should not be illegal")
+
+      check(dut, vcvt_f32_bf8(rd=0, rs1=1), OpFamily.VALU_CVT, VecOp.vcvt_f32_bf8,
+            expWidth=WR, expRs1=1, expDtype=Some(VecDType.BF8E4M3))
     }
   }
 
@@ -294,7 +309,7 @@ class InstrDecoderSpec extends AnyFlatSpec {
   // ==========================================================================
   "InstrDecoder" should "decode FP32 arith ops" in {
     simulate(new InstrDecoder) { dut =>
-      check(dut, vfadd(rd=0, rs1=1, rs2=2), OpFamily.VALU_FP, VecOp.vfadd, expWidth=WR, expRs1=1, expRs2=2)
+      check(dut, vfadd(rd=0, rs1=1, rs2=2), OpFamily.VALU_FP, VecOp.vfadd, expWidth=WR, expRs1=1, expRs2=2, expDtype=Some(VecDType.FP32C1))
       check(dut, vfsub(rd=0, rs1=1, rs2=2), OpFamily.VALU_FP, VecOp.vfsub, expWidth=WR, expRs1=1, expRs2=2)
       check(dut, vfmul(rd=0, rs1=1, rs2=2), OpFamily.VALU_FP, VecOp.vfmul, expWidth=WR, expRs1=1, expRs2=2)
       check(dut, vfneg(rd=0, rs1=1),         OpFamily.VALU_FP, VecOp.vfneg, expWidth=WR, expRs1=1)
@@ -322,6 +337,12 @@ class InstrDecoderSpec extends AnyFlatSpec {
       dut.clock.step(0)
       assert(!dut.io.illegal.peek().litToBoolean)
       dut.io.decoded.valu.rs3_idx.expect(3.U)
+      check(dut, vfms (rd=0, rs1=1, rs2=2, rs3=3, round=RTZ), OpFamily.VALU_FP_FMA, VecOp.vfms,
+            expWidth=WR, expRound=RTZ, expRs1=1, expRs2=2)
+      check(dut, vnfma(rd=0, rs1=1, rs2=2, rs3=3, round=RTZ), OpFamily.VALU_FP_FMA, VecOp.vnfma,
+            expWidth=WR, expRound=RTZ, expRs1=1, expRs2=2)
+      check(dut, vnfms(rd=0, rs1=1, rs2=2, rs3=3, round=RTZ), OpFamily.VALU_FP_FMA, VecOp.vnfms,
+            expWidth=WR, expRound=RTZ, expRs1=1, expRs2=2)
     }
   }
 
@@ -372,6 +393,12 @@ class InstrDecoderSpec extends AnyFlatSpec {
       dut.io.decoded.rs1.expect(1.U)
       dut.io.decoded.rs2.expect(2.U)
       dut.io.decoded.rs3.expect(3.U)
+
+      val keepInstr = encR(0x03, 0, f7(VR, sat=true), 0, 1, 2)
+      dut.io.instr.poke((keepInstr.toLong & 0xFFFFFFFFL).U)
+      dut.clock.step(0)
+      assert(!dut.io.illegal.peek().litToBoolean)
+      dut.io.decoded.mma_keep.expect(true.B)
     }
   }
 
@@ -464,19 +491,37 @@ class InstrDecoderSpec extends AnyFlatSpec {
 
   "InstrDecoder" should "flag reserved width (funct7[1:0]=3) as illegal" in {
     simulate(new InstrDecoder) { dut =>
-      val instr = encR(0x10, 0, f7(width=3), 0, 1, 2)
+      for ((op, dt) <- Seq((0x10, INT), (0x12, INT), (0x13, INT),
+                           (0x15, INT), (0x18, INT), (0x03, INT))) {
+        val instr = encR(op, 0, f7(width=3, dtype=dt), 0, 1, 2)
+        dut.io.instr.poke((instr.toLong & 0xFFFFFFFFL).U)
+        dut.clock.step(0)
+        assert(dut.io.illegal.peek().litToBoolean,
+          s"width=3 opcode=0x${op.toHexString} should be illegal")
+      }
+    }
+  }
+
+  "InstrDecoder" should "ignore funct7[1:0] for FP (width forced to VR)" in {
+    simulate(new InstrDecoder) { dut =>
+      val instr = encR(0x16, 0, f7(width=3, dtype=FP), 0, 1, 2)
       dut.io.instr.poke((instr.toLong & 0xFFFFFFFFL).U)
       dut.clock.step(0)
-      assert(dut.io.illegal.peek().litToBoolean, "width=3 should be illegal")
+      assert(!dut.io.illegal.peek().litToBoolean,
+        "FP width bits are don't-care; regCls is forced to VR")
+      dut.io.decoded.valu.regCls.expect(WR.U)
     }
   }
 
   "InstrDecoder" should "flag reserved dtype (funct7[6:5]=3) as illegal" in {
     simulate(new InstrDecoder) { dut =>
-      val instr = encR(0x10, 0, f7(dtype=3), 0, 1, 2)
-      dut.io.instr.poke((instr.toLong & 0xFFFFFFFFL).U)
-      dut.clock.step(0)
-      assert(dut.io.illegal.peek().litToBoolean, "dtype=3 should be illegal")
+      for (op <- Seq(0x10, 0x11, 0x12, 0x15, 0x16, 0x18)) {
+        val instr = encR(op, 0, f7(dtype=3), 0, 1, 2)
+        dut.io.instr.poke((instr.toLong & 0xFFFFFFFFL).U)
+        dut.clock.step(0)
+        assert(dut.io.illegal.peek().litToBoolean,
+          s"dtype=3 opcode=0x${op.toHexString} should be illegal")
+      }
     }
   }
 
@@ -500,6 +545,26 @@ class InstrDecoderSpec extends AnyFlatSpec {
       for ((dst, src) <- Seq((S16, S8), (F32, S16), (S8, S16))) // uncorrelated
         check(dut, encR(0x14, dst, f7Cvt(srcFmt = src), 0, 1, 0),
           OpFamily.VALU_CVT, VecOp.vadd, expectIllegal = true)
+    }
+  }
+
+  "InstrDecoder" should "produce stable outputs for a reserved word" in {
+    simulate(new InstrDecoder) { dut =>
+      val instr = encR(0x7F, 0, f7(VX), 5, 1, 2)
+      dut.io.instr.poke((instr.toLong & 0xFFFFFFFFL).U)
+      dut.clock.step(0)
+      assert(dut.io.illegal.peek().litToBoolean, "reserved word must be illegal")
+      val op1  = enumLit(dut, dut.io.decoded.valu.op)
+      val cls1 = dut.io.decoded.valu.regCls.peek().litValue
+      val rd1  = dut.io.decoded.rd.peek().litValue
+      dut.clock.step(0)
+      assert(dut.io.illegal.peek().litToBoolean, "reserved word must stay illegal")
+      val op2  = enumLit(dut, dut.io.decoded.valu.op)
+      val cls2 = dut.io.decoded.valu.regCls.peek().litValue
+      val rd2  = dut.io.decoded.rd.peek().litValue
+      assert(op1 == op2, s"valu.op unstable: $op1 vs $op2")
+      assert(cls1 == cls2, s"valu.regCls unstable: $cls1 vs $cls2")
+      assert(rd1 == rd2, s"rd unstable: $rd1 vs $rd2")
     }
   }
 }
