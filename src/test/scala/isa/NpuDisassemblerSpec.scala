@@ -48,6 +48,70 @@ class NpuDisassemblerSpec extends AnyFlatSpec {
   }
 
   // ==========================================================================
+  // Independent anchor encodings with hardcoded expected mnemonics.  This
+  // breaks the tautology of the exhaustive loops above, whose expected value is
+  // sourced from the same InstrTable/opNames data as the disassembler: a wrong
+  // table string or mapping bug would still pass those loops.
+  // ==========================================================================
+  it should "decode hardcoded anchor encodings" in {
+    val anchors: Seq[(Int, Int, String)] = Seq(
+      (0x00, 0, "nop"),
+      (0x03, 0, "mma"),
+      (0x03, 1, "mma.last"),
+      (0x03, 2, "mma.reset"),
+      (0x07, 0, "vle8"),
+      (0x10, 0, "vadd"),
+      (0x10, 7, "vrsub"),
+      (0x11, 6, "vor"),
+      (0x12, 5, "vrxor"),
+      (0x13, 0, "vlut.A"),
+      (0x13, 5, "vsetlut.B"),
+      (0x15, 0, "vbcast"),
+      (0x15, 1, "vbcast.imm"),
+      (0x16, 0, "vfadd"),
+      (0x17, 3, "vnfms"),
+      (0x18, 2, "vmovh"),
+      (0x27, 2, "vse32"),
+    )
+    for ((opcode, funct3, expected) <- anchors) {
+      val w = (opcode & 0x7F) | ((funct3 & 0x7) << 12)
+      val got = NpuDisassembler(w)
+      assert(got.startsWith(expected),
+        s"anchor (0x${opcode.toHexString},$funct3): expected '$expected', got '$got'")
+    }
+
+    val cvtAnchors: Seq[(Int, Int, String)] = Seq(
+      (S8,  F32, "vcvt_s8_f32"),
+      (F32, BF8, "vcvt_f32_bf8"),
+    )
+    for ((dst, src, expected) <- cvtAnchors) {
+      val w = encR(0x14, dst, f7Cvt(src), 0, 0, 0)
+      val got = NpuDisassembler(w)
+      assert(got.startsWith(expected),
+        s"cvt anchor (dst=$dst,src=$src): expected '$expected', got '$got'")
+    }
+  }
+
+  // ==========================================================================
+  // NOP is the sole funct3 don't-care opcode.
+  // ==========================================================================
+  it should "treat NOP funct3 as don't-care" in {
+    for (f3 <- 1 to 7) {
+      val w = (0x00 & 0x7F) | ((f3 & 0x7) << 12)
+      assert(NpuDisassembler(w) == "nop",
+        s"nop with funct3=$f3 should decode to 'nop', got '${NpuDisassembler(w)}'")
+    }
+  }
+
+  // ==========================================================================
+  // Guard against a vacuous table making the exhaustive loops pass trivially.
+  // ==========================================================================
+  it should "exercise a non-empty table" in {
+    assert(InstrTable.defs.nonEmpty, "InstrTable.defs is empty — round-trip would be vacuous")
+    assert(InstrTable.cvtPairs.nonEmpty, "InstrTable.cvtPairs is empty — round-trip would be vacuous")
+  }
+
+  // ==========================================================================
   // Illegal encodings.
   // ==========================================================================
   it should "reject reserved opcodes" in {
