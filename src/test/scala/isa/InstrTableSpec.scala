@@ -49,9 +49,17 @@ class InstrTableSpec extends AnyFlatSpec {
         s"out-of-range ${d.mnemonic}: opcode=${d.opcode} funct3=${d.funct3}")
     assert(InstrTable.cvtPairs.map(p => (p.dst, p.src)).distinct.size == InstrTable.cvtPairs.size,
       "duplicate cvt pair")
-    // byOpcode must partition defs exactly (order-independent)
-    assert(InstrTable.byOpcode.values.flatten.toSet == InstrTable.defs.toSet,
-      "byOpcode does not partition defs")
+    // byOpcode must cover exactly the expected opcode set (explicit literal,
+    // so a missing/spurious family is caught), and each group must be well
+    // formed: non-empty, all entries share the group opcode, no funct3 dupes.
+    val expectedOpcodes = Set(0x00, 0x03, 0x07, 0x10, 0x11, 0x12, 0x13,
+                              0x15, 0x16, 0x17, 0x18, 0x27)
+    assert(InstrTable.byOpcode.keySet == expectedOpcodes,
+      s"unexpected opcode set: ${InstrTable.byOpcode.keySet}")
+    for ((op, ds) <- InstrTable.byOpcode) {
+      assert(ds.nonEmpty && ds.forall(_.opcode == op), s"byOpcode(0x${op.toHexString}) group malformed")
+      assert(ds.map(_.funct3).distinct.size == ds.size, s"byOpcode(0x${op.toHexString}) duplicate funct3")
+    }
     assert(InstrTable.cvtPairs.size == 12, "expected 12 cvt pairs")
   }
 

@@ -11,7 +11,7 @@
 //  It is therefore represented by `cvtPairs`, not by `defs`.
 //
 //  See instSetArch.scala for the opcode/funct3 encodings and instrFormat.scala
-//  for the funt7 attribute layout.
+//  for the funct7 attribute layout.
 // -----------------------------------------------------------------------------
 
 package isa
@@ -70,7 +70,16 @@ object InstrTable {
   import NpuAssembler.{S8, S16, S32, F32, BF16, BF8}
 
   // -------------------------------------------------------------------------
-  // defs — every legal (opcode, funct3) entry (including NOP).
+  // defs — the legal (opcode, funct3) rows for every family except CVT.
+  //
+  // Contract: for every opcode EXCEPT NOP (0x00), the family's legal funct3 set
+  // is EXACTLY the set of funct3 values that appear in these rows.  NOP is the
+  // sole funct3 don't-care opcode — its word is legal for ALL funct3 values
+  // (0..7) — so `defs` carries only its canonical row, (0x00, funct3=0); decode
+  // legality must special-case NOP rather than consult funct3 membership.
+  //
+  // CVT (0x14) is not represented here at all; its legality is the correlated
+  // (dst, src) format pairs in `cvtPairs`.
   // -------------------------------------------------------------------------
   val defs: Seq[InstrDef] = Seq(
     // -- NOP (0x00) — sole funct3 don't-care opcode; single entry at funct3=0 --
