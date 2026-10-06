@@ -128,6 +128,30 @@ class NpuDisassemblerSpec extends AnyFlatSpec {
     assert(NpuDisassembler(encR(0x13, 2, f7(), 0, 0, 0)) == "illegal")
   }
 
+  // ==========================================================================
+  // Attribute legality mirrors InstrDecoder: reserved width (funct7[1:0]=3) and
+  // reserved dtype (funct7[6:5]=3) must disassemble to "illegal".
+  // ==========================================================================
+  it should "reject reserved width (funct7[1:0]=3)" in {
+    assert(NpuDisassembler(encR(0x10, 0, f7(width = 3), 0, 1, 2)) == "illegal")
+    assert(NpuDisassembler(encR(0x12, 0, f7(width = 3), 0, 1, 2)) == "illegal")
+  }
+
+  it should "reject reserved dtype (funct7[6:5]=3)" in {
+    assert(NpuDisassembler(encR(0x10, 0, f7(dtype = 3), 0, 1, 2)) == "illegal")
+    assert(NpuDisassembler(encR(0x11, 0, f7(dtype = 3), 0, 1, 2)) == "illegal")
+  }
+
+  it should "accept legal attribute words and exempt families" in {
+    // Negative control: a normal VALU word still disassembles.
+    assert(NpuDisassembler(encR(0x10, 0, f7(VX), 0, 1, 2)).startsWith("vadd"))
+    // FP width bits are don't-care (mirrors InstrDecoder).
+    assert(NpuDisassembler(encR(0x16, 0, f7(width = 3, dtype = FP), 0, 1, 2))
+      .startsWith("vfadd"))
+    // I-format immediate high bits alias funct7 and must not be rejected.
+    assert(NpuDisassembler(vmovi(rd = 1, imm = (-1))).startsWith("vmovi"))
+  }
+
   it should "reject illegal CVT pairs" in {
     // dst=BF16(4), src=S8(0) is not a legal pair (only src in {F32}).
     assert(NpuDisassembler(encR(0x14, BF16, f7Cvt(S8), 0, 0, 0)) == "illegal")

@@ -381,6 +381,27 @@ class InstrDecoderSpec extends AnyFlatSpec {
   }
 
   // ==========================================================================
+  // I-format immediate ops: funct7 bits overlap the immediate, so reserved
+  // width/dtype attribute values must NOT make them illegal.
+  // ==========================================================================
+  "InstrDecoder" should "not reject I-format immediate ops on attribute bits" in {
+    simulate(new InstrDecoder) { dut =>
+      val words = Seq(
+        ("vmovi",      vmovi(rd=1, imm=(-1))),
+        ("vmovh",      vmovh(rd=1, imm=0xFFFF)),
+        ("vbcast.imm", vbcastImm(rd=1, imm=0xFFF)),
+        ("vsetlut",    vsetlut(rs1=1, segment=0x3FF)),
+      )
+      for ((name, w) <- words) {
+        dut.io.instr.poke((w.toLong & 0xFFFFFFFFL).U)
+        dut.clock.step(0)
+        assert(!dut.io.illegal.peek().litToBoolean,
+          s"$name must not be illegal (word 0x${w.toHexString})")
+      }
+    }
+  }
+
+  // ==========================================================================
   // MMA (S-format register-level MAC: vd = A·B + C)
   // ==========================================================================
   "InstrDecoder" should "decode mma (S-format, rs3 = C accumulator)" in {

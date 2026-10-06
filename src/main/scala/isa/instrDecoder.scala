@@ -97,10 +97,17 @@ class InstrDecoder extends Module {
   // funct3 match.  Reserved opcodes are rejected by familyOK regardless of
   // f3OK, so the true default cannot leak an unaliased reserved word.
   val f3OK = WireDefault(true.B)
+  // isIFmt flags a matched I-format row.  I-format instructions carry a 12-bit
+  // immediate where R/S-format families carry funct7, so the width/dtype
+  // attribute checks below are meaningless (and wrong) for them.
+  val isIFmt = WireDefault(false.B)
   for ((opcode, defs) <- InstrTable.byOpcode if opcode != 0x00 && opcode != 0x14) {
     when (opBits === opcode.U) {
       f3OK := false.B
-      for (d <- defs) when (f3 === d.funct3.U) { vecOp := d.op; f3OK := true.B }
+      for (d <- defs) when (f3 === d.funct3.U) {
+        vecOp := d.op; f3OK := true.B
+        if (d.fmt == Fmt.I) { isIFmt := true.B }
+      }
     }
   }
   when (opBits === 0x14.U) {          // CVT: legality from correlated (dst, src)
@@ -139,8 +146,10 @@ class InstrDecoder extends Module {
         (f3 === Funct3Lut.VSETLUT_A || f3 === Funct3Lut.VSETLUT_B)) {
     width := 2.U  // VR
   }
-  // Width bits are repurposed for src format in CVT family; skip width check for CVT.
-  val widthOK = !((f7Width === 3.U) &&
+  // Width bits are repurposed for src format in CVT family; skip width check for
+  // CVT.  I-format rows carry an immediate in funct7, so width attributes do not
+  // apply (this also subsumes the LD/ST exemption — both are I-format).
+  val widthOK = !((f7Width === 3.U) && !isIFmt &&
     (family =/= OpFamily.VALU_FP) &&
     (family =/= OpFamily.VALU_FP_FMA) &&
     (family =/= OpFamily.VALU_CVT) &&
@@ -163,7 +172,9 @@ class InstrDecoder extends Module {
     .otherwise           { dtype := VecDType.BF8E4M3  }
   }
 
-  val dtypeOK = !((f7Dtype === 3.U) &&
+  // I-format immediate high bits alias funct7[6:5]; dtype is not applicable
+  // (subsumes the LD/ST exemption — both are I-format).
+  val dtypeOK = !((f7Dtype === 3.U) && !isIFmt &&
     (family =/= OpFamily.LD) &&
     (family =/= OpFamily.ST))
 

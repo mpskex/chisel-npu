@@ -80,7 +80,7 @@ as saturate. See `src/main/scala/isa/instrFormat.scala` for the full `CvtFunct7`
 | VALU_ARITH | 0x10 | add/sub/mul/neg/abs/max/min/rsub |
 | VALU_LOGIC | 0x11 | sll/srl/sra/rol/xor/not/or/and |
 | VALU_REDUCE | 0x12 | sum/rmax/rmin/rand/ror/rxor |
-| VALU_LUT | 0x13 | exp/recip/tanh/erf |
+| VALU_LUT | 0x13 | vlut/vsetlut |
 | VALU_CVT | 0x14 | funct3=dst fmt; funct7[2:0]=src fmt |
 | VALU_BCAST | 0x15 | 0=reg, 1=imm |
 | VALU_FP | 0x16 | fadd/fsub/fmul/fneg/fabs/fmax/fmin |

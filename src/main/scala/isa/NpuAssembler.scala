@@ -339,6 +339,18 @@ object NpuAssembler {
     encS(d.opcode, d.funct3, rd, vs1, vs2, vs3)
   }
 
+  // Legacy R-format mma/mma.last overloads: (rd, rs1, rs2, keep).  These keep
+  // pre-migration callers compiling.  The 4th parameter type (Boolean `keep`
+  // vs Int `vs3`) plus the distinct parameter names (`rs1`/`rs2`/`keep` vs
+  // `vs1`/`vs2`/`vs3`) disambiguate named-argument calls between the two
+  // overloads.  Scala permits a default argument on only one alternative of an
+  // overloaded set, so the S-format methods above define none.
+  def mma(rd: Int, rs1: Int, rs2: Int, keep: Boolean = true): Int =
+    encR(0x03, 0, f7(VR, sat = keep), rd, rs1, rs2)
+
+  def mmaLast(rd: Int, rs1: Int, rs2: Int, keep: Boolean = true): Int =
+    encR(0x03, 1, f7(VR, sat = keep), rd, rs1, rs2)
+
   /** Legacy mma.reset (R-format) — reserved by the new model; decodes but the
     * engine flags it illegal.  Kept for decoder coverage only. */
   def mmaReset(rd: Int, rs1: Int, rs2: Int): Int = {
