@@ -90,13 +90,13 @@ as saturate. See `src/main/scala/isa/instrFormat.scala` for the full `CvtFunct7`
 ### Assembler and decoder (files: `src/main/scala/isa/`)
 
 - **`NpuAssembler.scala`** — Scala-side assembler. `encR / encI / encS` primitives; named helpers like `vadd(rd, rs1, rs2, width, sat)`, `vfma(...)`, `vcvt_s8_f32(...)`. All helpers return `Int` (unsigned 32-bit bit pattern); use `.toLong & 0xFFFFFFFFL` before `.U` to avoid negative-literal Chisel errors.
-- **`InstrDecoder.scala`** — combinational decoder module: `UInt(32.W)` → `DecodedMicroOp`. Asserts `io.illegal` for reserved opcodes, invalid funct3, reserved width `3`, or CVT `src==dst`. `NCoreBackend` calls this first.
+- **`InstrDecoder.scala`** — combinational decoder module: `UInt(32.W)` → `DecodedMicroOp`. Asserts `io.illegal` for a reserved opcode (full 7-bit field), a reserved funct3 within a family, reserved width (`funct7[1:0]=3`) or dtype (`funct7[6:5]=3`), or an unmatched CVT (dst, src) pair (including `src==dst`). `NCoreBackend` calls this first.
 - **`instrFormat.scala`** — bit-position constants, `VecWidth`, `VecRound`, `VecDtypeCls`, `FmtCode` enums.
 
 ### Critical encoding gotchas
 
 - The `VecWidth` ChiselEnum field inside `NCoreVALUBundle` is renamed to **`regCls`** (was `width`) to avoid a Chisel plugin naming conflict with `chisel3.Width`. Anywhere you see `.regCls`, that is the VX/VE/VR register-class selector.
-- `opcode` in `_OpCode` is 7-bit. `OpFamily` enum values go up to 0x18 = 24, which requires 5 bits (Chisel auto-infers minimum width). When feeding `opBits` (7-bit) into `OpFamily.safe(...)`, truncate first: `opBits(4, 0)`.
+- The `opcode` field is the full 7-bit value and the decoder compares it against the whole 7-bit field — do **not** truncate. `OpFamily` is a 6-bit enum (values 0x00..0x27); family validity is derived from membership in `OpFamily.all`, so any opcode outside the set (e.g. 0x40..0x7F) decodes as illegal rather than aliasing onto a valid family. `src/main/scala/isa/InstrTable.scala` is the single source of truth for the decode map.
 - `NpuAssembler` encodes instruction words as Scala `Int`. Values with bit 31 set are negative in Scala. Always poke as `(instr.toLong & 0xFFFFFFFFL).U` in tests.
 - CVT: `vcvt_s8_f32` means INT8→FP32 (wide output to VR). `vcvt_f32_s8` means FP32→INT8 (narrow output to VX). The naming convention is `vcvt_<dst>_<src>`.
 
@@ -142,3 +142,4 @@ as saturate. See `src/main/scala/isa/instrFormat.scala` for the full `CvtFunct7`
 - `MultiWidthRegisterBlock.io.ext_r_addr` must be driven from the backend even when the external read port is not used; default it to 0.
 - VecOp enum values go up to 0x45 = 69, requiring 7-bit width. The enum is declared with `.U(7.W)` values. If you add new entries, ensure the max value still fits in 7 bits.
 - The ISA uses RISC-V-style R/I/S encoding: opcode selects a functional *family*; `funct3` selects the sub-op; `funct7` carries attributes. See `docs/designs/01.isa.md` for the full field layout.
+- The streamed dispatch/issuing model (window, scoreboard, chaining, boundary, capture, completion, session reset) is documented in detail in `docs/designs/04.streamed-issuing.md`; the silicon bring-up log and determinism fixes are in `docs/implementations/SiliconBringup.md`. Both postdate the (older) `docs/designs/02.streamed-dispatch.md` overview.

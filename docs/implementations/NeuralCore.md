@@ -52,7 +52,7 @@ graph TB
 - Purely combinational; one pipeline stage.
 - Input: 32-bit instruction word.
 - Output: `DecodedMicroOp` bundle (family, op, regCls, rd/rs1/rs2/rs3, imm, mma control).
-- Asserts `io.illegal` for reserved opcodes, reserved funct7 width bits, or CVT src == dst.
+- Asserts `io.illegal` for a reserved opcode (any value outside the active family set, checked against the full 7-bit field), a reserved `funct3` within a family, reserved `funct7` width bits (`funct7[1:0]=3`) or dtype (`funct7[6:5]=3`), or an unmatched CVT `(dst, src)` pair (reserved format code or `src == dst`).
 - The decoded bundle arrives at VALU and MMALU in the **same clock cycle** as the instruction word.
 
 ### MultiWidthRegisterBlock (`src/main/scala/sram/multiWidthRegister.scala`)
@@ -160,3 +160,82 @@ sequenceDiagram
 | `VALUCvtSpec` | All CVT pairs, BF16 round-trip, BF8 E4M3 encoding |
 | `VALUActivationSpec` | Softmax and GELU as primitive sequences |
 | `NCoreBackendQuantSpec` | End-to-end: MMA → vcvt → vfma → vcvt quantization pipeline |
+| `NpuProgramEngineSpec` | mma sessions (K-burst): per-mma column captures, C operand, illegal |
+| `NpuProgramEngineFrontendSpec` | Sessions streamed through the LRU-prefetch frontend |
+| `NpuProgramEngineGemmSpec` | Session product columns (7-mma session at K=32) |
+
+---
+
+## Program Engine (`NpuProgramEngine` + `NpuProgramEngineFrontend`)
+
+The FPGA program path (the engine that replaced the fixed-function
+`npu_dma_master`): a frontend streams ISA words from DDR, and a deliberately
+thin engine decodes each instruction and drives the MMALU's raw signals
+directly. **Status: implemented and silicon-verified at K=16 / 175 MHz
+fabric** (see the handoff for the bring-up record).
+
+### Architecture
+
+```mermaid
+graph LR
+    HOST["host driver\n(ChiselNPU.run)"] -->|"CODE section\ninstruction words"| FE
+    FE["NpuProgramEngineFrontend\nLRU 8×2×4-word prefetch cache\npc / PROG_LEN / ctrl regs"] -->|"word + valid"| ENG
+    ENG["NpuProgramEngine\ndecode + raw-signal dispatch"] -->|"in_a/in_b/in_accum\nctrl.busy/keep/use_accum"| MMA
+    ENG -->|"vle/vse requests"| DMA["NpuDmaEngine\nAXI4 master (L3 ↔ RF + fills)"]
+    MMA["MMALU\nK×K systolic array\n(all timing inside)"] -->|"out[K] at clct"| ENG
+    ENG -->|"VR write"| RF["MultiWidthRegisterBlock"]
+    FE -->|"fetch fills (shared DMA)"| DMA
+```
+
+- **Frontend** (`npuFrontend.scala`): fetches 16 B lines (4 words) from CODE
+  via the shared DMA, caches them in an 8-set×2-way LRU cache, streams words
+  in order, counts `mma.last` frames, and exposes the ctrl register map
+  (CTRL/STATUS/ERR_INFO/FETCH_STATS/PROG_LEN + debug). Writes to
+  PROG_LEN/start invalidate the cache.
+- **Engine** (`npuProgramEngine.scala`): states `IDLE, DMA_REQ, DMA_WAIT,
+  DONE_1, ILLEGAL` plus a capture FIFO (vd queue, depth 2K+4). For each
+  `mma`/`mma.last` it asserts one feed tick (`busy=1, keep=1, use_accum=1`)
+  with the combinational RF reads `in_a=VX[vs1]`, `in_b=VX[vs2]`,
+  `in_accum=VR[vs3]` (x0 → 0), stays in IDLE (back-to-back feeds = the MMALU
+  K-burst), and pushes `vd`. Each clct pulse (one per feed, 2n−1 later) pops
+  the FIFO and writes the collector's output column to `VR[vd]`. After an
+  `mma.last`'s own capture, `keep` drops for one tick — the MMALU boundary
+  that resets the PEs for the next session. `keep` is held high otherwise
+  (the MMALU idle pattern).
+
+### The mma session (K-burst) model
+
+```
+# one session (m feeds) → m output columns
+vle8  A[:,0] → VX[a0];  vle8  B[0] → VX[b0]
+mma   vd0, a0, b0, c          # feed 0; captures output column c0
+vle8  A[:,1] → VX[a1];  vle8  B[1] → VX[b1]
+mma   vd1, a1, b1, c          # feed 1; captures output column c1
+...
+mma.last vdN, aN, bN, c       # session end (+ keep=0 boundary)
+nop × nop_wait                # clct/drain window
+vse32 vd0 → OUT; vse32 vd1 → OUT; ...
+```
+
+- Each `mma` = one feed tick; the PEs accumulate the session's products
+  (`PE[i][j] += A[i]·B[j]` per feed — the MMALU's native K-burst).
+- Each mma's clct captures **one output column** of the session product to
+  its own `vd` (sim-verified: consecutive feeds → consecutive columns).
+- `mma.last` marks the session end; the keep=0 boundary (after its capture)
+  resets the PEs.
+- `vd_k[i] = Σ_m a_m[i]·b_m[col_k] + C[i]` (C = VR[vs3], added via
+  `use_accum`/`in_accum` at the capture).
+- **Known silicon caveat**: the captured column index is set by the issue
+  timing (the collector's phase); the sim verifies the clean consecutive
+  columns, and the silicon's phase must be aligned to the frontend's issue
+  pacing (documented follow-up).
+
+### Status
+
+| Item | State |
+|:-----|:------|
+| Engine simplification (decode + dispatch, capture FIFO) | ✅ implemented |
+| Session model sim-verified (per-mma column captures) | ✅ `NpuProgramEngineSpec` / `FrontendSpec` / `GemmSpec` (95/95 suite green) |
+| Driver `ChiselNPU.run(instructions, memories)` | ✅ 0.2.1, unit-tested (FakeNative engine model) |
+| Silicon (K=16, 175 MHz fabric, WNS +0.019) | ✅ bitstream + bring-up; copy round-trips / illegal / status pass; session-capture phase alignment pending |
+
