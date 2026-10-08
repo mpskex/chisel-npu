@@ -340,14 +340,8 @@ tool/test-all.sh
 Expected output:
 ```
 [info] NCoreBackendGemmSoftmax
-[info] - should produce equal outputs for uniform input scores
-[info] NCoreBackendGemmSoftmax
-[info] - should handle 2x scale with full value check
-[info] NCoreBackendGemmSoftmax
-[info] - should handle negative accumulator scores
-[info] NCoreBackendGemmSoftmax
-[info] - should pass full value check with scale=3
-[info] Tests: succeeded 4, failed 0
+[info] - should pass all GEMM+softmax quantization sub-cases
+[info] Tests: succeeded 1, failed 0
 ```
 
 ---

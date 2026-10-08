@@ -1,0 +1,54 @@
+{
+   "ActiveEmotionalView":"Default View",
+   "Default View_ScaleFactor":"1.5",
+   "Default View_TopLeft":"-825,-233",
+   "DisplayPinAutomationMissing":"1",
+   "DisplayPinsOfHiddenNets":"1",
+   "DisplayTieOff":"1",
+   "ExpandedHierarchyInLayout":"",
+   "guistr":"# # String gsaved with Nlview 7.8.0 2024-04-26 e1825d835c VDI=44 GEI=38 GUI=JA:21.0
+#  -string -flagsOSRD
+preplace port M00_AXI -pg 1 -lvl 2 -x 370 -y 180 -defaultsOSRD
+preplace port M01_AXI -pg 1 -lvl 2 -x 370 -y 200 -defaultsOSRD
+preplace port M02_AXI -pg 1 -lvl 2 -x 370 -y 220 -defaultsOSRD
+preplace port M03_AXI -pg 1 -lvl 2 -x 370 -y 240 -defaultsOSRD
+preplace port S00_AXI -pg 1 -lvl 0 -x -100 -y 80 -defaultsOSRD
+preplace port S01_AXI -pg 1 -lvl 0 -x -100 -y 120 -defaultsOSRD
+preplace port port-id_ACLK -pg 1 -lvl 0 -x -100 -y 160 -defaultsOSRD
+preplace port port-id_ARESETN -pg 1 -lvl 0 -x -100 -y 200 -defaultsOSRD
+preplace port port-id_M00_ACLK -pg 1 -lvl 0 -x -100 -y 0 -defaultsOSRD
+preplace port port-id_M00_ARESETN -pg 1 -lvl 0 -x -100 -y 20 -defaultsOSRD
+preplace port port-id_M01_ACLK -pg 1 -lvl 0 -x -100 -y 100 -defaultsOSRD
+preplace port port-id_M01_ARESETN -pg 1 -lvl 0 -x -100 -y 40 -defaultsOSRD
+preplace port port-id_M02_ACLK -pg 1 -lvl 0 -x -100 -y 60 -defaultsOSRD
+preplace port port-id_M02_ARESETN -pg 1 -lvl 0 -x -100 -y 140 -defaultsOSRD
+preplace port port-id_M03_ACLK -pg 1 -lvl 0 -x -100 -y 180 -defaultsOSRD
+preplace port port-id_M03_ARESETN -pg 1 -lvl 0 -x -100 -y 220 -defaultsOSRD
+preplace port port-id_S00_ACLK -pg 1 -lvl 0 -x -100 -y 240 -defaultsOSRD
+preplace port port-id_S01_ACLK -pg 1 -lvl 0 -x -100 -y 260 -defaultsOSRD
+preplace port port-id_S01_ARESETN -pg 1 -lvl 0 -x -100 -y 280 -defaultsOSRD
+preplace inst axi_interconnect_0 -pg 1 -lvl 1 -x 200 -y 210 -defaultsOSRD
+preplace netloc ACLK_1 1 0 1 -10J 100n
+preplace netloc ARESETN_1 1 0 1 0 120n
+preplace netloc M00_ACLK_1 1 0 1 50 0n
+preplace netloc M00_ARESETN_1 1 0 1 40 20n
+preplace netloc M01_ACLK_1 1 0 1 -30 100n
+preplace netloc M01_ARESETN_1 1 0 1 20 40n
+preplace netloc M02_ACLK_1 1 0 1 -40 60n
+preplace netloc M02_ARESETN_1 1 0 1 -60 140n
+preplace netloc M03_ACLK_1 1 0 1 -70 180n
+preplace netloc M03_ARESETN_1 1 0 1 -80 220n
+preplace netloc S00_ACLK_1 1 0 1 30 140n
+preplace netloc S01_ACLK_1 1 0 1 -50 180n
+preplace netloc S01_ARESETN_1 1 0 1 10 200n
+preplace netloc S00_AXI_1 1 0 1 -30J 60n
+preplace netloc S01_AXI_1 1 0 1 -20J 80n
+preplace netloc axi_interconnect_0_M00_AXI 1 1 1 NJ 180
+preplace netloc axi_interconnect_0_M01_AXI 1 1 1 NJ 200
+preplace netloc axi_interconnect_0_M02_AXI 1 1 1 NJ 220
+preplace netloc axi_interconnect_0_M03_AXI 1 1 1 NJ 240
+levelinfo -pg 1 -100 200 370
+pagesize -pg 1 -db -bbox -sgen -260 -20 480 420
+"
+}
+0

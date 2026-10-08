@@ -53,8 +53,8 @@ Using the default parameters (K=8 lanes, N=8, L=32):
 
 ### Setup (run once per layer, outside the inner loop)
 
-The hardware does not yet have a constant-load instruction for 32-bit values.
-The recommended approach in current software (and tests) is:
+The MOV family (`vmov`/`vmovi`/`vmovh`) exists, but `vmovi` writes only lane 0,
+so loading a 32-bit constant into every lane still uses:
 
 1. Write the FP32 constant bytes into a VX register via the **external RF write port** (used by a loader/DMA or the test harness).
 2. Issue `bcast.vr` to broadcast VX lane 0 (reinterpreted as FP32) across all K VR lanes.
@@ -153,7 +153,7 @@ gantt
 | FP32 → INT8 | vcvt_f32_s8 | 1 |
 | **Per-tile total** | (excluding setup) | **3K** |
 
-For K=64 (top-level configuration): **192 clock cycles per K×K tile** plus 2 `bcast.vr` setup cycles amortised across many tiles (the ext_write/DMA takes place before the pipeline starts).
+For K=16 (FPGA top): **48 clock cycles per K×K tile** plus 2 `bcast.vr` setup cycles amortised across many tiles (the ext_write/DMA takes place before the pipeline starts).
 
 ---
 

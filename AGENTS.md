@@ -18,7 +18,7 @@ All `make` targets shell out to `docker run -v $PWD:/workspace fangruil/chisel-d
 - `make build` — runs `sbt run`, which elaborates `top.Main` and writes `top.sv` at repo root.
 - `make build-sc` — verilator SystemC backend. Note: the target reads `top.v` but `top.Main` emits `top.sv` (`Makefile:29,34` vs `src/main/scala/top/top.scala:18`). Rename or patch before invoking.
 - `make docs` — `pip3 install -r docs/requirements.txt && mkdocs serve` on the host (not in Docker).
-- `make clean` — removes `target`, `*.v`, `*.anno.json`. Does **not** delete the checked-in `top.sv` (~17 MB).
+- `make clean` — removes `target`, `*.v`, `*.anno.json`. Does **not** delete `top.sv` (~1.1 MB; a git-ignored build artifact emitted by `sbt run`, top module `NpuProgramEngineFrontend`).
 - `make clean-cache` — wipes `.cache/` (the mounted Coursier cache; see env below).
 
 ### Single-test shortcut
@@ -35,7 +35,15 @@ Confusing them is the primary source of errors in this codebase.
 |:---:|:---|:---:|:---:|
 | **`N`** (spoken: **N(bits)**) | Base lane width in bits for a VX register. Equals MMALU's `nbits`. Always `N(bits)` in prose to avoid confusion. | 8 | 8 |
 | **`L`** | Number of base VX registers. Must be divisible by 4 for VE/VR aliasing. | 32 | 32 |
-| **`K`** | SIMD lane count per register. At the backend boundary, `K == MMALU.n` (the array side). | 8 | 64 |
+| **`K`** | SIMD lane count per register. At the backend boundary, `K == MMALU.n` (the array side). | 8 | 16 |
+
+The FPGA top is the streamed **program engine** (`engine/NpuProgramEngineFrontend`),
+instantiated in `src/main/scala/top/top.scala` as `(K = 16, N = 8, W = 4)` for the
+xcvu9p / xc7k480t builds; it sets `L = K`, so its register file is `L×K×N/8 = 256 B`.
+Older docs may cite `K = 32`/`K = 64` — those describe the legacy `NCoreBackend`
+and the superseded `npu_subsys` bitstream, not the current FPGA top.
+**`W`** (dispatch-window depth, `NpuProgramEngineFrontend`) defaults to 16 and is
+set to 4 for the FPGA builds (W=8 did not close timing at 200 MHz).
 
 Register-class aliasing over a shared physical byte array (`L × K × N/8` bytes total):
 
@@ -70,17 +78,17 @@ funct7 [6:5] = dtype   (0=INT, 1=FP, 2=BF)
 CVT family (`opcode=0x14`) repurposes `funct7[2:0]` as the source format code and `funct7[3]`
 as saturate. See `src/main/scala/isa/instrFormat.scala` for the full `CvtFunct7` layout.
 
-### Opcode family assignments (file: `src/main/scala/isa/instSetArch.scala`)
+### Opcode family assignments (values: `src/main/scala/isa/instSetArch.scala`; decode map: `src/main/scala/isa/InstrTable.scala`)
 
 | Family | Opcode | funct3 subops |
 |:---|:---:|:---|
 | NOP | 0x00 | — |
-| LD / ST | 0x01/0x02 | funct3 = transfer width |
-| MMA | 0x03 | 0=mma, 1=mma.last, 2=mma.reset |
+| LD / ST | 0x07/0x27 | funct3 = transfer width (0=VX, 1=VE, 2=VR) |
+| MMA | 0x03 | 0=mma, 1=mma.last, 2=mma.reset (decoder-legal; engine rejects) |
 | VALU_ARITH | 0x10 | add/sub/mul/neg/abs/max/min/rsub |
 | VALU_LOGIC | 0x11 | sll/srl/sra/rol/xor/not/or/and |
 | VALU_REDUCE | 0x12 | sum/rmax/rmin/rand/ror/rxor |
-| VALU_LUT | 0x13 | exp/recip/tanh/erf |
+| VALU_LUT | 0x13 | vlut/vsetlut |
 | VALU_CVT | 0x14 | funct3=dst fmt; funct7[2:0]=src fmt |
 | VALU_BCAST | 0x15 | 0=reg, 1=imm |
 | VALU_FP | 0x16 | fadd/fsub/fmul/fneg/fabs/fmax/fmin |
@@ -90,13 +98,13 @@ as saturate. See `src/main/scala/isa/instrFormat.scala` for the full `CvtFunct7`
 ### Assembler and decoder (files: `src/main/scala/isa/`)
 
 - **`NpuAssembler.scala`** — Scala-side assembler. `encR / encI / encS` primitives; named helpers like `vadd(rd, rs1, rs2, width, sat)`, `vfma(...)`, `vcvt_s8_f32(...)`. All helpers return `Int` (unsigned 32-bit bit pattern); use `.toLong & 0xFFFFFFFFL` before `.U` to avoid negative-literal Chisel errors.
-- **`InstrDecoder.scala`** — combinational decoder module: `UInt(32.W)` → `DecodedMicroOp`. Asserts `io.illegal` for reserved opcodes, invalid funct3, reserved width `3`, or CVT `src==dst`. `NCoreBackend` calls this first.
+- **`InstrDecoder.scala`** — combinational decoder module: `UInt(32.W)` → `DecodedMicroOp`. Asserts `io.illegal` for a reserved opcode (full 7-bit field), a reserved funct3 within a family, reserved width (`funct7[1:0]=3`) or dtype (`funct7[6:5]=3`), or an unmatched CVT (dst, src) pair (including `src==dst`). `NCoreBackend` calls this first.
 - **`instrFormat.scala`** — bit-position constants, `VecWidth`, `VecRound`, `VecDtypeCls`, `FmtCode` enums.
 
 ### Critical encoding gotchas
 
 - The `VecWidth` ChiselEnum field inside `NCoreVALUBundle` is renamed to **`regCls`** (was `width`) to avoid a Chisel plugin naming conflict with `chisel3.Width`. Anywhere you see `.regCls`, that is the VX/VE/VR register-class selector.
-- `opcode` in `_OpCode` is 7-bit. `OpFamily` enum values go up to 0x18 = 24, which requires 5 bits (Chisel auto-infers minimum width). When feeding `opBits` (7-bit) into `OpFamily.safe(...)`, truncate first: `opBits(4, 0)`.
+- The `opcode` field is the full 7-bit value and the decoder compares it against the whole 7-bit field — do **not** truncate. `OpFamily` is a 6-bit enum (values 0x00..0x27); family validity is derived from membership in `OpFamily.all`, so any opcode outside the set (e.g. 0x40..0x7F) decodes as illegal rather than aliasing onto a valid family. `src/main/scala/isa/InstrTable.scala` is the single source of truth for the decode map.
 - `NpuAssembler` encodes instruction words as Scala `Int`. Values with bit 31 set are negative in Scala. Always poke as `(instr.toLong & 0xFFFFFFFFL).U` in tests.
 - CVT: `vcvt_s8_f32` means INT8→FP32 (wide output to VR). `vcvt_f32_s8` means FP32→INT8 (narrow output to VX). The naming convention is `vcvt_<dst>_<src>`.
 
@@ -106,12 +114,14 @@ as saturate. See `src/main/scala/isa/instrFormat.scala` for the full `CvtFunct7`
 - `alu/pe/` — `BasePE` trait and `MMPE`.
 - `alu/vec/` — `VALU` (multi-width K-lane), `Qfmt` LUT tables (shared with tests), `fp.scala` (FP32/BF16/BF8 Tier-2 helpers, `FpRef` Scala reference for tests).
 - `backend/SimpleBackend.scala` — `NCoreBackend`: InstrDecoder + MultiWidthRegisterBlock + MMALU + VALU.
-- `isa/` — `instrFormat.scala`, `instSetArch.scala`, `NpuAssembler.scala`, `instrDecoder.scala`, `dataType.scala`, `micro_op/` (VALUMicroCode, MMALUMicroCode, memMicroCode).
+- `engine/` — `npuFrontend.scala` (`NpuProgramEngineFrontend`: fetch/ctrl_lite), `npuProgramEngine.scala` (`NpuProgramEngine`: dispatch window, scoreboard, DMA/MMALU issue, capture/chaining).
+- `dma/npuDmaEngine.scala` — `NpuDmaEngine`: the engine's single AXI4 master.
+- `isa/` — `instrFormat.scala`, `instSetArch.scala`, `InstrTable.scala` (authoritative decode map), `NpuAssembler.scala`, `instrDecoder.scala`, `NpuDisassembler.scala`, `dataType.scala`, `micro_op/` (VALUMicroCode, MMALUMicroCode, memMicroCode).
 - `sram/register.scala` — legacy `RegisterBlock` (still used by old tests).
 - `sram/multiWidthRegister.scala` — `MultiWidthRegisterBlock` (VX/VE/VR aliased RF, used by NCoreBackend).
 - `sram/spm.scala` — `SPM(K, N, SPM_ROWS)`: scratch-pad memory, K-wide read/write, 1-cycle read latency.
 - `sram/sreg.scala` — `SpecialRegFile`: `.sreg` — tile_h/tile_w counters + `ConvParams` for future ld.tile/PAG.
-- `utils/gates.scala`, `top/top.scala`.
+- `utils/gates.scala`, `top/top.scala` (elaborates `NpuProgramEngineFrontend(K=16, N=8, W=4)` → `top.sv`).
 - `ip/vivado/` — packaged Vivado project. Not part of sbt build.
 
 ## Testing
@@ -120,12 +130,14 @@ as saturate. See `src/main/scala/isa/instrFormat.scala` for the full `CvtFunct7`
 - Shared helpers in package `testUtil` (`src/test/scala/utils/`). Import `testUtil._`.
 - ChiselEnum fields: **`poke(op)` works** but **`expect(op)` does NOT** in EphemeralSimulator. Use `dut.io.field.asInstanceOf[chisel3.UInt].peek().litValue == SomeEnum.val.litValue` to compare enum outputs.
 - All new test specs use `isa.NpuAssembler` to build instruction words instead of poking bundle fields directly — more realistic and tests the decoder path.
-- `VALUArithSpec`, `VALULogicSpec`, `VALUMinMaxSpec`, `VALUReduceSpec`, `VALULutSpec`, `VALUActivationSpec` — VALU unit tests (poke `ctrl` bundle directly; `K=8`).
+- `VALUArithSpec`, `VALULogicSpec`, `VALUMinMaxSpec`, `VALUReduceSpec`, `VALUProgrammableLutSpec`, `VALUActivationSpec` — VALU unit tests (poke `ctrl` bundle directly; `K=8`).
 - `VALUCastSpec` — vbcast (broadcast) tests.
 - `VALUFP32Spec`, `VALUCvtSpec` — FP32 arithmetic and conversion tests.
-- `InstrDecoderSpec` — 32-bit decode correctness (via NpuAssembler).
+- `InstrDecoderSpec`, `InstrTableSpec`, `NpuDisassemblerSpec` — decode correctness, the authoritative table, and disassembly (all via `NpuAssembler`).
 - `MultiWidthRegisterSpec` — VX/VE/VR aliasing.
-- `NCoreBackendQuantSpec` — end-to-end: MMA→vcvt→vfma→vcvt quantization pipeline.
+- `NCoreBackendQuantSpec`, `NCoreBackendGemmSoftmaxSpec` — end-to-end NCoreBackend (test backend) pipelines.
+- `engine/` — `NpuProgramEngineFrontendSpec`, `NpuProgramEngineTrajSpec`, `StreamedNSessionSpec`, `StreamedChainedSpec`, `StreamedVX0Spec`, `CaptureDeterminismSpec`, `CaptureTraceSpec`, `LateStoreCaptureSpec` (streamed-issuing engine; `StreamHarness` is the shared harness).
+- `dma/NpuDmaEngineSpec` — the engine AXI master.
 
 ## CI
 
@@ -142,3 +154,4 @@ as saturate. See `src/main/scala/isa/instrFormat.scala` for the full `CvtFunct7`
 - `MultiWidthRegisterBlock.io.ext_r_addr` must be driven from the backend even when the external read port is not used; default it to 0.
 - VecOp enum values go up to 0x45 = 69, requiring 7-bit width. The enum is declared with `.U(7.W)` values. If you add new entries, ensure the max value still fits in 7 bits.
 - The ISA uses RISC-V-style R/I/S encoding: opcode selects a functional *family*; `funct3` selects the sub-op; `funct7` carries attributes. See `docs/designs/01.isa.md` for the full field layout.
+- The streamed dispatch/issuing model (window, scoreboard, chaining, boundary, capture, completion, session reset) is documented in detail in `docs/designs/04.streamed-issuing.md`; the silicon bring-up log and determinism fixes are in `docs/implementations/SiliconBringup.md`. Both postdate the (older) `docs/designs/02.streamed-dispatch.md` overview.

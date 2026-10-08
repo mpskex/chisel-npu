@@ -1,6 +1,6 @@
 ---
 name: build-fpga-xc7k480t
-description: Use when building the NPU FPGA bitstream for xc7k480tffg1156-2 — includes the squashed Vivado build flow (build_npu.tcl and build_npu_with_ila.tcl), bootstrap_project.tcl, the consolidated _apply_npu_topology.tcl BD library, ILA insertion, bitstream configuration, MMALU pipeline timing closure, and Makefile quick-build targets.
+description: Use when building the NPU FPGA bitstream for xc7k480tffg1156-2 or xcvu9p — includes the current Vivado engine build flow (build_npu_engine.tcl / build_npu_engine_with_ila.tcl, K=16), the legacy V10 build_npu.tcl, bootstrap_project.tcl, the consolidated _apply_npu_topology.tcl BD library, ILA insertion, bitstream configuration, MMALU pipeline timing closure, and the xcvu9p build_npu_vu9p.tcl flow.
 ---
 
 # FPGA Bitstream Build — xc7k480t (Vivado 2025.2)
@@ -13,31 +13,33 @@ Source `.env.sh` at repo root to set all paths:
 source .env.sh    # sets VIVADO, FPGA_HOST, SSH_IDENTITY, CHIP, VIVADO_JOBS, VIVADO_IMPL_STRATEGY
 ```
 
-## Quick build via Makefile
+## Quick build (current K=16 engine)
 
 ```bash
 # Step 1: regenerate top.sv (if Chisel sources changed)
-make build                     # runs sbt inside Docker
+make build                     # runs sbt inside Docker; K=16 engine, W=4, N=8
 
-# Step 2: build bitstream via Vivado
-make build-fpga                # uses $VIVADO, $VIVADO_JOBS, $VIVADO_IMPL_STRATEGY
+# Step 2: build the engine bitstream via Vivado
+~/Xilinx/2025.2/Vivado/bin/vivado -mode batch \
+    -source  ip/vivado/xc7k480t/scripts/build_npu_engine.tcl \
+    -journal build/build_npu_engine_xc7k480t.jou \
+    -log     build/build_npu_engine_xc7k480t.log
 
-# Step 3: build with ILA debugger
-make build-fpga-debug
-
-# Step 4: clean bootstrapped project
-make build-fpga-clean
+# Step 3: engine build with the ILA debugger core
+~/Xilinx/2025.2/Vivado/bin/vivado -mode batch \
+    -source  ip/vivado/xc7k480t/scripts/build_npu_engine_with_ila.tcl \
+    -journal build/build_npu_engine_ila_xc7k480t.jou \
+    -log     build/build_npu_engine_ila_xc7k480t.log
 ```
 
-Override variables:
+Output: `ip/vivado/xc7k480t/top_npu_engine.bit` (~18 MB); the ILA variant writes
+`top_npu_engine_with_ila.bit` + `top_npu_engine_with_ila.ltx`.
 
-```bash
-make build-fpga VIVADO=~/Vivado/2025.2/Vivado/bin/vivado VIVADO_JOBS=2 VIVADO_IMPL_STRATEGY=Performance_Explore
-```
+The Makefile `build-fpga` / `build-fpga-debug` targets still invoke the **legacy
+V10** `build_npu.tcl` / `build_npu_with_ila.tcl` (output `top_npu.bit`), so use
+the explicit engine script above for the current bitstream.
 
-Output: `ip/vivado/xc7k480t/top_npu.bit` (~18 MB).
-
-## Manual Vivado build
+## Manual Vivado build (legacy V10)
 
 ```bash
 ~/Xilinx/2025.2/Vivado/bin/vivado -mode batch \
@@ -45,6 +47,9 @@ Output: `ip/vivado/xc7k480t/top_npu.bit` (~18 MB).
     -journal build/build_npu_xc7k480t.jou \
     -log     build/build_npu_xc7k480t.log
 ```
+
+This produces the legacy `top_npu.bit` (`npu_subsys`, K=32, one-shot DMA).
+The current engine build is `build_npu_engine.tcl` (above).
 
 ## Environment variables
 
@@ -60,7 +65,7 @@ Output: `ip/vivado/xc7k480t/top_npu.bit` (~18 MB).
 
 ## Architecture
 
-### AXI topology (V10)
+### AXI topology (current K=16 engine)
 
 ```
 Host PCIe Gen2 x8
@@ -68,27 +73,70 @@ Host PCIe Gen2 x8
   XDMA 4.2 (125 MHz)
   ├── M_AXI ─► axi_cc_xdma_in (125→200) ─► axi_clkconv_xdma (200→133) ─► axi_dwidth_xdma (128→512) ─► axi_xbar.S00
   │                                                                                                        │
-  ├── M_AXI_BYPASS ─► axi_clkconv_byp (125→200) ─► byp_dw (128→32) ─► byp_pc ─► npu_subsys/s_axil        │
+  ├── M_AXI_BYPASS ─► axi_clkconv_byp (125→200) ─► byp_dw (128→32) ─► byp_pc ─► npu_engine_subsys/s_axil │
   │                                                                                                        │
   axi_xbar (2S:2M, 4 GB address space: 0x0000_0000 → C0, 0x8000_0000 → C1)
     ├── M00 ─► MIG C0 (DDR3, 2 GB)
     └── M01 ─► MIG C1 (DDR3, 2 GB)
 
-npu_subsys (200 MHz fabric):
-  ctrl_lite + npu_dma_master + MMALU(K=32, N=8, acc=32)
-    m_axi ─► axi_clkconv_npu (200→133) ─► axi_dwidth_npu (128→512) ─► axi_xbar.S01
+npu_engine_subsys (fabric clock):
+  npu_engine_ctrl_lite (multi-register) + NpuProgramEngineFrontend(K=16, N=8, W=4; top.sv)
+    (contains InstrDecoder + MultiWidthRegisterBlock + MMALU + NpuDmaEngine)
+    m_axi ─► axi_clkconv_npu ─► axi_dwidth_npu (128→512) ─► axi_xbar.S01
 ```
 
-### Clock domains
+The engine `m_axi` is 128-bit with a 32-bit address; `npu_engine_subsys`
+zero-extends it to the 64-bit `m_axi` expected by `axi_clkconv_npu`.
+
+### Clock domains (xc7k480t)
 
 | Domain | Frequency | Source |
 |:-------|:---------:|:-------|
 | axi_aclk | 125 MHz | XDMA PCIe refclock |
-| fabric_aclk (clk_out1) | 200 MHz | clk_wiz_fabric MMCM (8×/5 from 125 MHz) |
+| fabric_aclk (clk_out1) | 100 MHz (current engine; timing-closed) | clk_wiz_fabric MMCM — the legacy V10 fabric ran at 200 MHz |
 | c0_ui_clk | 133 MHz | MIG C0 PLL |
 | c1_ui_clk | 133 MHz | MIG C1 PLL |
 
-## MMALU timing closure history
+The engine fabric clock is set with the `set_fabric_*.tcl` scripts; the current
+silicon-verified engine bitstream is **100 MHz** (see
+`docs/implementations/SiliconBringup.md`).
+
+### Legacy V10 topology (`npu_subsys`)
+
+The pre-engine BD cell wrapped `npu_ctrl_lite` + `npu_dma_master` + a **K=32**
+`MMALU` behind a single 32-bit CTRL register with a one-shot DMA kick. It is
+still built by `build_npu.tcl` → `top_npu.bit`; see
+`docs/implementations/FPGA_XC7K480T.md`.
+
+## xcvu9p engine flow (Virtex UltraScale+)
+
+The same K=16 `NpuProgramEngineFrontend` (`top.sv`, W=4) is built for
+`xcvu9p-flgb2104-2-e` by `ip/vivado/xcvu9p/scripts/build_npu_vu9p.tcl` →
+`ip/vivado/xcvu9p/top_npu_vu9p.bit`.
+
+- **Placement directive**: `set_property STEPS.PLACE_DESIGN.ARGS.DIRECTIVE
+  ExtraTimingOpt` — the multi-SLR device is congested around the GTY/PCIe edge
+  under the default placer.
+- **Auto-incremental synthesis disabled**: the script clears
+  `AUTO_INCREMENTAL_CHECKPOINT` / `INCREMENTAL_CHECKPOINT` and removes + re-adds
+  `top.sv`, so a regenerated engine is not silently replaced by a reused
+  netlist (a stale W=8 netlist otherwise survived a `reset_run`).
+- **Reset-CDC fix**: `hw_platform.v` registers a local `ASYNC_REG` copy
+  (`axi_aresetn_loc`) of the high-fanout XDMA `axi_aresetn` for the
+  `clk_fabric` reset synchronizer, and `pin.xdc` `set_false_path`s that
+  synchronizer's async reset — removing an ≈ −0.87 ns recovery violation.
+- The engine fabric domain closes at **200 MHz** (WNS ≈ +0.05 ns, 0 failing
+  endpoints). See `docs/implementations/FPGA_VU9P.md`.
+- Requires a one-time `scripts/setup_platform.tcl` (DDR4 narrow burst, XDMA
+  bypass, fabric MMCM, converters).
+
+## MMALU timing closure history (legacy V10, K=32)
+
+> These numbers describe the **legacy V10** `npu_subsys` MMALU at **K=32 /
+> 200 MHz**. The current engine uses the same SA→PE pipeline register at
+> **K=16**, giving MMALU latency **3n−1 = 47 cycles**, and closes at 100 MHz
+> on xc7k480t (200 MHz on xcvu9p) — see
+> `docs/implementations/SiliconBringup.md` and the xcvu9p section below.
 
 ### Initial failure (2026-07-30)
 
@@ -171,9 +219,9 @@ After bitstream built, use `python3 tool/hw/bringup_ssh.py`:
 ```bash
 source .env.sh
 # Flash BPI + JTAG SRAM + reboot + run tests:
-python3 tool/hw/bringup_ssh.py --host "$FPGA_HOST" ip/vivado/xc7k480t/top_npu.bit
+python3 tool/hw/bringup_ssh.py --host "$FPGA_HOST" ip/vivado/xc7k480t/top_npu_engine.bit
 # Skip flash, skip JTAG (if bitstream already loaded):
-python3 tool/hw/bringup_ssh.py --host "$FPGA_HOST" --skip-flash --skip-jtag ip/vivado/xc7k480t/top_npu.bit
+python3 tool/hw/bringup_ssh.py --host "$FPGA_HOST" --skip-flash --skip-jtag ip/vivado/xc7k480t/top_npu_engine.bit
 ```
 
 Or step by step:
@@ -186,7 +234,7 @@ make test-hw FPGA_HOST=10.16.0.31   # run pytest HW tests
 
 | Problem | Fix |
 |:--------|:----|
-| Build exits immediately — no project | Run `bootstrap_project.tcl` manually, or `rm -rf proj/` and re-run `build_npu.tcl` |
+| Build exits immediately — no project | Run `bootstrap_project.tcl` manually, or `rm -rf proj/` and re-run `build_npu_engine.tcl` (or legacy `build_npu.tcl`) |
 | OOC XDMA gets killed (OOM) | Reduce `VIVADO_JOBS` to 1 or 2 |
 | `reset_run synth_1` fails (process not found) | `rm -f proj/npu_migrate.runs/synth_1/*.wdf` |
 | `reset_run` followed by `launch_runs` fails | `rm -f proj/.../runs/synth_1/top_wrapper.dcp` first |

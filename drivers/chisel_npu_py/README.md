@@ -1,122 +1,90 @@
 # chisel-npu-py
 
-Python userspace driver for the Chisel NPU over the Xilinx XDMA kernel
-driver, for the xc7k480t FPGA card.
+Python userspace driver for the **instruction-programmed** Chisel NPU over
+the Xilinx XDMA kernel driver, for the xc7k480t FPGA card.
 
-## Design
-
-The driver is split in two halves with a strict boundary:
-
-- **`chisel_npu_py._native`** — a pybind11 C++ module that is the *only*
-  place where file descriptors, DDR addresses, register offsets and DMA
-  transfers exist. It opens `/dev/xdma0_h2c_0`, `/dev/xdma0_c2h_0` and
-  `/dev/xdma0_bypass`, owns the MMALU operand staging table, validates
-  every transfer (alignment, lengths, address window) and exposes a
-  fully **address-free** interface: staged operands by *name* and a
-  single ctrl_lite control word.
-
-- **the Python layer** — typed API that only moves buffers (numpy arrays,
-  bytes, bytearray, memoryview). **No DDR address or register offset ever
-  appears on the Python side.**
+The whole driver is one call: stage named-section memories, run a sequence
+of ISA instruction words, read everything back.
 
 ## Usage
 
 ```python
 import numpy as np
-from chisel_npu_py import ChiselNPU
+from chisel_npu_py import ChiselNPU, isa
 
-npu = ChiselNPU()                          # opens the XDMA device nodes
-a   = np.full(32, 10, dtype=np.int8)
-b   = np.full(32, 7,  dtype=np.int8)
-acc = np.zeros(32, dtype=np.int32)
-out = npu.mmalu(a, b, acc)                 # stage → kick → wait done → read OUT
+npu = ChiselNPU()                       # NPUConfig default (K=16 silicon map)
+
+result = npu.run(
+    instructions=[
+        isa.vle8(0, isa.SECT_A, 0),     # A → VX[0]
+        isa.vle8(1, isa.SECT_B, 0),     # B → VX[1]
+        isa.mma_last(2, 0, 1, 0),       # session end: capture → VR[2]
+        *[isa.NOP] * 40,                # clct/drain window
+        isa.vse32(2, isa.SECT_OUT, 0),  # store the result column
+    ],
+    memories={"A": a_bytes, "B": b_bytes},   # section name → buffer
+)
+# result = {"A": <readback>, "B": <readback>, "OUT": int32[...]}
 ```
 
-The staged MMALU operands (named, size-checked by the native module):
+`run()` stages each memory into its named section (A/B/ACCUM/OUT/CODE,
+window-checked natively), stages the words into CODE, fires the engine
+(PROG_LEN → start → done), raises `NPUProgramError(pc, err_info)` on an
+illegal instruction, and returns the full memories dict read back plus OUT
+(as flat int32 of the OUT window; numpy inputs come back with the same
+dtype/shape).
 
-| Operand | Size | Contents |
-|:--------|:-----|:---------|
-| A       | 32 B  | 32 × int8 |
-| B       | 32 B  | 32 × int8 |
-| ACCUM   | 128 B | 32 × int32 |
-| OUT     | 128 B | 32 × int32 |
+## The mma session model
 
-Lower-level pieces (still no addresses):
+`mma` = one feed tick (`in_a` = a VX column, `in_b` = a VX row); the MMALU
+accumulates the session's terms in its PEs. Each mma's clct (2n−1 later)
+captures **one output column** of the session product to its own `vd`
+(per-mma capture, columns located by the issue-timing phase). `mma.last`
+marks the session end. Store the columns with multiple `vse32`:
 
 ```python
-from chisel_npu_py import XDMADevice, CtrlLite
-
-dev = XDMADevice()
-dev.write_staged("A", a)                   # stage an operand by name
-out = np.empty(32, dtype=np.int32)
-dev.read_staged("OUT", out)                # read an operand into a buffer
-dev.operand_size("ACCUM")                  # 128
-
-ctrl = CtrlLite(dev)
-ctrl.kick(); ctrl.wait_done(timeout_s=2.0) # done/busy bit protocol
+result = npu.run(
+    instructions=[
+        isa.vle8(4, isa.SECT_A, 0),  isa.vle8(8, isa.SECT_B, 0),
+        isa.vle8(5, isa.SECT_A, 16), isa.vle8(9, isa.SECT_B, 16),
+        isa.vle8(6, isa.SECT_A, 32), isa.vle8(10, isa.SECT_B, 32),
+        isa.mma(1, 4, 8, 0),    # feed 0 → captures column c0
+        isa.mma(2, 5, 9, 0),    # feed 1 → captures column c1
+        isa.mma(3, 6, 10, 0),   # feed 2 → captures column c2
+        isa.mma_last(0, 0, 0, 0),
+        *[isa.NOP] * 40,
+        isa.vse32(1, isa.SECT_OUT, 0),
+        isa.vse32(2, isa.SECT_OUT, 64),
+        isa.vse32(3, isa.SECT_OUT, 128),
+    ],
+    memories={"A": a_cols, "B": b_cols},
+)
 ```
 
-Safety invariants enforced by the native module:
+## Sections (default K=16 config)
 
-- staged operands are name- and byte-size-checked against its table —
-  wrong names or wrong-size buffers raise `ValueError`;
-- zero-length, misaligned and out-of-window transfers are rejected
-  internally;
-- non-contiguous inputs are copied to contiguous buffers automatically;
-- read-back buffers must be C-contiguous and writable (no silent copies);
-- all errors surface as `XDMAError`/`NPUError`/`NPUTimeoutError`
-  subclasses.
+| Section | Base | Window | Contents |
+|:--------|:-----|:-------|:---------|
+| A | `0x4000_0000` | 4 KiB | int8 vectors |
+| B | `0x4000_0400` | 4 KiB | int8 vectors |
+| ACCUM | `0x4000_0800` | 128 B | int32[K] |
+| OUT | `0x4000_0880` | 4 KiB | int32 outputs |
+| CODE | `0x4000_4000` | 256 KiB | program words |
 
-## Installation on the FPGA host
+## Design
+
+- **`config.NPUConfig`** — the single source of truth: section bases/windows,
+  ctrl register offsets, the fixed nop wait. `default_config()` = the
+  silicon-verified K=16 bitstream.
+- **`isa`** — the Python assembler: `vle8/16/32`, `vse8/16/32`, `mma`,
+  `mma_last`, `nop` (pure word encodings, mirroring the Scala assembler).
+- **`chisel_npu_py._native`** — pybind11 C++ boundary: the only place with
+  XDMA fds and DMA transfers; validates every transfer against the config.
+
+## Tests
 
 ```bash
-# from the repo root, after sourcing .env.sh:
-make py-deploy
+make py-test-unit   # FakeNative (software engine model), no hardware
+make py-deploy      # rsync + rebuild the extension on the FPGA host
+make py-test-hw     # sessions on silicon
 ```
-
-`deploy.sh` rsyncs the tree to `~/chisel_npu_py`, installs `python3-dev`
-if missing, creates `.venv`, runs `pip install .` (compiling the pybind11
-module in the target venv), installs the udev rule
-(`SUBSYSTEM=="xdma", MODE="0666"`) so the device nodes are user-rw, and
-runs a self-test:
-
-```bash
-~/chisel_npu_py/.venv/bin/python -m chisel_npu_py selftest
-```
-
-Device nodes must be present (`/dev/xdma0_*` from `xdma.ko`) — run
-`make test-hw`'s bring-up or load the driver first.
-
-## Testing
-
-```bash
-make py-test-unit    # mock/unit tests, no hardware (dev host)
-make py-test-hw      # runs the hw suite natively on the FPGA host via SSH
-```
-
-| Test file | Kind | What it covers |
-|:----------|:-----|:---------------|
-| `test_consts.py` | unit | operand set, K-derived sizes, no-addresses-in-consts |
-| `test_ctrl_mock.py` | unit | done/busy bit parsing, `wait_done` (FakeNative) |
-| `test_npu_mock.py` | unit | mmalu orchestration, size rejection, timeouts |
-| `test_ctrl_lite.py` | hw | control word access, kick→done, done latch |
-| `test_loopback.py` | hw | staged round-trips (DDR3 data integrity) |
-| `test_mmalu_compute.py` | hw | 16 MMALU compute + bit-exact formula tests |
-
-Hardware tests are skipped automatically when no `/dev/xdma0_*` nodes
-exist. `tests/fake_native.py` provides a scriptable stand-in for the
-native module (addresses internal to it, like the real C++ side) so all
-Python-side logic is unit-testable off-board.
-
-## Distribution
-
-- `pyproject.toml` — setuptools + PEP 517 (`pybind11>=2.12` build dep),
-  numpy runtime dependency; sdist via `make py-build`.
-- The extension is **built on the FPGA host** inside the target venv
-  (the interpreter ABI must match — don't cross-build wheels).
-- `consts.py` deliberately contains no addresses — the staging table is
-  owned exclusively by `native_src/native.cpp`.
-
-## License
-
-GPL-2.0 (matches the repo; the xdma kernel driver is GPL).

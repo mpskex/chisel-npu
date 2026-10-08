@@ -29,11 +29,13 @@ import chisel3.util._
 // ---------------------------------------------------------------------------
 // Opcode families (7-bit primary decode field)
 // ---------------------------------------------------------------------------
+// NOTE: ChiselEnum values must be declared in strictly increasing order.
 object OpFamily extends ChiselEnum {
   val NOP          = Value(0x00.U(7.W))
-  val LD           = Value(0x01.U(7.W))
-  val ST           = Value(0x02.U(7.W))
   val MMA          = Value(0x03.U(7.W))
+  // Vector load family uses the RISC-V V-extension opcode 0x07.  The old
+  // 0x01 / 0x02 assignments are reserved and decode as illegal.
+  val LD           = Value(0x07.U(7.W))
   val VALU_ARITH   = Value(0x10.U(7.W))
   val VALU_LOGIC   = Value(0x11.U(7.W))
   val VALU_REDUCE  = Value(0x12.U(7.W))
@@ -43,6 +45,8 @@ object OpFamily extends ChiselEnum {
   val VALU_FP      = Value(0x16.U(7.W))
   val VALU_FP_FMA  = Value(0x17.U(7.W))
   val VALU_MOV     = Value(0x18.U(7.W))
+  // Vector store family (RVV opcode 0x27) — declared last (ascending order).
+  val ST           = Value(0x27.U(7.W))
 }
 
 // ---------------------------------------------------------------------------
@@ -160,20 +164,24 @@ object Funct3Mov {
 // MMA (opcode=0x03): systolic array matrix multiply-accumulate
 object Funct3Mma {
   val MMA       = 0.U(3.W)   // normal accumulate (keep from funct7[4])
-  val MMA_LAST  = 1.U(3.W)   // assert clct signal; finalize result
+  val MMA_LAST  = 1.U(3.W)   // assert clct signal; finalize result.
+                             // keep also honours funct7[4]: keep=1
+                             // accumulate-then-drain, keep=0 reset-then-drain.
   val MMA_RESET = 2.U(3.W)   // clear accumulator
   // 3..7 reserved
 }
 
-// LD / ST (opcodes 0x01/0x02): memory access; funct3 encodes transfer width
+// LD / ST (opcodes 0x07 / 0x27, RISC-V V-aligned): vector unit-stride
+// whole-register transfers between the L3 DATA section and the VX/VE/VR
+// register file.  funct3 encodes the element width / register class
+// (SEW ∈ {8,16,32} → VX/VE/VR).  I-format: rd = destination (load) or
+// source (store), rs1 = DATA section selector (0=A, 1=B, 2=ACCUM, 3=OUT),
+// imm[11:0] = unsigned byte offset within the section.
 object Funct3Mem {
-  val BYTE  = 0.U(3.W)  // N-bit lane (byte)
-  val HALF  = 1.U(3.W)  // 2N-bit
-  val WORD  = 2.U(3.W)  // 4N-bit
-  val VX_VEC = 3.U(3.W) // full K-lane VX vector
-  val VE_VEC = 4.U(3.W) // full K-lane VE vector
-  val VR_VEC = 5.U(3.W) // full K-lane VR vector
-  // 6..7 reserved
+  val VX_VEC = 0.U(3.W)  // vle8.v  / vse8.v   K × N    bytes (32 B at K=32)
+  val VE_VEC = 1.U(3.W)  // vle16.v / vse16.v  K × 2N   bytes (64 B)
+  val VR_VEC = 2.U(3.W)  // vle32.v / vse32.v  K × 4N   bytes (128 B)
+  // 3..7 reserved
 }
 
 // ---------------------------------------------------------------------------

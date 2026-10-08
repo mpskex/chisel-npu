@@ -12,13 +12,14 @@ without data copying.
 
 ## Notation
 
-| Symbol | Meaning | Default (test) | Default (top) |
+| Symbol | Meaning | Default (test) | FPGA top |
 |:---:|:---|:---:|:---:|
 | `N` (N(bits)) | Base lane width in bits | 8 | 8 |
-| `L` | Number of VX registers (must be divisible by 4) | 32 | 32 |
-| `K` | SIMD lane count per register | 8 | 64 |
+| `L` | Number of VX registers (must be divisible by 4) | 32 | 16 |
+| `K` | SIMD lane count per register | 8 | 16 |
 
-Physical storage = `L × K × (N/8)` bytes = **256 B** at test defaults / **2 KiB** at top.
+Physical storage = `L × K × (N/8)` bytes = **256 B** at test defaults / **256 B**
+at the FPGA top (`L = K = 16`).
 
 ---
 
