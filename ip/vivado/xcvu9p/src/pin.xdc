@@ -696,3 +696,13 @@ set_property PACKAGE_PIN AR25 [get_ports {c3_ddr4_dqs_t[5]}]
 set_property PACKAGE_PIN AR17 [get_ports {c3_ddr4_dqs_t[6]}]
 set_property PACKAGE_PIN BC19 [get_ports {c3_ddr4_dqs_t[7]}]
 set_property PACKAGE_PIN AM26 [get_ports {c3_ddr4_dqs_t[8]}]
+
+# ── Fabric reset synchronizer async-reset CDC ───────────────────────────────
+# `fab_rstn_sync` (hw_platform.v) is an async-assert / sync-deassert reset
+# synchronizer carrying the XDMA user reset (axi_aclk domain) into the 200 MHz
+# fabric domain (clk_fabric).  Its asynchronous reset input is a clock-domain
+# crossing; the 2-FF synchronizer resolves the deassertion, so the
+# recovery/removal checks across this crossing are not meaningful.  The source
+# is also re-registered locally (axi_aresetn_loc, ASYNC_REG) to keep the
+# physical path short.
+set_false_path -to [get_pins -hier -filter {NAME =~ *fab_rstn_sync_reg*/CLR}]

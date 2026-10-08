@@ -190,9 +190,13 @@ def wait_ssh(host: str, identity: str | None = None, timeout: int = 120) -> bool
 
 def check_pcie(host: str, identity: str | None = None) -> bool:
     try:
+        # `lspci -d VID:DID` prints the matching device line (or nothing).  Do
+        # not substring-match on "VID:DID": the -d output renders it as
+        # "Device <did>" without the vendor prefix, so the old check always
+        # reported "not trained" even when the device was enumerated.
         out = _ssh_run(host, f"lspci -d {_XDMA_VID} 2>/dev/null", identity,
                        timeout=10, check=False)
-        return _XDMA_VID in out
+        return bool(out.strip())
     except Exception:
         return False
 

@@ -28,6 +28,8 @@ import chisel3._
         val ctrl        = Input(new NCoreMMALUCtrlBundle())
         val out         = Output(Vec(n, SInt(accum_nbits.W)))
         val clct        = Output(Bool())
+        val dbg_cnt     = Output(UInt(log2Ceil(n).W))   // collector phase
+        val dbg_dat_clct = Output(Bool())               // collector window
     })
 
     // Create n x n pe blocks
@@ -52,6 +54,10 @@ import chisel3._
     val pipe_a       = RegInit(VecInit(Seq.fill(n * n)(0.S(nbits.W))))
     val pipe_b       = RegInit(VecInit(Seq.fill(n * n)(0.S(nbits.W))))
     val pipe_ctrl    = RegInit(VecInit(Seq.fill(n * n)(0.U.asTypeOf(new NCoreMMALUCtrlBundle()))))
+    // The capture is sampled CAPTURE_DELAY ticks after the clct (the
+    // systolic data settles ~δ later); the accumulator path must reach the
+    // collector at the SAME delayed tick, so the C operand is added to the
+    // sampled value.  CAPTURE_DELAY matches the engine's constant.
     val pipe_accum   = RegInit(VecInit(Seq.fill(n)(0.S(accum_nbits.W))))
     val pipe_dat_clct = RegNext(false.B)
     val pipe_use_accum = RegNext(false.B)
@@ -86,4 +92,6 @@ import chisel3._
     pipe_dat_clct  := ctrl_array.io.cbus_dat_clct
     pipe_use_accum := ctrl_array.io.cbus_use_accum
     pipe_clct      := ctrl_array.io.clct
+    io.dbg_cnt     := dclct.io.dbg_cnt
+    io.dbg_dat_clct := pipe_dat_clct
  }

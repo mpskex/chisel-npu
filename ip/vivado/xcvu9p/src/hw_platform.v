@@ -118,9 +118,18 @@ module hw_platform
     .locked   (mmcm_locked)
   );
 
-  // active-low async-assert / sync-deassert reset for the fabric domain
-  wire arst_n = axi_aresetn & mmcm_locked;
-  reg  [1:0] fab_rstn_sync;
+  // active-low async-assert / sync-deassert reset for the fabric domain.
+  // The XDMA user reset (axi_aresetn) is extremely high-fanout (fo ~= 1600) and
+  // routes far to this synchronizer, so the cross-domain (axi_aclk ->
+  // clk_fabric) recovery path to fab_rstn_sync/CLR violated timing (WNS -0.87).
+  // Register a local copy of the reset in the axi_aclk domain, tagged ASYNC_REG
+  // so the placer keeps it next to the fabric synchronizer: the cross-domain
+  // path is then short and recovery is met, while the same-domain
+  // user_reset -> axi_aresetn_loc update has a full axi_aclk period.
+  (* ASYNC_REG = "TRUE" *) reg axi_aresetn_loc;
+  always @(posedge axi_aclk) axi_aresetn_loc <= axi_aresetn;
+  wire arst_n = axi_aresetn_loc & mmcm_locked;
+  (* ASYNC_REG = "TRUE" *) reg [1:0] fab_rstn_sync;
   always @(posedge clk_fabric or negedge arst_n)
     if (!arst_n) fab_rstn_sync <= 2'b00;
     else         fab_rstn_sync <= {fab_rstn_sync[0], 1'b1};

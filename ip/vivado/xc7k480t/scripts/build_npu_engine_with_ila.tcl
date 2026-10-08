@@ -1,30 +1,40 @@
 ################################################################################
-# build_npu_engine.tcl — Program-engine bitstream build
+# build_npu_engine_with_ila.tcl — Program-engine bitstream + ILA debugger core
 #
-# Swaps the legacy npu_subsys cell (ctrl_lite + dma_master + MMALU) for the
-# Chisel NpuProgramEngineFrontend (top.sv) wrapped by npu_engine_subsys.v +
-# npu_engine_ctrl_lite.v.  Everything else (axi_xbar 2S:2M, 4 GB map, MIG C0/C1)
-# is unchanged.
+# Identical to build_npu_engine.tcl except an ILA core (u_npu_ila) is inserted
+# post-synth, wired to every (* mark_debug = "true" *) net in the design.
+# The engine's NpuDmaEngine is instrumented in top.sv:
+#   - state       (4 bits) DMA FSM state (IDLE=0 AR=1 READ=2 RFW=3 ACCW=4
+#                  INSTRW=5 WAW=6 WDATA=7 WRESP=8 DONE=9)
+#   - dbg_aw_hand / dbg_w_hand / dbg_b_hand — AW/W/B handshake pulse shadows
+#   - dbg_awvalid/awready, dbg_wvalid/wready, dbg_bvalid/bready — raw signals
+#   - dbg_awaddr   (32 bits) write address (expect 0x40000880 OUT for a vse)
+#   - dbg_reqdir   (2 bits) request direction (1 = R2L store)
+#   - dbg_beatcnt  (4 bits) write beat index
 #
-# Prerequisites:
-#   - 'make build' has generated top.sv from the program-engine Chisel sources
-#   - the bootstrapped Vivado project exists (bootstrap_project.tcl)
+# Outputs:
+#   ip/vivado/xc7k480t/top_npu_engine_with_ila.bit
+#   ip/vivado/xc7k480t/top_npu_engine_with_ila.ltx
 #
-# Outputs: ip/vivado/xc7k480t/top_npu_engine.bit
-#
-# Companion (ILA debugger core): build_npu_engine_with_ila.tcl
+# Capture flow (a store-wedge at pc=4, DMA stuck in WAW/WDATA/WRESP):
+#   1. Flash this bitstream, bring up PCIe/XDMA.
+#   2. Vivado HW Manager: open target, load the .ltx, arm ILA with trigger
+#      on state == 4'd6 (WAW) or 4'd7 (WDATA) or 4'd8 (WRESP), then run the
+#      chisel_npu_py program; upload + dump the waveform.
 ################################################################################
 
 set SCRIPT_DIR [file normalize [file dirname [info script]]]
 set MIGRATE    [file normalize $SCRIPT_DIR/..]
 set RTL_SRC    [file normalize [file join $MIGRATE src]]
 set REPO_ROOT  [file normalize $SCRIPT_DIR/../../../..]
-set BIT_DST    [file join $MIGRATE top_npu_engine.bit]
+set BIT_DST    [file join $MIGRATE top_npu_engine_with_ila.bit]
+set LTX_DST    [file join $MIGRATE top_npu_engine_with_ila.ltx]
 
 source [file join $SCRIPT_DIR migrate_lib.tcl]
 source [file join $SCRIPT_DIR _apply_npu_topology.tcl]
+source [file join $SCRIPT_DIR _apply_npu_ila.tcl]
 
-# The engine OOC synth (MMALU K=32 + RF + DMA) spawns many worker processes;
+# The engine OOC synth (MMALU K=16 + RF + DMA) spawns many worker processes;
 # cap threads and serialize OOC runs to avoid OOM on 19 GB hosts.
 set_param general.maxThreads 2
 if {![info exists ::env(VIVADO_JOBS)] || $::env(VIVADO_JOBS) > 2} {
@@ -32,9 +42,6 @@ if {![info exists ::env(VIVADO_JOBS)] || $::env(VIVADO_JOBS) > 2} {
 }
 
 open_ref_project
-# NOTE: assert_synth_done is intentionally NOT called here — the engine BD
-# surgery below must happen before any synthesis, and this script always
-# drives synthesis through launch_runs (no in-session path).
 
 # ── Add engine RTL sources (replaces the legacy trio) ────────────────────────
 foreach name {npu_engine_ctrl_lite.v npu_engine_subsys.v} {
@@ -46,7 +53,7 @@ foreach name {npu_engine_ctrl_lite.v npu_engine_subsys.v} {
     }
 }
 
-# top.sv (engine build) is required
+# top.sv (engine build) is required — this is the mark_debug-instrumented copy
 set top_sv [file join $REPO_ROOT top.sv]
 if {![file exists $top_sv]} {
     puts "ERROR: top.sv not found. Run 'make build' first."
@@ -109,10 +116,7 @@ if {[get_bd_cells -quiet npu_engine_subsys] ne ""} {
 }
 
 # ── Address map (idempotent): the engine master MUST get the same 4 GB
-#    segments the legacy npu_subsys/m_axi had — assign_bd_address to the
-#    deleted cell leaves the new master unmapped (AXI goes nowhere).
-#    The C0/C1 segments are already included (xdma_0/M_AXI uses them), so
-#    only the assignment is needed here.
+#    segments the legacy npu_subsys/m_axi had ─────────────────────────────────
 set c0_seg [get_bd_addr_segs mig_7series_0/c0_memmap/c0_memaddr]
 set c1_seg [get_bd_addr_segs mig_7series_0/c1_memmap/c1_memaddr]
 if {$c0_seg ne ""} {
@@ -131,9 +135,6 @@ catch { generate_target all [get_files {*/top.bd}] } gt_err
 if {$gt_err ne ""} { puts "WARNING: generate_target: $gt_err" }
 make_wrapper -files [get_files {*/top.bd}] -top -force
 
-# Explicitly register the regenerated wrapper and pin it as top — with
-# source_mgmt_mode All the auto-selected top can otherwise drift to the
-# engine itself (544 pins → IO overutilization at placement).
 set proj_dir [get_property DIRECTORY [current_project]]
 set proj_name [get_property NAME [current_project]]
 set wrapper_v [file join $proj_dir ${proj_name}.gen sources_1 bd top hdl top_wrapper.v]
@@ -149,12 +150,6 @@ update_compile_order -fileset sources_1
 
 # ── Synthesis + implementation ───────────────────────────────────────────────
 puts "INFO: launching synth_1 + OOC sub-runs..."
-# Disable auto-incremental synthesis so a regenerated top.sv is not silently
-# replaced by a reused previous netlist.
-if {[llength [get_runs -quiet synth_1]] > 0} {
-    catch { set_property AUTO_INCREMENTAL_CHECKPOINT 0 [get_runs synth_1] }
-    catch { set_property INCREMENTAL_CHECKPOINT "" [get_runs synth_1] }
-}
 reset_run [get_runs -filter {IS_SYNTHESIS == 1}]
 launch_runs [get_runs -filter {IS_SYNTHESIS == 1}] -jobs [vivado_jobs]
 set all_synth [get_runs -filter {IS_SYNTHESIS == 1}]
@@ -179,6 +174,10 @@ foreach ip [get_ips -quiet] {
 open_run synth_1 -name synth_1
 puts "INFO: synth_1 opened (merged OOC DCPs)."
 
+# ── Insert ILA debugger core ─────────────────────────────────────────────────
+puts "INFO: inserting ILA debugger core (u_npu_ila)..."
+insert_npu_ila
+
 npu_restore_mgmt_mode
 
 set synth_dcp [file join [get_property DIRECTORY [get_runs synth_1]] top_wrapper.dcp]
@@ -186,8 +185,22 @@ write_checkpoint -force $synth_dcp
 puts "INFO: merged synthesis checkpoint: [file size $synth_dcp] bytes"
 
 set ::migrate_synth_was_launch_runs 1
-run_impl_and_write_bit "npu_engine" $BIT_DST
+run_impl_and_write_bit "npu_engine_with_ila" $BIT_DST
+
+# ── Emit the .ltx probes file next to the bitstream ─────────────────────────
+catch { open_run impl_1 -name impl_1 }
+set runs_dir [get_property DIRECTORY [get_runs impl_1]]
+set ltx_src  [file join $runs_dir top_wrapper.ltx]
+if {[catch {write_debug_probes -force $ltx_src} _err]} {
+    puts "WARN: write_debug_probes: $_err"
+} else {
+    if {[file exists $ltx_src]} {
+        file copy -force $ltx_src $LTX_DST
+        puts "INFO: ILA probes file: $LTX_DST ([file size $LTX_DST] bytes)"
+    }
+}
 
 puts ""
-puts "*** build_npu_engine COMPLETE ***"
-puts "INFO: Bitstream  : $BIT_DST"
+puts "*** build_npu_engine_with_ila COMPLETE ***"
+puts "INFO: Bitstream : $BIT_DST"
+puts "INFO: .ltx file : $LTX_DST  (load into Vivado HW Manager alongside .bit)"

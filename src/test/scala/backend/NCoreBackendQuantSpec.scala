@@ -123,8 +123,8 @@ class NCoreBackendQuantSpec extends AnyFlatSpec {
     val quantProgram = Seq(
       vbcast(rd=0, rs1=0, width=VR),            // splat scale
       vbcast(rd=1, rs1=1, width=VR),            // splat zp
-      mma(rd=2, rs1=0, rs2=1, keep=true),       // MMA
-      mmaLast(rd=2, rs1=0, rs2=1),              // finalize
+      mma(rd=2, vs1=0, vs2=1, vs3=0),       // MMA
+      mmaLast(rd=2, vs1=0, vs2=1, vs3=0),   // finalize
       vcvt_f32_s32(rd=2, rs1=2),                // acc → f32
       vfma(rd=3, rs1=2, rs2=0, rs3=1),          // scale*acc+zp
       vcvt_s8_f32(rd=31, rs1=3, sat=true),      // → int8

@@ -24,14 +24,17 @@ package engine
 import chisel3._
 import chisel3.util._
 
-class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8) extends Module {
+class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends Module {
 
   val SETS = 8                  // 8 sets × 2 ways
   val WAYS = 2
 
   val io = IO(new Bundle {
     // ---- ctrl_lite (word-addressable) ----
-    val ctrl_addr  = Input(UInt(5.W))
+    // ctrl_addr is 7 bits so the 0x20..0x2C debug registers are reachable.
+    // (A 5-bit bus lets firtool prove `ctrl_addr === 0x20.U` false and DCE
+    // the debug map — seen in top.sv when the trajectory map vanished.)
+    val ctrl_addr  = Input(UInt(7.W))
     val ctrl_we    = Input(Bool())
     val ctrl_wdata = Input(UInt(32.W))
     val ctrl_rdata = Output(UInt(32.W))
@@ -66,12 +69,35 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8) extends Module {
     val dbg_word = Output(UInt(32.W))
     val dbg_run  = Output(UInt(3.W))
     val dbg_startEdge = Output(Bool())
+    val dbg_clct = Output(UInt(16.W))
+    // Core status passthroughs (wedge debugging: which queue blocks drain)
+    val dbg_mma_acc  = Output(UInt(16.W))
+    val dbg_dma_done = Output(UInt(16.W))
+    val dbg_wcount   = Output(UInt(5.W))
+    val dbg_win      = Output(UInt(2.W))
+    val dbg_bnd      = Output(UInt(7.W))
+    val dbg_drain    = Output(Bool())
+    val dbg_dmaq     = Output(UInt(3.W))
+    val dbg_capq     = Output(UInt(5.W))
+    val dbg_mma_out0 = Output(UInt(32.W))
+    val dbg_mma_out1 = Output(UInt(32.W))
+    val dbg_cnt      = Output(UInt(4.W))
+    val dbg_in_a0    = Output(UInt(8.W))
+    val dbg_vx_data  = Output(Vec(K, UInt(N.W)))
+    val dbg_feed_rs1 = Output(UInt(5.W))
+    val dbg_feed_last = Output(Bool())
+    val dbg_slot_rs1  = Output(UInt(5.W))
+    val dbg_mma_pend = Output(Bool())
+    val dbg_s2_valid = Output(Bool())
+    val dbg_s2_done  = Output(Bool())
+    val dbg_s2_unit  = Output(UInt(2.W))
+    val dbg_s2_last  = Output(Bool())
   })
 
   // ==========================================================================
   // Execution core
   // ==========================================================================
-  val core = Module(new NpuProgramEngine(K, N))
+  val core = Module(new NpuProgramEngine(K, N, W))
 
   io.m_axi_awaddr  := core.io.m_axi_awaddr
   io.m_axi_awlen   := core.io.m_axi_awlen
@@ -97,7 +123,7 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8) extends Module {
   core.io.m_axi_rvalid := io.m_axi_rvalid
   io.m_axi_rready  := core.io.m_axi_rready
 
-  core.io.dbg_vx_addr := 0.U
+  core.io.dbg_vx_addr := 4.U
 
   // ==========================================================================
   // ctrl_lite registers
@@ -114,6 +140,9 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8) extends Module {
 
   val startPrev = RegNext(startReg, init = false.B)
   val startEdge = startReg && !startPrev
+
+  // clear the core's streaming state at every session start
+  core.io.session_reset := startEdge
 
   when (io.ctrl_we && io.ctrl_addr === 0x0.U)  { startReg := io.ctrl_wdata(0) }
   when (io.ctrl_we && io.ctrl_addr === 0x4.U)  { framesReg := io.ctrl_wdata(15, 0) }
@@ -133,13 +162,13 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8) extends Module {
   // Instruction cache: 8 sets × 2 ways × 4-word lines
   // ==========================================================================
   val lineValid = RegInit(VecInit(Seq.fill(SETS * WAYS)(false.B)))
-  val lineTag   = RegInit(VecInit(Seq.fill(SETS * WAYS)(0.U(6.W))))
+  val lineTag   = RegInit(VecInit(Seq.fill(SETS * WAYS)(0.U(11.W))))
   val lineData  = RegInit(VecInit(Seq.fill(SETS * WAYS)(0.U(128.W))))
   val mru       = RegInit(VecInit(Seq.fill(SETS)(false.B)))   // true = way1 most recent
 
-  val curL   = pc >> 2                       // line index
+  val curL   = pc >> 2                       // line index (up to 16383 lines)
   val curSet = curL(2, 0)
-  val curTag = curL(7, 3)
+  val curTag = curL(13, 3)                   // 11 bits: covers the full 16-bit pc
   val hit0   = lineValid(curSet ## 0.U(1.W)) && lineTag(curSet ## 0.U(1.W)) === curTag
   val hit1   = lineValid(curSet ## 1.U(1.W)) && lineTag(curSet ## 1.U(1.W)) === curTag
   val lineHit = hit0 || hit1
@@ -153,8 +182,8 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8) extends Module {
   // Prefetch target: the line after the current one (if any word of it is in range)
   val nextL     = curL + 1.U
   val prefetchValid = (nextL << 2.U) < progLenReg && !(
-    (lineValid(nextL(2, 0) ## 0.U(1.W)) && lineTag(nextL(2, 0) ## 0.U(1.W)) === nextL(7, 3)) ||
-    (lineValid(nextL(2, 0) ## 1.U(1.W)) && lineTag(nextL(2, 0) ## 1.U(1.W)) === nextL(7, 3)))
+    (lineValid(nextL(2, 0) ## 0.U(1.W)) && lineTag(nextL(2, 0) ## 0.U(1.W)) === nextL(13, 3)) ||
+    (lineValid(nextL(2, 0) ## 1.U(1.W)) && lineTag(nextL(2, 0) ## 1.U(1.W)) === nextL(13, 3)))
 
   // ==========================================================================
   // Run FSM
@@ -166,6 +195,7 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8) extends Module {
   val busy = runState =/= RunState.RUN_IDLE
 
   val runIllegalSeen = RegInit(false.B)
+  val mmaLastCounted = RegInit(false.B)   // one-shot frames_done count per word
 
   // ==========================================================================
   // Fill FSM (demand fills win; prefetches run during core execution)
@@ -174,7 +204,7 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8) extends Module {
     val IDLE, REQ, WAIT, DRAIN = Value
   }
   val fillState = RegInit(FillState.IDLE)
-  val fillLine  = RegInit(0.U(8.W))
+  val fillLine  = RegInit(0.U(14.W))
   val fillWay   = RegInit(0.U(1.W))
 
   val demandFill = runState === RunState.RUN_FETCH && !lineHit
@@ -214,7 +244,7 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8) extends Module {
       lineValid(i) := false.B
     } .elsewhen (commitFill && i.U === (fillLine(2, 0) ## fillWay)) {
       lineValid(i) := true.B
-      lineTag(i)   := fillLine(7, 3)
+      lineTag(i)   := fillLine(13, 3)
       lineData(i)  := core.io.fetch_fill_data
     }
   }
@@ -245,6 +275,7 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8) extends Module {
         framesDone    := 0.U
         statusIllegal := false.B
         runIllegalSeen := false.B
+        mmaLastCounted := false.B
         runState      := RunState.RUN_FETCH
       }
     }
@@ -272,14 +303,22 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8) extends Module {
           statusIllegal := true.B
           doneReg       := true.B
           runState      := RunState.RUN_DONE
-        } .otherwise {
-          when (isMmaLast) { framesDone := framesDone + 1.U }
+        }         .otherwise {
+          when (isMmaLast && !mmaLastCounted) {
+            framesDone := framesDone + 1.U
+            mmaLastCounted := true.B
+          }
           when (pc === progLenReg - 1.U) {
-            doneReg  := true.B
-            runState := RunState.RUN_DONE
+            // the streamed dispatch retires the last word asynchronously;
+            // the program is only "done" once the engine pipeline drains
+            // (window empty + DMA + captures + boundary countdown).
+            when (core.io.drain) {
+              doneReg  := true.B
+              runState := RunState.RUN_DONE
+            }
           } .otherwise {
-            pc        := pc + 1.U
-            runState  := RunState.RUN_FETCH
+            pc       := pc + 1.U
+            runState := RunState.RUN_FETCH
           }
         }
       }
@@ -297,6 +336,28 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8) extends Module {
   io.dbg_word := issuedWord
   io.dbg_run  := runState.asUInt
   io.dbg_startEdge := startEdge
+  io.dbg_clct := core.io.dbg_clct
+  io.dbg_mma_acc  := core.io.dbg_mma_acc
+  io.dbg_dma_done := core.io.dbg_dma_done
+  io.dbg_wcount   := core.io.dbg_wcount
+  io.dbg_win      := core.io.dbg_win
+  io.dbg_bnd      := core.io.dbg_bnd
+  io.dbg_drain    := core.io.drain
+  io.dbg_dmaq     := core.io.dbg_dmaq
+  io.dbg_capq     := core.io.dbg_capq
+  io.dbg_mma_out0 := core.io.dbg_mma_out0
+  io.dbg_mma_out1 := core.io.dbg_mma_out1
+  io.dbg_cnt      := core.io.dbg_cnt
+  io.dbg_in_a0    := core.io.dbg_in_a0
+  io.dbg_vx_data  := core.io.dbg_vx_data
+  io.dbg_feed_rs1 := core.io.dbg_feed_rs1
+  io.dbg_feed_last := core.io.dbg_feed_last
+  io.dbg_slot_rs1  := core.io.dbg_slot_rs1
+  io.dbg_mma_pend := core.io.dbg_mma_pend
+  io.dbg_s2_valid := core.io.dbg_s2_valid
+  io.dbg_s2_done  := core.io.dbg_s2_done
+  io.dbg_s2_unit  := core.io.dbg_s2_unit
+  io.dbg_s2_last  := core.io.dbg_s2_last
 
   io.ctrl_rdata := MuxLookup(io.ctrl_addr, 0.U(32.W))(Seq(
     // bit0 = start (W), bit1 = done (RO), bit2 = busy (RO) — matches ctrl.py
@@ -307,5 +368,35 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8) extends Module {
     0xC.U -> errInstr,
     0x10.U -> Cat(prefetchCnt, missCnt),
     0x14.U -> progLenReg,
+    // Debug: 0x18 = clct[15:0]; 0x1C = mma_acc[15:0];
+    // 0x20/0x24/0x28 = collector {keep, dat_clct, cnt} trajectory (last 16
+    // ticks, 6 bits each, oldest in the low bits of 0x20), frozen at the
+    // session's last capture; 0x2C carries entry[15] at [31:26].
+    // Decode: entry(i) = (reg >> (26 - 6 * (i % 5))) & 0x3F for i = 0..14,
+    // entry(15) = (0x2C >> 26) & 0x3F.  All branches are exactly 32 bits —
+    // a wider Cat would truncate the MSBs (traj(10) / keep) at the port.
+     0x18.U -> Cat(0.U(16.W), core.io.dbg_clct),
+     0x1C.U -> Cat(0.U(16.W), core.io.dbg_mma_acc),
+     // Drain/watchdog: 0x30 = drain@31 | boundaryCnt[30:24] | wcount[23:19] |
+     // fifoLow[18:17] | dmaQ[16:14] | capQ[13:9] | 0[8:0].  Read these while
+     // busy=1 to see which queue blocks `drain` on a wedge.
+     0x30.U -> Cat(core.io.drain, core.io.dbg_bnd, core.io.dbg_wcount,
+                   core.io.dbg_win, core.io.dbg_dmaq, core.io.dbg_capq,
+                   0.U(9.W)),
+     0x34.U -> core.io.dbg_dma_done,
+     0x38.U -> core.io.dbg_clct,
+    0x20.U -> Cat(core.io.dbg_traj(0), core.io.dbg_traj(1),
+                  core.io.dbg_traj(2), core.io.dbg_traj(3),
+                  core.io.dbg_traj(4),
+                  0.U(2.W)),
+    0x24.U -> Cat(core.io.dbg_traj(5), core.io.dbg_traj(6),
+                  core.io.dbg_traj(7), core.io.dbg_traj(8),
+                  core.io.dbg_traj(9),
+                  0.U(2.W)),
+    0x28.U -> Cat(core.io.dbg_traj(10), core.io.dbg_traj(11),
+                  core.io.dbg_traj(12), core.io.dbg_traj(13),
+                  core.io.dbg_traj(14),
+                  0.U(2.W)),
+     0x2C.U -> Cat(core.io.dbg_traj(15), 0.U(26.W)),
   ))
 }

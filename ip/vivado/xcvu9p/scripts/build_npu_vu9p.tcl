@@ -34,9 +34,13 @@ foreach f [list npu_engine_ctrl_lite.v npu_engine_subsys.v hw_platform.v] {
     }
 }
 set top_sv [file join $REPO_ROOT top.sv]
-if {[get_files -quiet -of_objects [get_filesets sources_1] $top_sv] eq ""} {
-    add_files -norecurse $top_sv
-}
+# Force a re-read of a regenerated top.sv: remove then re-add so Vivado does
+# not reuse a cached synthesized netlist (a stale W=8 netlist survived a
+# reset_run when top.sv was only conditionally added).
+set _existing_top [get_files -quiet -of_objects [get_filesets sources_1] $top_sv]
+if {$_existing_top ne ""} { remove_files $_existing_top }
+add_files -norecurse $top_sv
+puts "INFO: top.sv re-added ([file size $top_sv] bytes)"
 set_property top hw_platform [get_filesets sources_1]
 update_compile_order -fileset sources_1
 puts "TOP=[get_property top [get_filesets sources_1]]"
@@ -46,6 +50,13 @@ if {[info exists ::env(VIVADO_JOBS)]} { set jobs $::env(VIVADO_JOBS) }
 
 # ── Synthesis (all runs, incl. OOC IP) ──────────────────────────────────────
 set_param general.maxThreads 2
+# Disable auto-incremental synthesis: the stale reference checkpoint
+# (prj.srcs/utils_1/imports/synth_1/hw_platform.dcp) otherwise reuses ~100% of
+# a previous engine netlist, so a regenerated top.sv is silently ignored.
+if {[llength [get_runs -quiet synth_1]] > 0} {
+    catch { set_property AUTO_INCREMENTAL_CHECKPOINT 0 [get_runs synth_1] }
+    catch { set_property INCREMENTAL_CHECKPOINT "" [get_runs synth_1] }
+}
 reset_run synth_1
 launch_runs synth_1 -jobs 1
 wait_on_run synth_1
@@ -66,7 +77,7 @@ foreach ip [get_ips -quiet] {
 
 # ── Implementation + bitstream ──────────────────────────────────────────────
 set_param general.maxThreads 8
-set_property STEPS.PLACE_DESIGN.ARGS.DIRECTIVE AltSpreadLogic_high [get_runs impl_1]
+set_property STEPS.PLACE_DESIGN.ARGS.DIRECTIVE ExtraTimingOpt [get_runs impl_1]
 reset_run impl_1
 launch_runs impl_1 -to_step write_bitstream -jobs $jobs
 wait_on_run impl_1

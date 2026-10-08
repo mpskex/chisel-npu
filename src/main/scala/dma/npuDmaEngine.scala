@@ -52,6 +52,11 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
     val req_width = Input(UInt(2.W))    // 0 = VX, 1 = VE, 2 = VR (ACCUM/fetch: VR)
     val req_rf_addr = Input(UInt(5.W))  // VX/VE/VR register index
     val req_l3_addr = Input(UInt(32.W)) // absolute DDR address (16 B aligned)
+    // R2L store-data override: when set, the store beats come from the
+    // latched capture payload (K×4N, VR width) instead of the RF read —
+    // the streamed dispatch's "read right after the mma's final tick" path.
+    val req_store_data_valid = Input(Bool())
+    val req_store_data = Input(Vec(K, UInt((4 * N).W)))
     val busy      = Output(Bool())
     val done      = Output(Bool())      // one-cycle pulse on completion
 
@@ -118,11 +123,15 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
   val reqWidth = RegInit(0.U(2.W))
   val reqRfAddr = RegInit(0.U(5.W))
   val reqL3Addr = RegInit(0.U(32.W))
+  val reqStoreDataValid = RegInit(false.B)
+  val reqStoreData = RegInit(VecInit(Seq.fill(K)(0.U((4 * N).W))))
 
   val beatCnt  = RegInit(0.U(4.W))
   val buf      = RegInit(VecInit(Seq.fill(8)(0.U(128.W))))
   val timeoutCnt = RegInit(0.U(16.W))
   val awDone   = RegInit(false.B)
+  val wtoCnt   = RegInit(0.U(16.W))   // write-phase timeout: re-issue the write
+  val wtoRetry = RegInit(0.U(3.W))    // WRESP retries before forcing done
 
   def beatsOf(w: UInt): UInt =
     Mux(reqDir === 3.U, 1.U,  // fetch mode: single 16 B beat
@@ -194,7 +203,9 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
   }.otherwise {  // VR: 4 lanes per beat
     for (i <- 0 until 4) {
       for (b <- 0 until 4) {
-        wbytes(4 * i + b) := io.rf_r_vr_data((beatCnt << 2.U) + i.U)(8 * b + 7, 8 * b)
+        wbytes(4 * i + b) := Mux(reqStoreDataValid,
+          reqStoreData((beatCnt << 2.U) + i.U)(8 * b + 7, 8 * b),
+          io.rf_r_vr_data((beatCnt << 2.U) + i.U)(8 * b + 7, 8 * b))
       }
     }
   }
@@ -219,9 +230,13 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
         reqWidth  := Mux(io.req_dir === 2.U, 2.U, io.req_width)
         reqRfAddr := io.req_rf_addr
         reqL3Addr := io.req_l3_addr
+        reqStoreDataValid := io.req_store_data_valid
+        for (lane <- 0 until K) reqStoreData(lane) := io.req_store_data(lane)
         beatCnt   := 0.U
         timeoutCnt := 0.U
         awDone    := false.B
+        wtoCnt    := 0.U
+        wtoRetry  := 0.U
         when (io.req_dir === 1.U) { state := DmaState.WAW }       // R2L
         .otherwise                  { state := DmaState.AR }       // L2R / ACCUM / fetch
       }
@@ -295,8 +310,24 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
       val wadv         = io.m_axi_wready && beatCnt < beats
       when (io.m_axi_awready) {
         awDone := true.B
+        wtoCnt := 0.U
         when (beatCnt + Mux(wadv, 1.U, 0.U) === beats) { state := DmaState.WRESP }
         .otherwise                                     { state := DmaState.WDATA }
+      } .elsewhen (wtoCnt === (readTimeout - 1).U) {
+        // awready never came (or a WRESP retry re-issued into a fabric that
+        // is still draining the abandoned write).  Re-try a few times, then
+        // force-complete so the engine can never hang waiting for a write
+        // grant.
+        when (wtoRetry === 7.U) {
+          state := DmaState.DONE
+        } .otherwise {
+          wtoRetry := wtoRetry + 1.U
+          awDone   := false.B
+          beatCnt  := 0.U
+          wtoCnt   := 0.U
+        }
+      } .otherwise {
+        wtoCnt := wtoCnt + 1.U
       }
       when (wadv) { beatCnt := beatCnt + 1.U }
     }
@@ -308,13 +339,46 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
       io.m_axi_wlast  := beatCnt === beats - 1.U
       when (io.m_axi_wready && beatCnt < beats) {
         beatCnt := beatCnt + 1.U
+        wtoCnt  := 0.U
         when (beatCnt === beats - 1.U) { state := DmaState.WRESP }
+      } .elsewhen (wtoCnt === (readTimeout - 1).U) {
+        // No beat accepted for readTimeout cycles: the fabric stalled the
+        // write channel mid-burst — re-issue the whole write from WAW
+        // (the store data is latched and idempotent, so a partial duplicate
+        // write is harmless).  Mirrors the read-path timeout retry.
+        awDone   := false.B
+        beatCnt  := 0.U
+        wtoCnt   := 0.U
+        state    := DmaState.WAW
+      } .otherwise {
+        wtoCnt := wtoCnt + 1.U
       }
     }
 
     is (DmaState.WRESP) {
       io.m_axi_bready := true.B
-      when (io.m_axi_bvalid) { state := DmaState.DONE }
+      when (io.m_axi_bvalid) {
+        state    := DmaState.DONE
+        wtoCnt   := 0.U
+        wtoRetry := 0.U
+      } .elsewhen (wtoCnt === (readTimeout - 1).U) {
+        // The write response never came back (seen on silicon: beats are
+        // accepted but bvalid is dropped on the MIG/clkconv path).  Re-issue
+        // the write a few times (the store is idempotent so a duplicate
+        // write is safe); if it still never responds, force-complete the
+        // write so the engine can never hang permanently on a lost BRESP.
+        when (wtoRetry === 7.U) {
+          state := DmaState.DONE
+        } .otherwise {
+          wtoRetry := wtoRetry + 1.U
+          awDone   := false.B
+          beatCnt  := 0.U
+          wtoCnt   := 0.U
+          state    := DmaState.WAW
+        }
+      } .otherwise {
+        wtoCnt := wtoCnt + 1.U
+      }
     }
 
     is (DmaState.DONE) {

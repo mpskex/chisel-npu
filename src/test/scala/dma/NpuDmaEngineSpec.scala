@@ -27,6 +27,8 @@ class DmaSpecHarness(val K: Int = DmaSpecHarness.K,
     val req_width   = Input(UInt(2.W))
     val req_rf_addr = Input(UInt(5.W))
     val req_l3_addr = Input(UInt(32.W))
+    val req_store_data_valid = Input(Bool())
+    val req_store_data = Input(Vec(K, UInt(32.W)))
     val busy        = Output(Bool())
     val done        = Output(Bool())
 
@@ -70,6 +72,8 @@ class DmaSpecHarness(val K: Int = DmaSpecHarness.K,
   dma.io.req_width   := io.req_width
   dma.io.req_rf_addr := io.req_rf_addr
   dma.io.req_l3_addr := io.req_l3_addr
+  dma.io.req_store_data_valid := io.req_store_data_valid
+  for (l <- 0 until K) dma.io.req_store_data(l) := io.req_store_data(l)
   io.busy            := dma.io.busy
   io.done            := dma.io.done
   io.acc_valid       := dma.io.acc_valid
@@ -181,6 +185,8 @@ class NpuDmaEngineSpec extends AnyFlatSpec {
     dut.io.req_width.poke(width.U)
     dut.io.req_rf_addr.poke(rfAddr.U)
     dut.io.req_l3_addr.poke(l3Addr.U)
+    dut.io.req_store_data_valid.poke(false.B)
+    for (l <- 0 until dut.io.req_store_data.length) dut.io.req_store_data(l).poke(0.U)
     dut.io.req_valid.poke(true.B)
     dut.clock.step()
     dut.io.req_valid.poke(false.B)

@@ -9,9 +9,16 @@
 //   0x0C  ERR_INFO      W of the faulting instruction (RO)
 //   0x10  FETCH_STATS   [31:16] prefetches | [15:0] misses
 //   0x14  PROG_LEN      W  instruction count
+//   0x18  DBG_CLCT      [15:0] clct pulses captured (RO)
+//   0x1C  DBG_MMA_ACC   [15:0] mma instructions accepted (RO)
+//   0x20..0x2C  collector {keep, dat_clct, cnt} trajectory snapshot (RO):
+//           6-bit entries, 5 per register at [31:26]..[7:2]; 0x2C carries
+//           entry[15] at [31:26]
 //
-// User-side: ctrl_addr[4:0] / ctrl_we / ctrl_wdata / ctrl_rdata drive the
-// Chisel NpuProgramEngineFrontend directly.
+// User-side: ctrl_addr[6:0] / ctrl_we / ctrl_wdata / ctrl_rdata drive the
+// Chisel NpuProgramEngineFrontend directly.  The address bus is 7 bits so
+// the 0x20..0x2C debug registers are reachable (a 5-bit bus would let
+// firtool prove `ctrl_addr === 0x20` false and DCE the debug map).
 `timescale 1ns/1ps
 
 module npu_engine_ctrl_lite #(
@@ -43,7 +50,7 @@ module npu_engine_ctrl_lite #(
     input  wire                  s_axil_rready,
 
     // User-side: Chisel engine ctrl interface
-    output       [4:0]            ctrl_addr,
+    output       [6:0]            ctrl_addr,
     output                        ctrl_we,
     output       [31:0]           ctrl_wdata,
     input  wire [31:0]            ctrl_rdata
@@ -58,17 +65,18 @@ module npu_engine_ctrl_lite #(
     reg [ADDR_WIDTH-1:0] ar_addr_r;
 
     // User-side registers (single driver each; see the assigns below).
-    reg [4:0]  w_ctrl_addr;
+    reg [6:0]  w_ctrl_addr;
     reg        w_ctrl_we;
     reg [31:0] w_ctrl_wdata;
-    reg [4:0]  r_ctrl_addr;
+    reg [6:0]  r_ctrl_addr;
 
     // ctrl_addr carries BYTE offsets (matches the Chisel frontend's decode:
     // 0x00 CTRL, 0x04 FRAMES, 0x08 STATUS, 0x0C ERR_INFO, 0x10 FETCH_STATS,
-    // 0x14 PROG_LEN).  During the AR-acceptance cycle the address is taken
-    // combinationally from araddr so the rdata latch captures the CURRENT
-    // transaction (a one-cycle lag would return the previous register).
-    wire [4:0] ar_addr_comb = {s_axil_araddr[4:2], 2'b00};
+    // 0x14 PROG_LEN, 0x18/0x1C debug counters, 0x20..0x2C trajectory).
+    // During the AR-acceptance cycle the address is taken combinationally
+    // from araddr so the rdata latch captures the CURRENT transaction (a
+    // one-cycle lag would return the previous register).
+    wire [6:0] ar_addr_comb = {s_axil_araddr[6:2], 2'b00};
     wire       ar_sel       = (rd_state == RD_IDLE) &&
                               s_axil_arvalid && s_axil_arready;
 
@@ -88,7 +96,7 @@ module npu_engine_ctrl_lite #(
             s_axil_wready  <= 1'b0;
             s_axil_bvalid  <= 1'b0;
             s_axil_bresp   <= 2'b00;
-            w_ctrl_addr    <= 5'd0;
+            w_ctrl_addr    <= 7'd0;
             w_ctrl_we      <= 1'b0;
             w_ctrl_wdata   <= 32'd0;
         end else begin
@@ -106,7 +114,7 @@ module npu_engine_ctrl_lite #(
                             s_axil_wready <= 1'b0;
                             s_axil_bvalid <= 1'b1;
                             s_axil_bresp  <= 2'b00;
-                            w_ctrl_addr   <= {s_axil_awaddr[4:2], 2'b00};
+                            w_ctrl_addr   <= {s_axil_awaddr[6:2], 2'b00};
                             w_ctrl_we     <= 1'b1;
                             w_ctrl_wdata  <= s_axil_wdata;
                         end else begin
@@ -121,7 +129,7 @@ module npu_engine_ctrl_lite #(
                         s_axil_wready <= 1'b0;
                         s_axil_bvalid <= 1'b1;
                         s_axil_bresp  <= 2'b00;
-                        w_ctrl_addr   <= {aw_addr_r[4:2], 2'b00};
+                        w_ctrl_addr   <= {aw_addr_r[6:2], 2'b00};
                         w_ctrl_we     <= 1'b1;
                         w_ctrl_wdata  <= s_axil_wdata;
                     end
@@ -161,7 +169,7 @@ module npu_engine_ctrl_lite #(
                         rd_state       <= RD_DATA;
                         s_axil_rvalid  <= 1'b1;
                         s_axil_rresp   <= 2'b00;
-                        r_ctrl_addr    <= {s_axil_araddr[4:2], 2'b00};
+                        r_ctrl_addr    <= {s_axil_araddr[6:2], 2'b00};
                         // Latch the engine read in the SAME cycle: ctrl_addr
                         // is driven combinationally from araddr here (ar_sel),
                         // so the captured value is the CURRENT register.

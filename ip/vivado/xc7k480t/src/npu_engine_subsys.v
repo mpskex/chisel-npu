@@ -1,9 +1,11 @@
 // npu_engine_subsys.v — NPU program-engine subsystem (replaces npu_subsys.v).
 //
 // Instantiates the Chisel NpuProgramEngineFrontend (top.sv) plus an AXI4-Lite
-// adapter exposing the 6-register ctrl map:
+// adapter exposing the ctrl map (0x00..0x14 base regs, 0x18/0x1C debug
+// counters, 0x20..0x2C collector trajectory):
 //   0x00 CTRL (start/done/busy) · 0x04 FRAMES · 0x08 STATUS ·
-//   0x0C ERR_INFO · 0x10 FETCH_STATS · 0x14 PROG_LEN
+//   0x0C ERR_INFO · 0x10 FETCH_STATS · 0x14 PROG_LEN · 0x18/0x1C DBG ·
+//   0x20..0x2C trajectory
 //
 // Same external interface as the legacy npu_subsys.v (s_axil + m_axi + MIG
 // calibration), so the Vivado BD cell can be swapped in place.
@@ -84,7 +86,7 @@ module npu_engine_subsys #(
     input  wire                        c1_init_calib_complete
 );
 
-    wire [4:0]  ctrl_addr;
+    wire [6:0]  ctrl_addr;
     wire        ctrl_we;
     wire [31:0] ctrl_wdata;
     wire [31:0] ctrl_rdata;

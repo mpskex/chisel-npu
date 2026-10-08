@@ -16,10 +16,21 @@ class DataCollector(val n: Int = 8, val nbits: Int = 8) extends Module {
         val accum_in        = Input(Vec(n, SInt(nbits.W)))
         val reg_in          = Input(Vec(n * n, SInt(nbits.W)))
         val reg_out         = Output(Vec(n, SInt(nbits.W)))
+        val dbg_cnt         = Output(UInt(log2Ceil(n).W))   // collector phase
     })
 
     val buffer = (0 until n - 1 map(x => Module(new Pipe(SInt(nbits.W), (n - x - 1)))))
-    val (cnt, counterWrap) = Counter(0 until n, true.B, !io.dat_clct)
+    // cnt counts during the collection window (dat_clct=1) and resets to 0 in
+    // idle.  It was free-running, so its phase at the capture accumulated
+    // across runs and periodically (every n/2 runs) landed on a bad diagonal,
+    // giving wrong columns on silicon.  Reset cnt to 0 at the rising edge of
+    // the collection window so every feed's capture phase is deterministic.
+    val cnt = RegInit(0.U(log2Ceil(n).W))
+    val datClctPrev = RegNext(io.dat_clct, init = false.B)
+    when (io.dat_clct && !datClctPrev)      { cnt := 0.U }
+    .elsewhen (io.dat_clct)                 { cnt := cnt + 1.U }
+    .otherwise                              { cnt := 0.U }
+    io.dbg_cnt := cnt
 
     // chainsaw layout
     for (i <- 0 until n) {
