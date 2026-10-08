@@ -9,8 +9,10 @@ This is a chisel workbench designed for someone who like docker containers and v
 ## Highlights
 
 - **RISC-V-style 32-bit ISA** with 13 opcode families (LD/ST, MMA, VALU_*),
-  R/I/S formats, full decoder (`isa/instrDecoder.scala`) and Scala assembler
-  (`isa/NpuAssembler.scala`).
+  R/I/S formats, a single authoritative decode map (`isa/InstrTable.scala`)
+  driving the decoder (`isa/instrDecoder.scala`), a Scala assembler
+  (`isa/NpuAssembler.scala`) and a table-driven disassembler
+  (`isa/NpuDisassembler.scala`).
 - **K×K systolic MMALU** that natively supports **?×K streaming reduction**
   — one continuous `ctrl.keep = true` feed accumulates over arbitrary M ≥ K
   cycles, with cumulative K×K partial sums emitted at every K-cycle boundary.
@@ -25,13 +27,17 @@ This is a chisel workbench designed for someone who like docker containers and v
 - **End-to-end post-MMA quantization pipeline** verified bit-accurately against
   a Scala `java.lang.Float` reference (`NCoreBackendQuantSpec`,
   `NCoreBackendGemmSoftmaxSpec`).
+- **Streamed program engine** (`engine/NpuProgramEngineFrontend`, K=16, N=8,
+  dispatch window `W`): a fetched-instruction frontend + issue window with a
+  mask-based scoreboard, unit queues, MMA capture/chaining and a 2-stage MMALU
+  feed pipeline. This is the FPGA top (`src/main/scala/top/top.scala`, `W=4`).
 - **FPGA reference platform**: Kintex-7 `xc7k480tffg1156-2` with PCIe Gen2×8 +
-  dual DDR3 + K=32 MMALU at 200 MHz fabric / 250 MHz NPU. See
+  dual DDR3 + the K=16 streamed program engine at 200 MHz fabric. See
   [docs/implementations/FPGA_XC7K480T.md](docs/implementations/FPGA_XC7K480T.md).
 - **FPGA bring-up on Virtex UltraScale+**: `xcvu9p-flgb2104-2-e` (Alivu9p) with
-  PCIe Gen3×8 XDMA + 4× DDR4 MIG + K=16 program engine, built with local
-  Vivado and programmed remotely via `hw_server`. The `chisel_npu_py` HW suite
-  passes 7/7. See
+  PCIe Gen3×8 XDMA + 4× DDR4 MIG + the K=16 program engine (W=4), timing-closed
+  at 200 MHz, built with local Vivado and programmed remotely via `hw_server`.
+  The `chisel_npu_py` HW suite passes 7/7. See
   [docs/implementations/FPGA_VU9P.md](docs/implementations/FPGA_VU9P.md) and
   [`ip/vivado/xcvu9p/README.md`](ip/vivado/xcvu9p/README.md).
 

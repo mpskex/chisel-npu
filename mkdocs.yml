@@ -8,6 +8,8 @@ nav:
   - Home: index.md
   - ISA Designs:
     - Instructions: designs/01.isa.md
+    - Streamed dispatch (overview): designs/02.streamed-dispatch.md
+    - Streamed issuing (detail): designs/04.streamed-issuing.md
     - Memory: designs/02.memory.md
     - Buses: designs/03.bus.md
   - Implementation:
@@ -18,6 +20,7 @@ nav:
     - Register Files: implementations/Registers.md
     - Quantization Pipeline: implementations/Quantization.md
     - Python Driver (chisel_npu_py): implementations/PythonDriver.md
+    - Silicon Bring-up Log: implementations/SiliconBringup.md
     - FPGA Bring-up (Virtex UltraScale+ xcvu9p): implementations/FPGA_VU9P.md
     - FPGA Bring-up (Kintex-7 xc7k480t): implementations/FPGA_XC7K480T.md
   - Tutorials:

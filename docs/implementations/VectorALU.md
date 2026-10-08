@@ -13,15 +13,21 @@ FP32 fused multiply-add. All output is written back to the shared
 
 ## Notation
 
-| Symbol | Meaning | Default (test) | Default (top) |
+| Symbol | Meaning | Default (test) | FPGA top |
 |:---:|:---|:---:|:---:|
 | `N` (N(bits)) | Base lane width in bits (VX lane = N bits) | 8 | 8 |
-| `L` | Number of base VX registers (must be div-by-4) | 32 | 32 |
-| `K` | SIMD lane count per register | 8 | 64 |
+| `L` | Number of base VX registers (must be div-by-4) | 32 | 16 |
+| `K` | SIMD lane count per register | 8 | 16 |
 | `N2` | `2×N` — VE lane width | 16 | 16 |
 | `N4` | `4×N` — VR lane width | 32 | 32 |
 
-For the full encoding rules, see [ISA](../designs/01.isa.md).
+For the full encoding rules, see [ISA](../designs/01.isa.md), and the decode map
+`src/main/scala/isa/InstrTable.scala`.
+
+!!! note "VALU is used by `NCoreBackend`, not the FPGA top"
+    The FPGA top (`NpuProgramEngineFrontend`) instantiates the decoder, DMA and
+    MMALU but **not** VALU; the VALU lives in the test/legacy `NCoreBackend`.
+    `K=8` is the VALU unit-test lane count.
 
 ---
 

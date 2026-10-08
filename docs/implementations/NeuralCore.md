@@ -2,9 +2,16 @@
 
 [TOC]
 
-The Neural Core (`NCoreBackend`) is the central execution unit of the NPU.
-It integrates an instruction decoder, a multi-width register file, the systolic-array
-matrix engine (MMALU), and the vector ALU (VALU) into a single pipelined backend.
+The Neural Core (`NCoreBackend`) is the VALU-inclusive backend used by the
+test/legacy path.  It integrates an instruction decoder, a multi-width register
+file, the systolic-array matrix engine (MMALU), and the vector ALU (VALU) into a
+single pipelined backend.
+
+!!! note "The FPGA top is the Program Engine, not NCoreBackend"
+    The FPGA top (`src/main/scala/top/top.scala`) is the streamed
+    `NpuProgramEngineFrontend` (K=16, W=4), which contains the decoder, DMA and
+    MMALU but **not** VALU.  See the Program Engine section below and
+    [`../designs/04.streamed-issuing.md`](../designs/04.streamed-issuing.md).
 
 The design philosophy mirrors a lightweight super-scalar processor:
 while the systolic array is busy computing a matrix multiplication over many clock cycles,
@@ -140,8 +147,10 @@ sequenceDiagram
 | `src/main/scala/backend/SimpleBackend.scala` | `NCoreBackend` module |
 | `src/main/scala/isa/instrDecoder.scala` | `InstrDecoder` combinational module |
 | `src/main/scala/isa/instrFormat.scala` | Bit-position constants, enums |
-| `src/main/scala/isa/instSetArch.scala` | Opcode family and funct3 definitions |
+| `src/main/scala/isa/instSetArch.scala` | Opcode family and funct3 definition *values* |
+| `src/main/scala/isa/InstrTable.scala` | Authoritative decode map (`(opcode,funct3)` → mnemonic/VecOp, CVT pairs) |
 | `src/main/scala/isa/NpuAssembler.scala` | Scala-side assembler helpers |
+| `src/main/scala/isa/NpuDisassembler.scala` | Table-driven disassembler |
 | `src/main/scala/sram/multiWidthRegister.scala` | `MultiWidthRegisterBlock` |
 | `src/main/scala/alu/vec/vec.scala` | `VALU` module + `Qfmt` LUT tables |
 | `src/main/scala/alu/vec/fp.scala` | `IEEE754` FP32/BF16/BF8 helpers + `FpRef` reference |
@@ -160,9 +169,12 @@ sequenceDiagram
 | `VALUCvtSpec` | All CVT pairs, BF16 round-trip, BF8 E4M3 encoding |
 | `VALUActivationSpec` | Softmax and GELU as primitive sequences |
 | `NCoreBackendQuantSpec` | End-to-end: MMA → vcvt → vfma → vcvt quantization pipeline |
-| `NpuProgramEngineSpec` | mma sessions (K-burst): per-mma column captures, C operand, illegal |
-| `NpuProgramEngineFrontendSpec` | Sessions streamed through the LRU-prefetch frontend |
-| `NpuProgramEngineGemmSpec` | Session product columns (7-mma session at K=32) |
+| `InstrTableSpec` | The authoritative decode table + exhaustive illegal/aliasing sweep |
+| `NpuDisassemblerSpec` | `word → text` round-trip over every table entry |
+| `NpuProgramEngineTrajSpec`, `StreamedNSessionSpec`, `StreamedChainedSpec` | mma sessions: per-mma column captures, C operand, illegal halt, chaining |
+| `NpuProgramEngineFrontendSpec` | Sessions streamed through the fetch/`ctrl_lite` frontend |
+| `CaptureDeterminismSpec`, `CaptureTraceSpec`, `LateStoreCaptureSpec` | capture determinism, traces, late-store capture |
+| `NpuDmaEngineSpec` | the engine's AXI4 master |
 
 ---
 
@@ -171,8 +183,9 @@ sequenceDiagram
 The FPGA program path (the engine that replaced the fixed-function
 `npu_dma_master`): a frontend streams ISA words from DDR, and a deliberately
 thin engine decodes each instruction and drives the MMALU's raw signals
-directly. **Status: implemented and silicon-verified at K=16 / 175 MHz
-fabric** (see the handoff for the bring-up record).
+directly. **Status: implemented and silicon-verified at K=16; the current FPGA
+build (xcvu9p) uses window depth `W=4` and closes timing at 200 MHz** (see the
+handoff for the bring-up record).
 
 ### Architecture
 
@@ -235,7 +248,7 @@ vse32 vd0 → OUT; vse32 vd1 → OUT; ...
 | Item | State |
 |:-----|:------|
 | Engine simplification (decode + dispatch, capture FIFO) | ✅ implemented |
-| Session model sim-verified (per-mma column captures) | ✅ `NpuProgramEngineSpec` / `FrontendSpec` / `GemmSpec` (95/95 suite green) |
+| Session model sim-verified (per-mma column captures) | ✅ `NpuProgramEngineTrajSpec` / `StreamedNSessionSpec` / `StreamedChainedSpec` / `NpuProgramEngineFrontendSpec` |
 | Driver `ChiselNPU.run(instructions, memories)` | ✅ 0.2.1, unit-tested (FakeNative engine model) |
-| Silicon (K=16, 175 MHz fabric, WNS +0.019) | ✅ bitstream + bring-up; copy round-trips / illegal / status pass; session-capture phase alignment pending |
+| Silicon (K=16, current build W=4, 200 MHz on xcvu9p) | ✅ timing closed; `chisel_npu_py` HW suite 7/7 pass |
 

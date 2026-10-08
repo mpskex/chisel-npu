@@ -4,9 +4,9 @@ Worked example of bringing the Chisel program engine up on a **Virtex
 UltraScale+ `xcvu9p-flgb2104-2-e`** board (the "Alivu9p" platform) and
 programming it **remotely** over a networked `hw_server` — no local JTAG.
 
-The Chisel RTL (`top.sv`, the program engine + MMALU) and the
-[`chisel_npu_py`](../../drivers/chisel_npu_py/README.md) userspace driver are
-**unchanged** from the Kintex-7 platform; only the FPGA wrapper differs.
+The Chisel RTL (`top.sv`, the K=16 program engine at window depth **W=4**) and
+the [`chisel_npu_py`](https://github.com/mpskex/chisel-npu/blob/main/drivers/chisel_npu_py/README.md) userspace driver
+are the same as the Kintex-7 platform; only the FPGA wrapper differs.
 
 Backing design notes: [`ip/vivado/xcvu9p/README.md`](https://github.com/mpskex/chisel-npu/blob/main/ip/vivado/xcvu9p/README.md)
 (full build/remote-programming recipe).
@@ -38,7 +38,7 @@ NPU engine (128b @200)
 The engine runs at **200 MHz** (the 250 MHz `axi_aclk` is too fast for the
 K=16 engine); `clk_wiz_fabric` + AXI clock/width converters provide the CDC.
 
-## The two integration bugs
+## The integration fixes
 
 ### 1. DDR4 MIG rejected narrow bursts
 
@@ -66,13 +66,37 @@ Running the engine on a 100 MHz fabric clock (chosen once to relieve routing
 congestion) makes the frontend fetch fail with the same illegal-instruction
 signature. Keep `clk_wiz_fabric` at **200 MHz**.
 
-### Placement note (multi-SLR)
+### 3. Stale incremental synthesis silently ignored `top.sv`
+
+`synth_1` had **auto-incremental synthesis** enabled with a reference checkpoint
+under `prj.srcs/utils_1/imports/synth_1/`.  After regenerating `top.sv`, the
+tool reused ~99.9996% of a previous engine netlist (the log shows
+`NpuProgramEngineFrontend__GC0_#REUSE#`), so RTL changes never reached the
+bitstream.  `build_npu_vu9p.tcl` now clears `AUTO_INCREMENTAL_CHECKPOINT` and
+forces a re-read of `top.sv` (remove + re-add).
+
+### 4. Fabric reset-synchronizer recovery violation
+
+`hw_platform.v` used the high-fanout XDMA `axi_aresetn` (`axi_aclk` domain,
+fo ≈ 1600) as the async reset of the `clk_fabric` reset synchronizer, giving a
+−0.87 ns recovery violation across 82 endpoints.  Fix: register a local
+`ASYNC_REG` copy (`axi_aresetn_loc`) so the cross-domain path is short, and
+`set_false_path` the synchronizer's async reset (`pin.xdc`) — its 2-FF chain
+resolves the CDC.  Combined with the placement directive below, the design now
+meets all user timing constraints.
+
+### Placement / timing note (multi-SLR)
 
 `xcvu9p` is a multi-SLR device. The extra NPU buses make the GTY/PCIe-left-edge
-region congested under the default placer; the build uses
-`place_design -directive AltSpreadLogic_high` and still takes ~2–3 h for
-implementation. Adding a pblock around the NPU does **not** help (it forces SLR
-(Laguna) crossings).
+region congested under the default placer, so the build uses
+`place_design -directive ExtraTimingOpt` (set in `build_npu_vu9p.tcl`).
+A Pblock around the NPU does **not** help — it forces SLR (Laguna) crossings and
+the routing blows up; the engine was made to fit by reducing it (W=4 + the
+2-stage feed pipeline), not by floorplanning.
+
+With that, the engine fabric domain closes at 200 MHz (WNS ≈ +0.05 ns, 0 failing
+endpoints) and the whole design reports *"All user specified timing constraints
+are met."*
 
 ## Build
 

@@ -21,11 +21,11 @@ Host (x86) ── PCIe Gen1 x4 ──► XDMA 4.2 (axi_aclk 125 MHz)
                                  │
   BAR0 (user)      ──► AXI-Lite user space (unused on NPU bitstream)
   BAR2 (bypass)    ──► axi_clkconv_byp (125→200) ─► byp_dw (128→32)
-                          ─► byp_pc ─► ctrl_lite (200 MHz, single CTRL reg)
+                          ─► byp_pc ─► npu_engine_ctrl_lite (multi-register map)
   M_AXI (DMA)      ──► axi_cc_xdma_in ─► axi_clkconv_xdma ─► axi_dwidth_xdma (128→512)
                           ─► axi_xbar.S00 ─► M00 ─► MIG C0 (DDR3 2 GB)
                                                           ▲
-  npu_subsys.m_axi ─► axi_clkconv_npu (200→133) ─► axi_dwidth_npu (128→512)
+  npu_engine_subsys.m_axi ─► axi_clkconv_npu (200→133) ─► axi_dwidth_npu (128→512)
                           ─► axi_xbar.S01 ─► M00/M01 ─► MIG C0/C1
 ```
 
@@ -95,82 +95,106 @@ first token silently returned `0` for every register read and made every
 
 ---
 
-## 3. ctrl_lite control register (BAR2 + 0x0)
+## 3. Engine ctrl register map (BAR2)
 
-The host controls the NPU through a single 32-bit register (`npu_ctrl_lite.v`):
+The current engine (`npu_engine_ctrl_lite.v`, reached through
+`npu_engine_subsys`) exposes a **multi-register** AXI4-Lite map. Register
+offsets are authoritative in
+`drivers/chisel_npu_py/src/chisel_npu_py/config.py`:
 
-| Bit | Field | R/W | Meaning |
-|:----|:------|:----|:--------|
-| 0 | `start` | W | write 1 → 1-cycle start pulse to the NPU DMA master (self-clears) |
-| 1 | `done_latch` | RO | latched 1 when the DMA master finishes; cleared on next start |
-| 2 | `busy` | RO | level; 1 while the DMA master FSM is active |
+| Offset | Register | R/W | Meaning |
+|:-------|:---------|:----|:--------|
+| `0x00` | CTRL | W/RO | bit0 `start` (W, edge, self-clears) · bit1 `done` (RO) · bit2 `busy` (RO) |
+| `0x04` | FRAMES | W | config (reserved) |
+| `0x08` | STATUS | RO | illegal[31] \| frames_done[30:16] \| pc[15:0] |
+| `0x0C` | ERR_INFO | RO | faulting instruction word |
+| `0x10` | FETCH_STATS | RO | prefetches[31:16] \| misses[15:0] |
+| `0x14` | PROG_LEN | W | instruction count (words) |
+| `0x18` | DBG | RO | winState[1:0] \| clct captured[15:0] |
+| `0x1C` | DBG_MMA | RO | mma instructions accepted |
 
-Read values: `0x0` idle, `0x2` done, `0x4` busy, `0x6` busy+done.
+CTRL read values: `0x0` idle, `0x2` done, `0x4` busy, `0x6` busy+done.
 
 ```bash
-# Kick the NPU and poll (0x2 = done):
+# Start a program and poll done (0x2):
 sudo ~/dma_ip_drivers/XDMA/linux-kernel/tools/reg_rw /dev/xdma0_bypass 0x0 w 0x1
 sudo ~/dma_ip_drivers/XDMA/linux-kernel/tools/reg_rw /dev/xdma0_bypass 0x0 w
+# Read engine status/pc or the accepted mma count:
+sudo ~/dma_ip_drivers/XDMA/linux-kernel/tools/reg_rw /dev/xdma0_bypass 0x8 w
+sudo ~/dma_ip_drivers/XDMA/linux-kernel/tools/reg_rw /dev/xdma0_bypass 0x1C w
 ```
 
-Note: `start` is edge-sensitive; writes with bit0=0 are ignored. `done_latch`
-persists until the next `start`.
+Note: `start` is edge-sensitive; writes with bit0=0 are ignored. The legacy V10
+`npu_ctrl_lite.v` had only the single CTRL register.
 
 ---
 
-## 4. NPU operand staging protocol (host side)
+## 4. NPU staging protocol (host side)
 
-The NPU's internal DMA master (`npu_dma_master.v`, K=32) reads its operands
-from fixed DDR3 addresses in MIG C0 and writes the result back:
+The engine's `NpuDmaEngine` moves vectors between the staging sections in MIG
+C0 and the VX/VE/VR register file; the program itself is staged in a `CODE`
+section and executed by the frontend. Sections (K=16, from
+`drivers/chisel_npu_py/src/chisel_npu_py/config.py`):
 
-| Region | Address | Size | Content |
-|:-------|:--------|:-----|:--------|
-| Matrix A | `0x4000_0000` | 32 B | 32 × int8 |
-| Matrix B | `0x4000_0100` | 32 B | 32 × int8 |
-| ACCUM | `0x4000_0200` | 128 B | 32 × int32 (initial accumulator) |
-| OUT | `0x4000_0400` | 128 B | 32 × int32 (result, written back) |
+| Section | Address | Window | Content |
+|:--------|:--------|:-------|:--------|
+| A | `0x4000_0000` | 4 KiB | int8 operand vectors |
+| B | `0x4000_0400` | 4 KiB | int8 operand vectors |
+| ACCUM | `0x4000_0800` | 128 B | int32[K] |
+| OUT | `0x4000_0880` | 4 KiB | int32 outputs |
+| CODE | `0x4000_4000` | 256 KiB | program words |
 
-Host flow:
+Host flow (register-level; the `chisel_npu_py` driver does this for you):
 
 ```bash
-# 1. Stage operands via XDMA DMA:
-sudo tools/dma_to_device -d /dev/xdma0_h2c_0 -f a.bin    -s 32   -a 0x40000000
-sudo tools/dma_to_device -d /dev/xdma0_h2c_0 -f b.bin    -s 32   -a 0x40000100
-sudo tools/dma_to_device -d /dev/xdma0_h2c_0 -f acc.bin  -s 128  -a 0x40000200
+# 1. Stage operands + program via XDMA DMA (addresses are byte addresses):
+sudo tools/dma_to_device -d /dev/xdma0_h2c_0 -f a.bin      -s <bytes> -a 0x40000000
+sudo tools/dma_to_device -d /dev/xdma0_h2c_0 -f b.bin      -s <bytes> -a 0x40000400
+sudo tools/dma_to_device -d /dev/xdma0_h2c_0 -f acc.bin    -s 128     -a 0x40000800
+sudo tools/dma_to_device -d /dev/xdma0_h2c_0 -f code.bin   -s <bytes> -a 0x40004000
 
-# 2. Kick:
-sudo tools/reg_rw /dev/xdma0_bypass 0x0 w 0x1
+# 2. Set PROG_LEN (instruction count words) then start:
+sudo tools/reg_rw /dev/xdma0_bypass 0x14 w <words>
+sudo tools/reg_rw /dev/xdma0_bypass 0x0  w 0x1
 
-# 3. Poll done (≤ ~11 µs at 200 MHz):
+# 3. Poll done:
 sudo tools/reg_rw /dev/xdma0_bypass 0x0 w    # expect 0x2
 
 # 4. Read OUT:
-sudo tools/dma_from_device -d /dev/xdma0_c2h_0 -f out.bin -s 128 -a 0x40000400
+sudo tools/dma_from_device -d /dev/xdma0_c2h_0 -f out.bin -s <bytes> -a 0x40000880
 ```
 
-The NPU DMA master internally performs: read A (2×128-bit) → read B (2×128-bit)
-→ read ACCUM (8×128-bit) → kick MMALU → wait `clct` (64 cycles) → write OUT
-(8×128-bit) → assert done. Total ~2200 cycles.
+The engine fetches 16 B program lines through its shared DMA, caches them in an
+8-set × 2-way LRU cache, and streams `mma` / `mma.last` sessions with per-`mma`
+column capture. `NpuDmaEngine` carries the legacy DMA hardening: `rready` held
+across all read phases, and a read-timeout retry that re-issues the AR.
 
 ---
 
-## 5. NPU DMA master FSM (for debugging)
+## 5. Engine DMA (`NpuDmaEngine`) (for debugging)
 
-States (`npu_dma_master.v`): `S_IDLE=0, S_READ_A_AR=1, S_READ_A_R=2,
-S_READ_B_AR=3, S_READ_B_R=4, S_READ_ACC_AR=5, S_READ_ACC_R=6, S_KICK=7,
-S_WAIT_CLCT=8, S_WR_AW=9, S_WR_W=10, S_WR_B=11, S_DONE=12`.
+The engine's single AXI4 master is `NpuDmaEngine`
+(`src/main/scala/dma/npuDmaEngine.scala`), instantiated K=16 at the engine top.
+It is request-driven (128-bit AXI, 16-byte beats):
 
-Known-hardened behavior (2026-07-31):
-- `m_axi_rready` is held asserted across all read phases.
-- Each read-data state has a **read-timeout retry** (16K cycles ≈ 82 µs):
-  if no beat arrives, it re-issues the AR. This self-heals the intermittent
-  dropped-read in the `axi_dwidth_npu` (128→512) / xbar S01 path.
-- All reads use AXI_ID=1, ARLEN=1 (A/B) and ARLEN=7 (ACCUM).
+- **L2R** (L3 → RF): burst-read 2/4/8 beats for VX/VE/VR (32/64/128 B), stage
+  into a beat buffer, then one wide RF write per vector.
+- **R2L** (RF → L3): combinational RF read, beat pack, AXI write (with the
+  `wdata`-preload / `wvalid`-with-`awvalid` fix).
+- **ACCUM** (`dir=2`): L3 → MMA accumulator buffer.
+- **Fetch** (`dir=3`): one-beat read into the instruction line buffer.
 
-If `busy` stays 1 with no `done`, the FSM is stuck. Check via ILA
-(`top_npu_with_ila.bit`, probe `top_i/npu_subsys/inst/u_dma/state[3:0]`):
-stuck in `S_READ_B_R` = B read dropped (old bitstream), stuck in `S_WAIT_CLCT`
-= MMALU issue.
+Hardened behavior carried from the legacy `npu_dma_master.v`:
+- `m_axi_rready` is held asserted from the first AR across all read phases.
+- Each read has a **read-timeout retry** (`readTimeout = 16384` cycles):
+  if no beat arrives, it re-issues the AR — self-healing the intermittent
+  dropped read in the `axi_dwidth_npu` (128→512) / xbar S01 path.
+
+If `busy` stays 1 with no `done`, capture with the engine ILA (build
+`build_npu_engine_with_ila.tcl`; see the test-hw skill) or read the engine
+`dbg_*` status via the `DBG` (`0x18`) / `DBG_MMA` (`0x1C`) registers. The
+legacy V10 `npu_dma_master.v` FSM (`S_READ_A_AR … S_WR_W … S_DONE`) is the
+superseded K=32 path.
 
 ---
 
@@ -197,17 +221,19 @@ stuck in `S_READ_B_R` = B read dropped (old bitstream), stuck in `S_WAIT_CLCT`
 source .env.sh
 export PATH="$HOME/miniconda3/bin:$PATH"     # host python has no pip; miniconda has pytest+numpy
 
-# Full hardware suite against the live board:
+# Legacy V10 hardware suite against the live board:
 python3 -m pytest tool/hw/tests/ -v -m hw --fpga-host "$FPGA_HOST" --skip-program
 
-# Just the integration-relevant pieces:
-python3 -m pytest tool/hw/tests/test_npu_kick.py \
-                    tool/hw/tests/test_mmalu_compute.py -v --fpga-host "$FPGA_HOST" --skip-program
+# Current engine session tests (driver-level, over XDMA):
+make py-test-hw
+# or, on the FPGA host: python3 tool/hw/engine_smoke4.py
 ```
 
-Key test files:
-- `test_npu_kick.py` — start→done handshake (the canary: fails if BAR/ctrl_lite/DMA path is broken).
-- `test_mmalu_compute.py` — stages operands, kicks, reads OUT, checks math.
+Key test files / helpers:
+- `drivers/chisel_npu_py/tests/test_program_engine.py` — **current engine** session tests (one-shot, multi-column, illegal-halt, status).
+- `tool/hw/engine_smoke4.py` — register-level K=16 MAC / chained GEMM on silicon.
+- `test_npu_kick.py` — *legacy V10* start→done handshake (the canary: fails if BAR/ctrl_lite/DMA path is broken).
+- `test_mmalu_compute.py` — *legacy V10* one-shot operand staging, kick, read-back, math check.
 - `test_ddr3_c0_loopback.py` — XDMA DMA data integrity (proves host→DDR3 path).
 - `tool/hw/tests/lib/xdma.py` — the XDMA wrapper (reg_read/reg_write/h2c/c2h).
 

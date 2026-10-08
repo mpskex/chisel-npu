@@ -1,5 +1,17 @@
 # FPGA Verification Platform — xc7k480tffg1156-2
 
+> **LEGACY V10 TOPOLOGY.** This document has two parts. The V10 architecture,
+> timing-history, ILA, and V0–V10 bring-up sections describe the **legacy V10
+> `npu_subsys` / `npu_dma_master` topology** — a **K=32** systolic array with a
+> **single 32-bit CTRL register** and a **one-shot DMA kick**, built as
+> `top_npu.bit`. The **Build Instructions, RTL Source Reference, and Known
+> Limitations** sections have since been updated for the **current production
+> engine**: the streamed `NpuProgramEngineFrontend` (`top.sv`, **K=16, N=8,
+> W=4**) built by `ip/vivado/xc7k480t/scripts/build_npu_engine.tcl` →
+> `ip/vivado/xc7k480t/top_npu_engine.bit`. For the current engine see
+> [`docs/implementations/SiliconBringup.md`](SiliconBringup.md) and
+> [`docs/designs/04.streamed-issuing.md`](../designs/04.streamed-issuing.md).
+
 ## Overview
 
 This document describes the FPGA verification platform for the Chisel NPU targeting the
@@ -11,9 +23,15 @@ read/write-path debug methodology.
 
 All Vivado project files live under `ip/vivado/xc7k480t/`.
 
-## Stack status (V10)
+## Stack status (V10 — legacy)
 
-V10 is the current production topology. It supersedes V9 by:
+> **Legacy path.** V10 (`npu_subsys`) is the *legacy* production topology
+> (K=32, one-shot DMA). It has been superseded by the K=16 streamed program
+> engine (`npu_engine_subsys` + `NpuProgramEngineFrontend`); see the banner
+> above, [`SiliconBringup.md`](SiliconBringup.md), and
+> [`../designs/04.streamed-issuing.md`](../designs/04.streamed-issuing.md).
+
+V10 supersedes V9 by:
 
 - Instantiating the MMALU end-to-end via a single `npu_subsys` BD cell (V9 had the
   MMALU netlist in the build but never wired it into the BD).
@@ -31,7 +49,7 @@ Verified live on `xc7k480tffg1156-2` silicon:
 | MMALU compute (`test_mmalu_compute.py`, 6 tests) | PASS |
 | Analytical formula `OUT[i] = A[i] · B[K-1] + ACCUM[i]` on every lane | PASS |
 
-## Hardware architecture (V10)
+## Hardware architecture (legacy V10)
 
 ```
 Host (PCIe Gen2 ×8 configured, Gen1 ×4 in this slot)
@@ -122,11 +140,43 @@ The NPU's `npu_dma_master.v` uses these defaults inside MIG C0
 
 ctrl_lite still answers at the same BAR2+0x0 32-bit register (start / done / busy).
 
+### Current engine ctrl + staging map (K=16)
+
+The current `npu_engine_subsys` build replaces the single CTRL register with a
+multi-register map (offsets from
+`drivers/chisel_npu_py/src/chisel_npu_py/config.py`); `start`/`done`/`busy`
+remain CTRL bits 0/1/2:
+
+| Offset | Register | Contents |
+|:-------|:---------|:---------|
+| `0x00` | CTRL | bit0 start (W), bit1 done (RO), bit2 busy (RO) |
+| `0x04` | FRAMES | config (reserved) |
+| `0x08` | STATUS | illegal[31] \| frames_done[30:16] \| pc[15:0] |
+| `0x0C` | ERR_INFO | faulting instruction word |
+| `0x10` | FETCH_STATS | prefetches[31:16] \| misses[15:0] |
+| `0x14` | PROG_LEN | instruction count (words) |
+| `0x18` | DBG | winState[1:0] \| clct captured[15:0] |
+| `0x1C` | DBG_MMA | mma instructions accepted |
+
+The engine stages operands and program in adjacent MIG C0 sections:
+
+| Section | Base | Window | Contents |
+|:--------|:-----|:-------|:---------|
+| A | `0x4000_0000` | 4 KiB | int8 operand vectors |
+| B | `0x4000_0400` | 4 KiB | int8 operand vectors |
+| ACCUM | `0x4000_0800` | 128 B | int32[K] |
+| OUT | `0x4000_0880` | 4 KiB | int32 outputs |
+| CODE | `0x4000_4000` | 256 KiB | program words |
+
 ## Key Design Decisions
 
-### K=32 (not K=64)
+### K=32 (legacy V10 sizing; the current engine is K=16)
 
-The device has 298,600 LUTs. K=64 required ~505K LUTs (1.69× over capacity). K=32 uses
+> Legacy V10 sizing. The current `NpuProgramEngineFrontend` is built **K=16**
+> (`src/main/scala/top/top.scala`); a K=32 engine + XDMA + MIG exceeds the
+> xc7k480t's routability.
+
+The device has 298,600 LUTs. K=64 required ~505K LUTs (1.69× over capacity). K=32 used
 ~163K LUTs (54.7%) — a comfortable fit with room for the AXI bridge IPs.
 
 ### Tier-2.5 AXI topology reorder (clkconv-first)
@@ -230,57 +280,65 @@ or control plane.
 
 ## Build Instructions
 
+> **Current engine build.** These steps build the K=16 streamed program engine
+> (`NpuProgramEngineFrontend`). The legacy V10 `npu_subsys` build is still
+> available via `build_npu.tcl` / `build_npu_with_ila.tcl` (produces
+> `top_npu.bit`) but is no longer the production path.
+
 ### Prerequisites
 
 ```
 Vivado 2025.2  (batch mode)
 firtool 1.62.1  (in Docker image fangruil/chisel-dev:{amd64,arm64})
-top.sv          (Chisel-generated MMALU netlist; K=32, repo root)
+top.sv          (Chisel-generated NpuProgramEngineFrontend; K=16, N=8, W=4; ~1.07 MB, repo root)
 hw_server       (Vivado, listening on localhost:3121)
 ```
 
-### Step 1 — Generate top.sv (K=32)
+### Step 1 — Generate top.sv (K=16 engine)
 
 ```bash
 make build   # runs `sbt run` inside Docker, writes top.sv at repo root
 ```
 
-### Step 2 — Build the bitstream
+### Step 2 — Build the engine bitstream
 
-The build flow ships two top-level scripts. Both produce the same NPU
-topology; the only difference is whether an ILA debugger core is wired in:
+The engine build swaps the legacy `npu_subsys` BD cell for `npu_engine_subsys`
+plus the Chisel `NpuProgramEngineFrontend` (`top.sv`). Two scripts ship; they
+differ only in whether the `u_npu_ila` debugger core is wired in:
 
 | Script | Output | Use when |
 |:-------|:-------|:---------|
-| `build_npu.tcl` | `top_npu.bit` | Production / runtime — no ILA, slightly smaller bitstream |
-| `build_npu_with_ila.tcl` | `top_npu_with_ila.bit` + `.ltx` | Hardware debug — adds the `u_npu_ila` core wired to every `(* mark_debug *)` signal in the design |
+| `build_npu_engine.tcl` | `top_npu_engine.bit` | Production / runtime — no ILA |
+| `build_npu_engine_with_ila.tcl` | `top_npu_engine_with_ila.bit` + `.ltx` | Hardware debug — adds the `u_npu_ila` core wired to every `(* mark_debug *)` signal in the design |
 
-Either script auto-bootstraps `proj/` on first run (~25 min cold cache),
-then runs synth\_1 + impl\_1 + write\_bitstream (~50 min). Re-runs reuse
-the existing project (~30 min).
+`build_npu_engine.tcl` adds `npu_engine_ctrl_lite.v` + `npu_engine_subsys.v` +
+`top.sv`, maps the engine master onto the existing 4 GB C0/C1 window, caps
+`general.maxThreads` / `VIVADO_JOBS` at 2 to avoid OOM, and disables
+auto-incremental synthesis so a regenerated `top.sv` is not silently replaced
+by a reused netlist.
 
 ```bash
 cd /path/to/chisel-npu
 
-# Production build (no ILA):
+# Production engine build (no ILA):
 ~/Xilinx/2025.2/Vivado/bin/vivado -mode batch \
-    -source  ip/vivado/xc7k480t/scripts/build_npu.tcl \
-    -journal ip/vivado/xc7k480t/scripts/build_npu.jou \
-    -log     ip/vivado/xc7k480t/scripts/build_npu.log
+    -source  ip/vivado/xc7k480t/scripts/build_npu_engine.tcl \
+    -journal ip/vivado/xc7k480t/scripts/build_npu_engine.jou \
+    -log     ip/vivado/xc7k480t/scripts/build_npu_engine.log
 
-# Or, debug build with the ILA core wired in:
+# Or, debug engine build with the ILA core wired in:
 ~/Xilinx/2025.2/Vivado/bin/vivado -mode batch \
-    -source  ip/vivado/xc7k480t/scripts/build_npu_with_ila.tcl \
-    -journal ip/vivado/xc7k480t/scripts/build_npu_with_ila.jou \
-    -log     ip/vivado/xc7k480t/scripts/build_npu_with_ila.log
+    -source  ip/vivado/xc7k480t/scripts/build_npu_engine_with_ila.tcl \
+    -journal ip/vivado/xc7k480t/scripts/build_npu_engine_with_ila.jou \
+    -log     ip/vivado/xc7k480t/scripts/build_npu_engine_with_ila.log
 ```
 
 Outputs:
 
 ```
-ip/vivado/xc7k480t/top_npu.bit            ~18 MB   (production)
-ip/vivado/xc7k480t/top_npu_with_ila.bit   ~18 MB   (debug)
-ip/vivado/xc7k480t/top_npu_with_ila.ltx   ~80 KB   (probes file for HW Manager)
+ip/vivado/xc7k480t/top_npu_engine.bit            ~18 MB   (production)
+ip/vivado/xc7k480t/top_npu_engine_with_ila.bit   ~18 MB   (debug)
+ip/vivado/xc7k480t/top_npu_engine_with_ila.ltx   ~80 KB   (probes file for HW Manager)
 ```
 
 ### Step 3 — Flash + verify
@@ -288,32 +346,39 @@ ip/vivado/xc7k480t/top_npu_with_ila.ltx   ~80 KB   (probes file for HW Manager)
 ```bash
 # Flash BPI flash + JTAG SRAM load + SBR loop + 9 smoke tests (serial-only).
 python3 tool/hw/bringup_flash.py \
-    ip/vivado/xc7k480t/top_npu.bit \
+    ip/vivado/xc7k480t/top_npu_engine.bit \
     --max-attempts 6
 ```
 
 Expected: **9 passed, 0 failed, 0 skipped** (see `tool/hw/tests/README.md`).
 
-### Step 4 — MMALU compute tests
+### Step 4 — Engine session tests
 
-`tool/hw/tests/test_mmalu_compute.py` validates the V10 NPU end-to-end. The
-host writes A/B/ACCUM via XDMA H2C into MIG C0 at `0x4000_0000`, kicks
-ctrl_lite, polls `done`, and reads OUT back via XDMA C2H:
+The current engine is driven by **streamed program-engine sessions**, not a
+one-shot DMA kick: the host stages operands + program, writes `PROG_LEN`, then
+pulses `CTRL.start`; the engine streams `mma` / `mma.last` instructions through
+a dispatch window (W=4) with a scoreboard, chaining, capture queue and
+per-session reset. See `docs/implementations/SiliconBringup.md` and
+`docs/designs/04.streamed-issuing.md`.
+
+Register-level MAC smoke test on silicon (K=16 S-format
+`mma vd, vs1, vs2, vs3 ⇒ vd = A·B + C`, including a chained 16×256×256×16
+GEMM):
 
 ```bash
-python3 -m pytest tool/hw/tests/test_mmalu_compute.py -v -m hw
+# Run on the FPGA host:
+python3 tool/hw/engine_smoke4.py
 ```
 
-Six tests; all PASS on V10 silicon:
+Driver-level session tests (flash `top_npu_engine.bit` first):
 
-| Test | Verifies |
-|:-----|:---------|
-| `test_mmalu_done_smoke` | FSM kick → done within 1 s |
-| `test_mmalu_zero_in_zero_out` | `A=B=ACCUM=0` → `OUT` all zero |
-| `test_mmalu_accum_passthrough` | `A=B=0` → `OUT == ACCUM` |
-| `test_mmalu_zero_a_kills_multiplier` | `A=0, B≠0` → `OUT == ACCUM` |
-| `test_mmalu_multiplier_alive` | `A=10, B=7, ACCUM=0` → `OUT == 70` (in every lane) |
-| `test_mmalu_outer_b_last` | `OUT[i] == A[i] · B[K−1] + ACCUM[i]` (analytical formula) |
+```bash
+make py-test-hw   # drivers/chisel_npu_py/tests/test_program_engine.py
+```
+
+The legacy `tool/hw/tests/test_mmalu_compute.py` one-shot tests (A/B/ACCUM →
+OUT with a single `start` pulse) target the superseded V10 `npu_dma_master`
+path and do not apply to the engine.
 
 ## Bring-up history (V0..V10, squashed)
 
@@ -408,18 +473,22 @@ debug straightforward.
 
 | File | Role |
 |:-----|:-----|
-| `ip/vivado/xc7k480t/src/npu_ctrl_lite.v` | AXI4-Lite slave at BAR2+0x0. Single 32-bit CTRL register (`start`/`done`/`busy`) |
-| `ip/vivado/xc7k480t/src/npu_dma_master.v` | AXI4 master FSM (128b, 64-bit addr). Reads A/B/ACCUM from MIG, kicks MMALU, writes OUT back. Contains the `S_WR_W` write-phase fix and `(* mark_debug *)` tags |
-| `ip/vivado/xc7k480t/src/npu_subsys.v` | Module wrapper instantiating ctrl_lite + dma_master + MMALU. **V10 BD references this as a single cell** |
-| `ip/vivado/xc7k480t/src/mmalu_stub.v` | Empty MMALU stub for V8 synthesis sanity |
-| `top.sv` (repo root) | Chisel-generated `MMALU` module (K=32, N=8, 32-bit accum), 1.7 MB, firtool-1.62.1 |
+| `ip/vivado/xc7k480t/src/npu_engine_subsys.v` | **Current engine** wrapper instantiating `npu_engine_ctrl_lite` + `NpuProgramEngineFrontend` (`top.sv`). The BD references this as a single cell |
+| `ip/vivado/xc7k480t/src/npu_engine_ctrl_lite.v` | **Current engine** AXI4-Lite slave exposing the multi-register ctrl map (CTRL/FRAMES/STATUS/ERR_INFO/FETCH_STATS/PROG_LEN/DBG/DBG_MMA) |
+| `top.sv` (repo root) | Chisel-generated `NpuProgramEngineFrontend` (K=16, N=8, W=4), ~1.07 MB, firtool-1.62.1. Instantiates `MMALU`, `NpuDmaEngine`, `InstrDecoder` |
+| `ip/vivado/xc7k480t/src/npu_ctrl_lite.v` | *Legacy V10* AXI4-Lite slave at BAR2+0x0. Single 32-bit CTRL register (`start`/`done`/`busy`) |
+| `ip/vivado/xc7k480t/src/npu_dma_master.v` | *Legacy V10* AXI4 master FSM (128b, 64-bit addr), K=32. Reads A/B/ACCUM from MIG, kicks MMALU, writes OUT back. Contains the `S_WR_W` write-phase fix and `(* mark_debug *)` tags |
+| `ip/vivado/xc7k480t/src/npu_subsys.v` | *Legacy V10* module wrapper instantiating ctrl_lite + dma_master + K=32 MMALU |
+| `ip/vivado/xc7k480t/src/mmalu_stub.v` | *Legacy* empty MMALU stub for V8 synthesis sanity (now removed) |
 
 ## Build & ILA TCL Reference
 
 | File | Role |
 |:-----|:-----|
-| `ip/vivado/xc7k480t/scripts/build_npu.tcl` | **Production build (no ILA)**. Boots `proj/` if missing, applies the squashed NPU topology, runs `launch_runs synth_1` + OOC sub-runs, copies IP DCPs, opens synth_1, runs impl_1, writes `top_npu.bit` |
-| `ip/vivado/xc7k480t/scripts/build_npu_with_ila.tcl` | **Debug build (with ILA)**. Same as `build_npu.tcl` but inserts the `u_npu_ila` core post-synth and writes the matching `top_npu_with_ila.ltx` probes file |
+| `ip/vivado/xc7k480t/scripts/build_npu_engine.tcl` | **Current engine production build (no ILA)**. Swaps `npu_subsys` → `npu_engine_subsys`, adds engine RTL + `top.sv`, maps the 4 GB C0/C1 window, disables auto-incremental synth, runs synth\_1 + OOC sub-runs + impl_1, writes `top_npu_engine.bit` |
+| `ip/vivado/xc7k480t/scripts/build_npu_engine_with_ila.tcl` | **Current engine debug build (with ILA)**. Same as `build_npu_engine.tcl` but inserts the `u_npu_ila` core post-synth and writes `top_npu_engine_with_ila.ltx` |
+| `ip/vivado/xc7k480t/scripts/build_npu.tcl` | *Legacy V10 production build (no ILA)*. Boots `proj/` if missing, applies the squashed NPU topology, runs `launch_runs synth_1` + OOC sub-runs, copies IP DCPs, opens synth_1, runs impl_1, writes `top_npu.bit` |
+| `ip/vivado/xc7k480t/scripts/build_npu_with_ila.tcl` | *Legacy V10 debug build (with ILA)*. Same as `build_npu.tcl` but inserts the `u_npu_ila` core post-synth and writes the matching `top_npu_with_ila.ltx` probes file |
 | `ip/vivado/xc7k480t/scripts/_apply_npu_topology.tcl` | **BD topology library** (squashed V1..V10). Defines internal `_npu_step_*` procs plus the public `apply_npu_topology` entry point. Detects the current BD state and applies only the missing steps |
 | `ip/vivado/xc7k480t/scripts/_apply_npu_ila.tcl` | Post-synth ILA insertion (auto-scans `MARK_DEBUG` nets, builds `u_npu_ila` with one probe per base signal) |
 | `ip/vivado/xc7k480t/scripts/bootstrap_project.tcl` | First-run project bootstrap from `xc7k480t.reference/` (V7-equivalent BD state) |
@@ -427,7 +496,12 @@ debug straightforward.
 
 ## Constraints Summary
 
-### MMALU MCP
+### MMALU MCP (legacy V10)
+
+> This multicycle constraint targets the legacy V10 `MMALU` instance
+> (`mmalu_inst`). The current engine embeds its MMALU inside
+> `NpuProgramEngineFrontend` and closes at 100 MHz on xc7k480t; see
+> `docs/implementations/SiliconBringup.md`.
 
 ```xdc
 set_multicycle_path 2 -setup \
@@ -455,18 +529,26 @@ AMD FCH cold-boot training).
 
 ## Known Limitations
 
-- **K=32 only**: K=64 exceeds device capacity (~1.69× LUT over-fill).
-- **200 MHz fabric**: compute throughput is K=32 × 200 MHz × 8b = 51.2 GOPS (INT8 MAC).
-- **DataFeeder latency unchanged**: systolic array latency remains 3n−2 = 94 cycles for K=32.
+- **K=16 engine (legacy K=32)**: the current `NpuProgramEngineFrontend` is K=16
+  (`src/main/scala/top/top.scala`); the legacy V10 `npu_subsys` path was K=32.
+  K=64 exceeds device capacity (~1.69× LUT over-fill).
+- **Fabric clock / throughput**: the engine closes at **100 MHz** on xc7k480t
+  (see `docs/implementations/SiliconBringup.md`); at K=16 × 100 MHz × 8b that is
+  **12.8 GOPS** (INT8 MAC). The legacy V10 K=32 path ran at 200 MHz = 51.2 GOPS.
+- **MMALU latency (K=16)**: with the SA→PE pipeline register the engine's K=16
+  MMALU latency is **3n−1 = 47 cycles** (`src/main/scala/alu/mma/mma.scala`).
+  The legacy K=32 path was 3n−1 = 95 cycles.
 - **PCIe cold-boot nondeterministic**: AMD FCH link-training window varies per boot.
   The `bringup_flash.py` SBR loop handles this reliably (typically 1–2 iterations).
 - **Link width x4 at Gen1**: the PCIe slot is limited to Gen1 x4, constraining DMA
   bandwidth to ~0.5 GB/s rather than the design maximum.
-- **MMALU "one-shot" kick semantics**: the V10 dma_master pulses `ctrl.busy=1` for
-  exactly one cycle and holds inputs constant. Under those semantics, the only
-  meaningful output is `OUT[i] = A[i] · B[K-1] + ACCUM[i]` (each PE captures
-  exactly one product). To run a full GEMM, the dma_master FSM needs to stream
-  K consecutive A/B rows — that is a Phase 2 extension.
-- **V10 read path uses one xbar regslice per port**; M01 also carries an async data
-  FIFO for the C0→C1 cross-clock. WNS varies by ±0.1 ns across rebuilds; the failing
-  path (when present) is always inside an MMALU PE, not on the data plane.
+- **Streamed program-engine sessions (not one-shot)**: the current engine issues a
+  program from the `CODE` section and runs streamed `mma`/`mma.last` sessions
+  through a dispatch window (W=4) with a scoreboard, chaining, capture queue and
+  per-session reset — see `docs/designs/04.streamed-issuing.md`. The legacy V10
+  `npu_dma_master` instead pulsed `ctrl.busy=1` for exactly one cycle and held
+  inputs constant, so its only meaningful output was
+  `OUT[i] = A[i] · B[K-1] + ACCUM[i]` (each PE captured exactly one product).
+- **Legacy V10 read path uses one xbar regslice per port**; M01 also carries an async
+  data FIFO for the C0→C1 cross-clock. WNS varies by ±0.1 ns across rebuilds; the
+  failing path (when present) is always inside an MMALU PE, not on the data plane.

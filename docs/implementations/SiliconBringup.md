@@ -1,7 +1,8 @@
 # Silicon bring-up log — chisel-npu engine on xc7k480t
 
 This is the working log of bringing the streamed-dispatch engine
-(`NpuProgramEngine`, K=16, N=8, W=8) to **deterministic** behaviour on the
+(`NpuProgramEngine`, K=16, N=8; the current FPGA build uses window depth
+**W=4**) to **deterministic** behaviour on the
 xc7k480tffg1156-2 board (XDMA 4.2 PCIe, dual-channel MIG DDR3), culminating
 in the fixes documented in `docs/designs/04.streamed-issuing.md`.
 

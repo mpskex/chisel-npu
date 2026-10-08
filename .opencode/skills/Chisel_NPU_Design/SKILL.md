@@ -12,7 +12,7 @@ description: Use when working with the Chisel NPU source code — ISA encoding, 
 - All tools provided by `fangruil/chisel-dev:{amd64,arm64}` Docker image
 
 ```bash
-make build      # sbt run → top.sv at repo root (~1.7 MB, module MMALU)
+make build      # sbt run → top.sv at repo root (~1.07 MB, top module NpuProgramEngineFrontend)
 make test       # sbt test (all specs)
 make container  # interactive shell in Docker
 tool/test-specific-spec.sh <fully.qualified.Spec>  # run one spec
@@ -28,11 +28,12 @@ is published locally. Always use Docker or `make` targets.
 | Symbol | Meaning | Default (test) | Default (top) |
 |:------:|:--------|:--------------:|:-------------:|
 | **N** | Base lane width in bits (= MMALU `nbits`). Always written N(bits). | 8 | 8 |
-| **L** | Number of base VX registers. Must be divisible by 4. | 32 | 32 |
-| **K** | SIMD lane count per register (= MMALU systolic array side). | 8 | 32¹ |
+| **L** | Number of base VX registers. Must be divisible by 4. | 32 | 16 |
+| **K** | SIMD lane count per register (= MMALU systolic array side). | 8 | 16 |
+| **W** | Dispatch-window depth (`NpuProgramEngineFrontend`). | 16 | 4 |
 
-¹ The generated `top.sv` (FPGA target) uses K=32 as instantiated in
-`src/main/scala/top/top.scala`.
+The FPGA top instantiates `NpuProgramEngineFrontend(K=16, N=8, W=4)` and sets
+`L = K` (so L=16). W=8 did not close timing at 200 MHz on xcvu9p.
 
 ### Register class aliasing (L × K × N/8 bytes total)
 
@@ -66,12 +67,12 @@ funct7[6:5] = dtype   (0=INT, 1=FP, 2=BF)
 | Family | Opcode | funct3 subops |
 |:-------|:------:|:--------------|
 | NOP | 0x00 | — |
-| LD / ST | 0x01/0x02 | funct3 = transfer width |
+| LD / ST | 0x07/0x27 | funct3 = transfer width (0=VX, 1=VE, 2=VR) |
 | MMA | 0x03 | 0=mma, 1=mma.last, 2=mma.reset |
 | VALU_ARITH | 0x10 | add/sub/mul/neg/abs/max/min/rsub |
 | VALU_LOGIC | 0x11 | sll/srl/sra/rol/xor/not/or/and |
 | VALU_REDUCE | 0x12 | sum/rmax/rmin/rand/ror/rxor |
-| VALU_LUT | 0x13 | exp/recip/tanh/erf |
+| VALU_LUT | 0x13 | vlut.A/B (0/1), vsetlut.A/B (4/5) |
 | VALU_CVT | 0x14 | funct3=dst fmt; funct7[2:0]=src fmt |
 | VALU_BCAST | 0x15 | 0=reg, 1=imm |
 | VALU_FP | 0x16 | fadd/fsub/fmul/fneg/fabs/fmax/fmin |
@@ -88,12 +89,17 @@ src/main/scala/
   alu/pe/           BasePE trait, MMPE
   alu/vec/          VALU (multi-width K-lane), Qfmt LUT tables, FP helpers
   backend/          NCoreBackend (InstrDecoder + RegisterFile + MMALU + VALU)
-  isa/              instrFormat.scala, instSetArch.scala, NpuAssembler.scala,
-                    instrDecoder.scala, dataType.scala, micro_op/
+  isa/              instrFormat.scala, instSetArch.scala, InstrTable.scala
+                    (authoritative decode map), NpuAssembler.scala,
+                    NpuDisassembler.scala, instrDecoder.scala, dataType.scala,
+                    micro_op/
+  engine/           npuFrontend.scala (NpuProgramEngineFrontend: fetch/ctrl_lite),
+                    npuProgramEngine.scala (dispatch window, scoreboard, DMA/MMA issue)
+  dma/              npuDmaEngine.scala (engine AXI4 master)
   sram/             register.scala (legacy), multiWidthRegister.scala,
                     spm.scala (scratch-pad), sreg.scala (SpecialRegFile)
   utils/gates.scala
-  top/top.scala     Top-level: instantiates NCoreBackend(K=32, N=8)
+  top/top.scala     Top-level: elaborates NpuProgramEngineFrontend(K=16, N=8, W=4)
 
 src/test/scala/
   utils/            testUtil helpers
@@ -107,9 +113,12 @@ src/test/scala/
 - **`regCls` not `width`** — the `NCoreVALUBundle` field is renamed `regCls`
   (was `width`) to avoid Chisel plugin naming conflict with `chisel3.Width`.
 
-- **`opcode` truncation** — `OpFamily` enum needs 5 bits max (values up to
-  0x18=24). When feeding 7-bit `opBits` into `OpFamily.safe(...)`, truncate
-  first: `opBits(4, 0)`.
+- **`opcode` is 7 bits, `OpFamily` is 6 bits** — `OpFamily` values run
+  0x00..0x27, so it auto-infers 6 bits and cannot represent opcodes with bit 6
+  set. The decoder compares the **full 7-bit** `opBits` and derives validity
+  from membership in `OpFamily.all` (`familyOK`). Never truncate the opcode
+  before decode: truncating would alias 0x40..0x7F onto valid families
+  (e.g. 0x40 → NOP).
 
 - **Negative literals** — `NpuAssembler` encodes instructions as Scala `Int`.
   Values with bit 31 set are negative in Scala. Always poke as
@@ -162,10 +171,14 @@ tool/test-specific-spec.sh backend.NCoreBackendQuantSpec
 
 # Available specs:
 # VALUArithSpec, VALULogicSpec, VALUMinMaxSpec, VALUReduceSpec
-# VALULutSpec, VALUActivationSpec, VALUCastSpec
+# VALUProgrammableLutSpec, VALUActivationSpec, VALUCastSpec
 # VALUFP32Spec, VALUCvtSpec
-# InstrDecoderSpec, MultiWidthRegisterSpec
-# NCoreBackendQuantSpec
+# InstrDecoderSpec, InstrTableSpec, NpuDisassemblerSpec
+# MultiWidthRegisterSpec, NCoreBackendQuantSpec, NCoreBackendGemmSoftmaxSpec
+# engine: NpuProgramEngineFrontendSpec, NpuProgramEngineTrajSpec,
+#         StreamedNSessionSpec, StreamedChainedSpec, StreamedVX0Spec,
+#         CaptureDeterminismSpec, CaptureTraceSpec, LateStoreCaptureSpec
+# dma: NpuDmaEngineSpec
 ```
 
 ---
@@ -175,10 +188,6 @@ tool/test-specific-spec.sh backend.NCoreBackendQuantSpec
 ```bash
 make build
 # Runs: docker run fangruil/chisel-dev:amd64 sbt run
-# Output: top.sv at repo root (1.7 MB, module MMALU, K=32)
+# Output: top.sv at repo root (~1.07 MB, top module NpuProgramEngineFrontend,
+#         submodules NpuProgramEngine, NpuDmaEngine, InstrDecoder, MMALU)
 ```
-
-The current Scala sources have compile errors in some files
-(`NpuAssembler.scala`, `SimpleBackend.scala`). These affect test compilation
-but NOT `top/top.scala` itself — `sbt run` (which only needs `top.Main`) may
-still succeed. Use the existing `top.sv` if `sbt run` fails.

@@ -218,28 +218,20 @@ End-to-end verified for K = 4 in
 
 Run with `tool/test-specific-spec.sh alu.mma.MMALUStreamReduceSpec`.
 
-### Gaps for software dispatch
+### Software-dispatch notes
 
-Two known asymmetries between the direct-ctrl MMALU interface (used by the
-tests) and the current ISA path; both must be resolved before a frontend can
-issue `mma`/`mma.last` to drive a real M×K reduction:
+1. **`MMA_LAST` decode** — **resolved**.  `InstrDecoder` now sets
+   `mma_keep := funct7[4]` for `mma.last` as well
+   (`src/main/scala/isa/instrDecoder.scala`, and `mma.last` is defined in
+   `InstrTable.scala`), so a literal `mma.last keep=true` accumulates rather
+   than replacing at the final data cycle.
+2. **MMA register-file addressing** — the program engine
+   (`NpuProgramEngine`) sequences MMA from the decoded `rs1`/`rs2`/`rd` (plus
+   the `vs3` C accumulator); the separate
+   `mma_a_addr`/`mma_b_addr`/`mma_out_addr` inputs are specific to the
+   test/legacy `NCoreBackend` (`src/main/scala/backend/SimpleBackend.scala`).
 
-1. **`MMA_LAST` decode** (`src/main/scala/isa/instrDecoder.scala:254-260`) sets
-   `mma_last := true` but leaves `mma_keep := false`.  Issued literally, the
-   last data cycle would `res := a·b` (REPLACE) rather than accumulate —
-   wiping the M-sum at the very end.  Fix options:
-    - Have `MMA_LAST` also honour `funct7[4]` as a keep bit (a literal
-      `mma.last keep=true` becomes well-defined), **or**
-    - Treat `mma.last` as a zero-data boundary marker that *follows* the last
-      `mma keep=true`.
-2. **MMA register-file addressing**
-   (`src/main/scala/backend/SimpleBackend.scala:90-92`) —
-   `mma_a_addr` / `mma_b_addr` / `mma_out_addr` are separate top-level inputs,
-   not yet driven from `dec.rs1` / `dec.rs2` / `dec.rd`.  A frontend has to
-   sequence them in lockstep with each `mma` instruction.
-
-Both are small, isolated fixes; this section documents the architectural
-capability so a future PR can rely on it.
+This section documents the architectural capability so a future PR can rely on it.
 
 ---
 
