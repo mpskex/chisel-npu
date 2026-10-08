@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "chisel-npu-py"
-version = "0.1.0"
+version = "0.2.1"
 description = "Python userspace driver for the Chisel NPU over the Xilinx XDMA kernel driver"
 readme = "README.md"
 license = "GPL-2.0"

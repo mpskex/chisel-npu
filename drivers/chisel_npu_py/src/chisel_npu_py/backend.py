@@ -1,15 +1,16 @@
 """XDMADevice — Python access to the NPU's XDMA interface (data side only).
 
 All address handling happens inside the pybind11 `_native` module
-(class `NativeXDMA`); Python never sees a DDR address or a register
-offset.  This class only moves buffers:
+(class `NativeXDMA`) against the NPUConfig supplied at construction; Python
+never sees a DDR address or a raw register offset.  This class only moves
+buffers:
 
-  * `write_staged("A", buf)` / `read_staged("OUT", out)` — MMALU operands
-    are addressed by NAME; the native module checks the name and the exact
-    byte size against its staging table;
-  * `operand_size("ACCUM")` — buffer sizes, for allocating arrays;
-  * `ctrl_read()` / `ctrl_write(value)` — the ctrl_lite register is a
-    single control word at a fixed offset inside the native module.
+  * `write_staged("A", buf, offset)` / `read_staged("OUT", out, offset)` —
+    named sections; offsets are section-relative and validated natively;
+  * `section_size("CODE")` — window sizes, for allocation and checks;
+  * `ctrl_read_reg(off)` / `ctrl_write_reg(off, val)` — the ctrl register
+    map by *name* is resolved in `chisel_npu_py.ctrl` (Python still passes
+    offsets, but they come from the single NPUConfig).
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from typing import Optional, Union
 
 import numpy as np
 
+from .config import NPUConfig, default_config
 from .errors import XDMAError
 
 try:
@@ -44,23 +46,34 @@ def _require_native():
     return _NativeXDMA
 
 
-class XDMADevice:
-    """A handle to one XDMA card's device nodes.
+def _sections_map(cfg: NPUConfig):
+    """{name: (base, window)} — the only place the Python→native boundary
+    serializes addresses (straight from the single NPUConfig)."""
+    return {name: (sec.base, sec.window) for name, sec in cfg.sections.items()}
 
-    Opens the h2c/c2h DMA channels and the bypass BAR inside the native
-    module and keeps them for the lifetime of the object.
-    """
+
+def _ctrl_map(cfg: NPUConfig):
+    return {name: off for name, off in cfg.ctrl.items()}
+
+
+class XDMADevice:
+    """A handle to one XDMA card's device nodes, configured by an NPUConfig."""
 
     def __init__(
         self,
+        cfg: Optional[NPUConfig] = None,
         prefix: str = _DEFAULT_PREFIX,
         h2c_ch: int = 0,
         c2h_ch: int = 0,
         native=None,
     ):
+        self.cfg = cfg if cfg is not None else default_config()
         self.prefix = prefix
         if native is None:
-            native = _require_native()(prefix, h2c_ch, c2h_ch)
+            native = _require_native()(
+                prefix, h2c_ch, c2h_ch,
+                _sections_map(self.cfg), _ctrl_map(self.cfg),
+            )
         self._native = native
 
     # ── discovery ───────────────────────────────────────────────────────────
@@ -83,30 +96,24 @@ class XDMADevice:
         """The underlying native module object (injectable for tests)."""
         return self._native
 
-    # ── staged MMALU operands (addressed by name; addresses owned natively) ─
+    # ── named sections (offsets only; addresses live in the NPUConfig) ──────
 
-    def write_staged(self, operand: str, data: Buffer) -> int:
-        """Stage operand *operand* ('A'|'B'|'ACCUM'|'OUT') to the NPU memory.
+    def write_staged(self, name: str, data: Buffer, offset: int = 0) -> int:
+        """Write *data* into named section *name* at section offset *offset*."""
+        return int(self._native.write_staged(name, data, int(offset)))
 
-        The native module checks the name AND the exact byte size; the
-        address itself never appears on the Python side.
-        """
-        return int(self._native.write_staged(operand, data))
+    def read_staged(self, name: str, out: Buffer, offset: int = 0) -> int:
+        """Read section *name* from *offset* into *out* (size-checked)."""
+        return int(self._native.read_staged(name, out, int(offset)))
 
-    def read_staged(self, operand: str, out: Buffer) -> int:
-        """Read operand *operand* back into *out* (size-checked, zero-copy)."""
-        return int(self._native.read_staged(operand, out))
+    def section_size(self, name: str) -> int:
+        """Byte window of section *name* (as owned by the NPUConfig)."""
+        return int(self._native.section_size(name))
 
-    def operand_size(self, operand: str) -> int:
-        """Byte size of the staged operand *operand* (as owned by native)."""
-        return int(self._native.operand_size(operand))
+    # ── ctrl register map (offsets from the NPUConfig) ──────────────────────
 
-    # ── ctrl_lite control word (single register, offset owned natively) ─────
+    def ctrl_read_reg(self, offset: int) -> int:
+        return int(self._native.ctrl_read_reg(int(offset)))
 
-    def ctrl_read(self) -> int:
-        """Read the ctrl_lite control word (start/done/busy bits)."""
-        return int(self._native.ctrl_read())
-
-    def ctrl_write(self, value: int) -> None:
-        """Write the ctrl_lite control word."""
-        self._native.ctrl_write(int(value))
+    def ctrl_write_reg(self, offset: int, value: int) -> None:
+        self._native.ctrl_write_reg(int(offset), int(value))
