@@ -13,6 +13,16 @@ Source `.env.sh` at repo root to set all paths:
 source .env.sh    # sets VIVADO, FPGA_HOST, SSH_IDENTITY, CHIP, VIVADO_JOBS, VIVADO_IMPL_STRATEGY
 ```
 
+**Verified local Vivado install (this dev host) — do not assume it is on `PATH`:**
+
+| Item | Value |
+|:-----|:------|
+| Install root | `$HOME/Vivado/2025.2/` → `/home/mpsk/Vivado/2025.2/` |
+| Binary | `$HOME/Vivado/2025.2/Vivado/bin/vivado` (**v2025.2, 64-bit**, verified 2026-10-12) |
+| On `PATH`? | **No** — `command -v vivado` fails. Always invoke `"$VIVADO"` after `source .env.sh`, or the absolute path above. |
+
+`~/.env.sh` sets `VIVADO="$HOME/Vivado/2025.2/Vivado/bin/vivado"`, so use `"$VIVADO"` in every command below. Do not use `~/Xilinx/...` — that path does not exist on this host.
+
 ## Quick build (current K=16 engine)
 
 ```bash
@@ -20,13 +30,13 @@ source .env.sh    # sets VIVADO, FPGA_HOST, SSH_IDENTITY, CHIP, VIVADO_JOBS, VIV
 make build                     # runs sbt inside Docker; K=16 engine, W=4, N=8
 
 # Step 2: build the engine bitstream via Vivado
-~/Xilinx/2025.2/Vivado/bin/vivado -mode batch \
+"$VIVADO" -mode batch \
     -source  ip/vivado/xc7k480t/scripts/build_npu_engine.tcl \
     -journal build/build_npu_engine_xc7k480t.jou \
     -log     build/build_npu_engine_xc7k480t.log
 
 # Step 3: engine build with the ILA debugger core
-~/Xilinx/2025.2/Vivado/bin/vivado -mode batch \
+"$VIVADO" -mode batch \
     -source  ip/vivado/xc7k480t/scripts/build_npu_engine_with_ila.tcl \
     -journal build/build_npu_engine_ila_xc7k480t.jou \
     -log     build/build_npu_engine_ila_xc7k480t.log
@@ -42,7 +52,7 @@ the explicit engine script above for the current bitstream.
 ## Manual Vivado build (legacy V10)
 
 ```bash
-~/Xilinx/2025.2/Vivado/bin/vivado -mode batch \
+"$VIVADO" -mode batch \
     -source  ip/vivado/xc7k480t/scripts/build_npu.tcl \
     -journal build/build_npu_xc7k480t.jou \
     -log     build/build_npu_xc7k480t.log
