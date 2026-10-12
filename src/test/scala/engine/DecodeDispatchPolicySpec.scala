@@ -49,6 +49,28 @@ class DecodeDispatchPolicySpec extends AnyFlatSpec {
     }
   }
 
+  it should "reject legacy R-format mma (rs3 aliases funct7)" in {
+    simulate(new StreamHarness(K = 16)) { dut =>
+      dut.io.session_reset.poke(false.B)
+      dut.clock.step()   // warm past the simulator's initial reset cycle (see above)
+      def expectIllegal(instr: Int): Unit = {
+        StreamSpecUtil.issue(dut, instr)
+        var n = 0
+        while (!dut.io.illegal_out.peek().litToBoolean && n < 50) { dut.clock.step(); n += 1 }
+        assert(dut.io.illegal_out.peek().litToBoolean, f"0x$instr%08x should be illegal")
+        dut.io.session_reset.poke(true.B); dut.clock.step()
+        dut.io.session_reset.poke(false.B)
+      }
+      // The legacy R-format mma carries `keep` in funct7[4], but the S-format
+      // rs3 (C accumulator) field aliases funct7[6:2].  keep=true sets
+      // funct7=0x12, so the aliased rs3 reads as 4 (= L/4) and trips the
+      // S-format C-operand range check.  The engine executes S-format MMA only
+      // and drives `keep` from the boundary gate, so this legacy encoding is
+      // intentionally engine-illegal.
+      expectIllegal(mma(rd = 0, rs1 = 4, rs2 = 8, keep = true))
+    }
+  }
+
   it should "still accept and drain an in-range one-shot session" in {
     simulate(new StreamHarness(K = 16)) { dut =>
       dut.io.session_reset.poke(false.B)
