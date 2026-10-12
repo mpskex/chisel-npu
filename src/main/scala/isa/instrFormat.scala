@@ -5,7 +5,7 @@
 //  Parameters used throughout the ISA:
 //    N(bits) — base lane width (default 8).  Always spelled N(bits) in prose.
 //    L       — number of base VX registers (default 32, divisible by 4).
-//    K       — SIMD lane count per register (default 8 for tests, 64 at top).
+//    K       — SIMD lane count per register (default 8 for tests, 16 at top (FPGA program engine)).
 //              Equals MMALU's array-side parameter n at the backend boundary.
 //
 //  Instruction formats (32-bit word):

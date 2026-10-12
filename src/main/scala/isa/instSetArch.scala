@@ -14,7 +14,7 @@
 //  Notation :
 //    N(bits) — base lane width in bits (default 8). MMALU's nbits.
 //    L       — number of VX base registers (default 32, must be div-by-4).
-//    K       — SIMD lane count per register (8 for tests, 64 at top).
+//    K       — SIMD lane count per register (8 for tests, 16 at top (FPGA program engine)).
 //              Equals MMALU's array-side n at the backend boundary.
 //    VX[0..L-1]   — L  registers of K × N    bits
 //    VE[0..L/2-1] — 16 registers of K × 2N   bits (alias VX[2i..2i+1])
