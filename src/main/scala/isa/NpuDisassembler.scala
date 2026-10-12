@@ -70,11 +70,9 @@ object NpuDisassembler {
   // Mirror InstrDecoder's width/dtype reserved-value checks.  I-format rows
   // (including LD/ST) carry an immediate where R/S carry funct7 and are exempt
   // from both; FP (0x16) / FP_FMA (0x17) force VR and don't care about width.
-  private def attrOK(d: InstrDef, width: Int, dtype: Int): Boolean = {
-    val widthExempt = d.fmt == Fmt.I || d.opcode == 0x16 || d.opcode == 0x17
-    val dtypeExempt = d.fmt == Fmt.I
-    (widthExempt || width != 3) && (dtypeExempt || dtype != 3)
-  }
+  private def attrOK(d: InstrDef, width: Int, dtype: Int): Boolean =
+    (InstrTable.widthExempt(d) || width != 3) &&
+    (InstrTable.dtypeExempt(d) || dtype != 3)
 
   private def rd(word: Int): Int    = (word >> 7) & 0x1F
   private def rs1(word: Int): Int   = (word >> 15) & 0x1F
