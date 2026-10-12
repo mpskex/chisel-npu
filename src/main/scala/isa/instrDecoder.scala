@@ -97,16 +97,21 @@ class InstrDecoder extends Module {
   // funct3 match.  Reserved opcodes are rejected by familyOK regardless of
   // f3OK, so the true default cannot leak an unaliased reserved word.
   val f3OK = WireDefault(true.B)
-  // isIFmt flags a matched I-format row.  I-format instructions carry a 12-bit
-  // immediate where R/S-format families carry funct7, so the width/dtype
-  // attribute checks below are meaningless (and wrong) for them.
-  val isIFmt = WireDefault(false.B)
+  // widthExemptD / dtypeExemptD flag whether the matched row's funct7 width /
+  // dtype attribute is meaningful.  I-format instructions carry a 12-bit
+  // immediate where R/S-format families carry funct7, so both checks are
+  // meaningless (and wrong) for them; FP (0x16) / FP_FMA (0x17) rows carry a
+  // dtype but no register-class width field.  InstrTable owns this
+  // classification; the fold below applies it from the matched def.
+  val widthExemptD = WireDefault(false.B)
+  val dtypeExemptD = WireDefault(false.B)
   for ((opcode, defs) <- InstrTable.byOpcode if opcode != 0x00 && opcode != 0x14) {
     when (opBits === opcode.U) {
       f3OK := false.B
       for (d <- defs) when (f3 === d.funct3.U) {
         vecOp := d.op; f3OK := true.B
-        if (d.fmt == Fmt.I) { isIFmt := true.B }
+        widthExemptD := InstrTable.widthExempt(d).B
+        dtypeExemptD := InstrTable.dtypeExempt(d).B
       }
     }
   }
@@ -149,12 +154,10 @@ class InstrDecoder extends Module {
   // Width bits are repurposed for src format in CVT family; skip width check for
   // CVT.  I-format rows carry an immediate in funct7, so width attributes do not
   // apply (this also subsumes the LD/ST exemption — both are I-format).
-  val widthOK = !((f7Width === 3.U) && !isIFmt &&
+  val widthOK = !((f7Width === 3.U) && !widthExemptD &&
     (family =/= OpFamily.VALU_FP) &&
     (family =/= OpFamily.VALU_FP_FMA) &&
-    (family =/= OpFamily.VALU_CVT) &&
-    (family =/= OpFamily.LD) &&
-    (family =/= OpFamily.ST))
+    (family =/= OpFamily.VALU_CVT))
 
   // ---------- Dtype decode ----------
   // BF8 variant from funct7[6] (cvt family) or bf8E5M2 forced
@@ -174,9 +177,7 @@ class InstrDecoder extends Module {
 
   // I-format immediate high bits alias funct7[6:5]; dtype is not applicable
   // (subsumes the LD/ST exemption — both are I-format).
-  val dtypeOK = !((f7Dtype === 3.U) && !isIFmt &&
-    (family =/= OpFamily.LD) &&
-    (family =/= OpFamily.ST))
+  val dtypeOK = !((f7Dtype === 3.U) && !dtypeExemptD)
 
   // ---------- MMA control ----------
   val mmaKeep  = WireDefault(false.B)
