@@ -512,6 +512,9 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   rf.io.vx_r_addr(1) := Mux(feedValid, feedRs2, 0.U)
   rf.io.vr_r_addr(1) := Mux(feedValid, feedVs3, 0.U)
 
+  // The program engine drives MMALU `keep` from the boundary gate
+  // (`keep := !boundaryPulse`); the decoded `mma_keep` (funct7[4]) is retained
+  // for `NCoreBackend` but is ignored at the engine top.
   mmalu.io.ctrl.keep      := !boundaryPulse
   mmalu.io.ctrl.busy      := feedValid
   mmalu.io.ctrl.use_accum := feedValid

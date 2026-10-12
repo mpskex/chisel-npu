@@ -180,6 +180,10 @@ class InstrDecoder extends Module {
   val dtypeOK = !((f7Dtype === 3.U) && !dtypeExemptD)
 
   // ---------- MMA control ----------
+  // `mma_keep` here is the decoded funct7[4].  It is retained for
+  // `NCoreBackend`, but at the engine top the program engine drives MMALU
+  // `keep` from the boundary gate (`keep := !boundaryPulse`); the decoded
+  // `mma_keep` is ignored there.
   val mmaKeep  = WireDefault(false.B)
   val mmaLast  = WireDefault(false.B)
   val mmaReset = WireDefault(false.B)
