@@ -17,7 +17,6 @@
 package isa
 
 import chisel3._
-import chisel3.util._
 
 import isa.micro_op.VecOp
 

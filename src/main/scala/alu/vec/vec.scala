@@ -3,7 +3,7 @@
 //  vec.scala — Vector ALU (VALU) and Q-format LUT tables
 //
 //  Parameters:
-//    K    — SIMD lane count per register (8 for tests, 64 at top)
+//    K    — SIMD lane count per register (8 for tests, 16 at top (FPGA program engine))
 //    N    — base lane width in bits / N(bits) (default 8)
 //
 //  Register-class widths used by VALU datapaths:

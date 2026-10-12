@@ -100,8 +100,10 @@ class InstrDecoder extends Module {
   // widthExemptD / dtypeExemptD flag whether the matched row's funct7 width /
   // dtype attribute is meaningful.  I-format instructions carry a 12-bit
   // immediate where R/S-format families carry funct7, so both checks are
-  // meaningless (and wrong) for them; FP (0x16) / FP_FMA (0x17) rows carry a
-  // dtype but no register-class width field.  InstrTable owns this
+  // meaningless (and wrong) for them; the width field is additionally absent
+  // for FP (0x16) / FP_FMA (0x17) rows, which carry a dtype but no
+  // register-class width.  The width exemption therefore covers I-format plus
+  // FP, while the dtype exemption is I-format-only.  InstrTable owns this
   // classification; the fold below applies it from the matched def.
   val widthExemptD = WireDefault(false.B)
   val dtypeExemptD = WireDefault(false.B)
