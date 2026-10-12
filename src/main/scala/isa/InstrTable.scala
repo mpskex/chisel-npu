@@ -16,6 +16,9 @@
 
 package isa
 
+import chisel3._
+import chisel3.util._
+
 import isa.micro_op.VecOp
 
 // ---------------------------------------------------------------------------
@@ -194,4 +197,32 @@ object InstrTable {
     "InstrTable: opcode must fit 7 bits and funct3 must be in 0..7")
   require(cvtPairs.map(p => (p.dst, p.src)).distinct.size == cvtPairs.size,
     "InstrTable: duplicate cvt pair")
+
+  // -------------------------------------------------------------------------
+  // Legality helpers — shared attribute-exemption classification.
+  //
+  // The funct7 attribute fields are meaningful only for R-format VALU rows:
+  //   * `width` is also present for FP (0x16) / FP_FMA (0x17), which carry a
+  //     dtype but no register-class width field;
+  //   * I-format rows overlap funct7 with the immediate, so both width and
+  //     dtype are don't-care there.
+  // InstrDecoder and NpuDisassembler consume these predicates instead of
+  // re-deriving the rule inline.
+  // -------------------------------------------------------------------------
+  def widthExempt(d: InstrDef): Boolean =
+    d.fmt == Fmt.I || d.opcode == 0x16 || d.opcode == 0x17
+
+  def dtypeExempt(d: InstrDef): Boolean =
+    d.fmt == Fmt.I
+
+  // -------------------------------------------------------------------------
+  // isMmaLastWord — true iff the word's opcode is MMA (0x03) and its funct3 is
+  // 1 (mma.last), the group drain/collect marker.  funct3 occupies bits
+  // [14:12].  The engine consumes the UInt overload.
+  // -------------------------------------------------------------------------
+  def isMmaLastWord(w: UInt): Bool =
+    (w & 0x7F.U) === 0x03.U && ((w >> 12) & 7.U) === 1.U
+
+  def isMmaLastWord(w: Int): Boolean =
+    (w & 0x7F) == 0x03 && ((w >> 12) & 7) == 1
 }

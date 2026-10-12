@@ -113,4 +113,18 @@ class InstrTableSpec extends AnyFlatSpec {
       }
     }
   }
+
+  // ==========================================================================
+  // Attribute exemptions + mma.last classification (shared legality helpers).
+  // ==========================================================================
+  "InstrTable" should "classify attribute exemptions and mma.last" in {
+    val r  = InstrTable.byMnemonic("vadd")
+    assert(!InstrTable.widthExempt(r) && !InstrTable.dtypeExempt(r))
+    val i  = InstrTable.byMnemonic("vle8")
+    assert(InstrTable.widthExempt(i) && InstrTable.dtypeExempt(i))
+    val fp = InstrTable.byMnemonic("vfadd")
+    assert(InstrTable.widthExempt(fp) && !InstrTable.dtypeExempt(fp))
+    assert(InstrTable.isMmaLastWord(NpuAssembler.mmaLast(0, 0, 0, 0)))
+    assert(!InstrTable.isMmaLastWord(NpuAssembler.mma(0, 0, 0, 0)))
+  }
 }
