@@ -23,6 +23,7 @@ package engine
 
 import chisel3._
 import chisel3.util._
+import isa._
 
 class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends Module {
 
@@ -156,7 +157,7 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
   val framesDone = RegInit(0.U(16.W))
   val issuedWord = RegInit(0.U(32.W))   // word currently executing
 
-  val isMmaLast = issuedWord(6, 0) === 0x03.U && issuedWord(14, 12) === 1.U
+  val isMmaLast = InstrTable.isMmaLastWord(issuedWord)
 
   // ==========================================================================
   // Instruction cache: 8 sets × 2 ways × 4-word lines
