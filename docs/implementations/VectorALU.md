@@ -218,7 +218,7 @@ Writes one K×4-byte segment from `VR[rs1]` into the selected bank.
 | K | Bytes per VR | `vsetlut` calls to fill 256-entry bank |
 |:---:|:---:|:---:|
 | 8 | 32 | 8 |
-| 64 | 256 | 1 |
+| 16 | 64 | 4 |
 
 !!! note "Reserved funct3 values"
     funct3 `010`, `011`, `110`, `111` are reserved; the decoder asserts `illegal`.
@@ -232,23 +232,23 @@ Writes one K×4-byte segment from `VR[rs1]` into the selected bank.
 
 ### VALU_CVT — Type conversion
 
-Opcode family `0x14`. `funct3` = destination format code; `funct7[2:0]` = source format code.
+Opcode family `0x14`. `funct3` = source format code; `funct7[2:0]` = destination format code.
 Decoder asserts `illegal` if src == dst.
 
 | Mnemonic | Src | Dst | Input port | Output port | Ticks |
 |:---|:---:|:---:|:---:|:---:|:---:|
-| `vcvt_s8_s32` | s32 | s8 | `in_a_vr` | `out_vx` | 1 |
-| `vcvt_s32_s8` | s8 | s32 | `in_a_vx` | `out_vr` | 1 |
+| `vcvt_s8_s32` | s8 | s32 | `in_a_vx` | `out_vr` | 1 |
+| `vcvt_s32_s8` | s32 | s8 | `in_a_vr` | `out_vx` | 1 |
 | `vcvt_s32_f32` | s32 | f32 | `in_a_vr` | `out_vr` | 1 |
 | `vcvt_f32_s32` | f32 | s32 | `in_a_vr` | `out_vr` | 1–2 |
 | `vcvt_s8_f32` | s8 | f32 | `in_a_vx` | `out_vr` | 1 |
 | `vcvt_f32_s8` | f32 | s8 | `in_a_vr` | `out_vx` | 1–2 |
-| `vcvt_f32_bf16` | bf16 | f32 | `in_a_ve` | `out_vr` | 1 |
-| `vcvt_bf16_f32` | f32 | bf16 | `in_a_vr` | `out_ve` | 1 |
-| `vcvt_f32_bf8` | bf8 | f32 | `in_a_vx` | `out_vr` | 1 |
-| `vcvt_bf8_f32` | f32 | bf8 | `in_a_vr` | `out_vx` | 1 |
-| `vcvt_s16_s32` | s32 | s16 | `in_a_vr` | `out_ve` | 1 |
-| `vcvt_s32_s16` | s16 | s32 | `in_a_ve` | `out_vr` | 1 |
+| `vcvt_f32_bf16` | f32 | bf16 | `in_a_vr` | `out_ve` | 1 |
+| `vcvt_bf16_f32` | bf16 | f32 | `in_a_ve` | `out_vr` | 1 |
+| `vcvt_f32_bf8` | f32 | bf8 | `in_a_vr` | `out_vx` | 1 |
+| `vcvt_bf8_f32` | bf8 | f32 | `in_a_vx` | `out_vr` | 1 |
+| `vcvt_s16_s32` | s16 | s32 | `in_a_ve` | `out_vr` | 1 |
+| `vcvt_s32_s16` | s32 | s16 | `in_a_vr` | `out_ve` | 1 |
 
 ---
 

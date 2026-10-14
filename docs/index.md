@@ -31,6 +31,9 @@ Confusing them causes hard-to-debug hardware elaboration errors.
     | VE[0..L/2-1] | 16 | 2N bits | VE[i] = VX[2i] ∥ VX[2i+1] |
     | VR[0..L/4-1] | 8 | 4N bits | VR[i] = VX[4i..4i+3] |
 
+    The counts above are the `L=32` test default. At the FPGA top (`L=16`),
+    the counts are **VX 16 / VE 8 / VR 4**.
+
     The FPGA top is the streamed **program engine**
     (`engine/NpuProgramEngineFrontend`, `K=16, N=8, W=4`); it sets `L = K`, so its
     register file is 256 B. The `K=8` column is the `NCoreBackend` test default;
@@ -60,7 +63,7 @@ Confusing them causes hard-to-debug hardware elaboration errors.
 
 - [Quantization Pipeline](implementations/Quantization.md) — worked example: MMA → vcvt → vfma → vcvt INT8 requantization
 
-- [FPGA Verification Platform (xc7k480t)](implementations/FPGA_XC7K480T.md) — PCIe Gen2×8 + dual DDR3 + K=16 program engine at 200 MHz; legacy V10 topology history
+- [FPGA Verification Platform (xc7k480t)](implementations/FPGA_XC7K480T.md) — PCIe Gen2×8 + dual DDR3 + K=16 program engine at 100 MHz; legacy V10 topology history
 
 - [FPGA Bring-up (xcvu9p)](implementations/FPGA_VU9P.md) — Virtex UltraScale+ (`xcvu9p-flgb2104-2-e`): PCIe Gen3×8 + 4× DDR4, engine timing-closed at 200 MHz, remote `hw_server` programming
 

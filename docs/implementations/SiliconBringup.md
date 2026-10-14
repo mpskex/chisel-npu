@@ -18,9 +18,16 @@ in the fixes documented in `docs/designs/04.streamed-issuing.md`.
 
 ## Symptom timeline and root causes
 
+Two failure classes appeared on silicon: an intermittent **pc=4 wedge** and
+otherwise-clean-but-**wrong captures**.  The per-fix root-cause catalogue for
+both is
+[`docs/designs/04.streamed-issuing.md` §13 "Silicon-verified determinism fixes"](../designs/04.streamed-issuing.md);
+the narrative below records only the silicon-specific observations that the
+design doc does not.
+
 ### A. The engine wedge (`NPUTimeoutError`, `busy=1`, pc=4)
 
-The first blocker: the run() never asserted `done`; the engine sat at
+The first blocker: the `run()` never asserted `done`; the engine sat at
 pc=4 (the `vse32`) with `busy=1` and `drain` deasserted, ~60% of the time.
 
 ILA probing of the DMA FSM showed the store's write **beats were accepted
@@ -29,46 +36,23 @@ DMA in WRESP — intermittent, independent of clock/timing (a timing-clean
 100 MHz build wedged identically), which proved it was a functional bug, not
 marginal timing.
 
-Root cause chain (each fix removed one failure mode):
-
-1. **`useCapData` detection required a pending prior producer.**  When the
-   mma's `clctD` retired the producer before the store word entered the
-   window (variable MIG read latency), the store missed the capture: it read
-   the register file instead of popping the capture queue, the mma's capture
-   sat in capQ forever, and `drain` never asserted.  *Fix:* detect capture
-   consumers by `vxWrCap` alone (it survives producer retirement).
-2. **No session reset.**  A wedged run's leftover queue state contaminated
-   the next run, and a spurious capQ pop underflowed the counters
-   (`wcount=0xF`, `capq=0x1F` observed in the drain-state registers).
-   *Fix:* a full session reset (all slot fields, scoreboard masks, queues,
-   boundary) on the frontend start edge.
+The wedge fixes are rows 1–2 of §13 (capture-consumer detection by `vxWrCap`
+alone; net `wCount` accounting) together with the **session reset** of §10.
+Without the reset, a wedged run's leftover queue state contaminated the next
+run and a spurious capQ pop underflowed the counters (`wcount=0xF`,
+`capq=0x1F` observed in the drain-state registers).
 
 ### B. The wrong captures (clean scalar multiples `a·R`, R ∉ b)
 
 Even timing-clean, ~12–16% of captures were `a·R` with R outside the staged
 `b` vector (doubles like 2·114, small/garbage values, or all-zero).  The
 simulation reproduced it deterministically (iter 6 of a back-to-back loop),
-which allowed full trace visibility:
+which allowed full trace visibility.
 
-1. **Collector `cnt` phase accumulated across runs.**  The free-running
-   counter wrapped on a bad diagonal every ~8 runs.  *Fix:* deterministic
-   `cnt` reset at each collection window.
-2. **The `keep=0` PE reset fired before the mma's capture.**  With the
-   `4K−1` boundary countdown, the reset landed one tick before the mma's
-   clct, zeroing the array before the capture read it.  *Fix:* `6K−1`
-   countdown so the reset fires after the capture's `clctD`.
-3. **`mma.last` could overtake the mma.**  It has no operand dependencies,
-   so it could issue first, start the boundary countdown, and gate the mma
-   out entirely (the mma never fed → zero array).  *Fix:* `mma.last` waits
-   for prior pending non-last MMAs.
-4. **The fetch fill's placeholder `slotIdx=0` retired a live slot.**  The
-   fetch-fill DMA completion unconditionally marked `slots(0).done`, which
-   spuriously retired whichever real instruction owned ring slot 0 (the
-   mma) — the mma never fed → zero array.  *Fix:* fetch fills never touch
-   window slots.
-5. **A stale clct from a previous session retired a live slot.**  The
-   `clctD` completion acted even when the vd FIFO was empty, reading a stale
-   FIFO entry's slotIdx.  *Fix:* gate completions on `fifoCount != 0`.
+The wrong-capture fixes are rows 3–7 of §13: the deterministic collector `cnt`
+reset, the `6K−1` boundary countdown, the `priorMma` ordering gate, fetch fills
+never touching window slots, and gating `clctD` completions on a non-empty vd
+FIFO.
 
 ### C. Environment quirks encountered along the way
 

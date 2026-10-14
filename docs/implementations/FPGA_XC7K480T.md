@@ -118,6 +118,13 @@ XDMA 4.2 (128-bit AXI @ axi_aclk = 125 MHz)
 | `c1_ui_clk` | 133 MHz | MIG C1 PLL | MIG C1 UI, axi_xbar.M01 (V10: cross-clock to C1 via internal async FIFO) |
 | `userclk1` | 250 MHz | XDMA PCIe GTX | PCIe PHY internal only — waived via `set_false_path` |
 
+!!! note "Current-engine fabric clock"
+    The table above describes the **legacy V10** `npu_subsys` topology, whose
+    `fabric_aclk` was 200 MHz. The current **K=16 streamed program engine** is
+    silicon-verified at **100 MHz** on xc7k480t (see
+    `SiliconBringup.md`); 200 MHz is used on the xcvu9p build. Do not assume
+    200 MHz for the current xc7k480t engine bitstream.
+
 ### Address map (V10)
 
 Both the host's `xdma_0/M_AXI` and the NPU's `npu_subsys/m_axi` see an
@@ -321,13 +328,13 @@ by a reused netlist.
 cd /path/to/chisel-npu
 
 # Production engine build (no ILA):
-~/Xilinx/2025.2/Vivado/bin/vivado -mode batch \
+"$VIVADO" -mode batch \
     -source  ip/vivado/xc7k480t/scripts/build_npu_engine.tcl \
     -journal ip/vivado/xc7k480t/scripts/build_npu_engine.jou \
     -log     ip/vivado/xc7k480t/scripts/build_npu_engine.log
 
 # Or, debug engine build with the ILA core wired in:
-~/Xilinx/2025.2/Vivado/bin/vivado -mode batch \
+"$VIVADO" -mode batch \
     -source  ip/vivado/xc7k480t/scripts/build_npu_engine_with_ila.tcl \
     -journal ip/vivado/xc7k480t/scripts/build_npu_engine_with_ila.jou \
     -log     ip/vivado/xc7k480t/scripts/build_npu_engine_with_ila.log
