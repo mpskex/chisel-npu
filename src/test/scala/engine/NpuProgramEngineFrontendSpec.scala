@@ -366,4 +366,28 @@ class NpuProgramEngineFrontendSpec extends AnyFlatSpec {
         s"each run should re-demand-fill the program lines: run1=$misses1 run2=$misses2")
     }
   }
+
+  "NpuProgramEngineFrontend" should "pipeline the instruction feed (back-to-back words)" in {
+    simulate(new FrontendSpecHarness(K = 16)) { dut =>
+      // One 16 B line of NOPs (all retire on entry, so the core never back-pressures):
+      // a pipelined feed advances the issued pc on consecutive cycles.
+      val prog = Seq.fill(4)(nop)
+      preloadInstrs(dut, prog)
+      ctrlWrite(dut, 0x14, prog.length)
+      start(dut)
+
+      var prevPc = -1L
+      var run    = 0
+      var maxRun = 0
+      var n      = 0
+      while (((ctrlRead(dut, 0x0) >> 1) & 1) == 0 && n < 10000) {
+        val p = dut.io.dbg_pc.peek().litValue.toLong
+        if (p == prevPc + 1) { run += 1; if (run > maxRun) maxRun = run } else run = 0
+        prevPc = p
+        dut.clock.step(); n += 1
+      }
+      assert(maxRun >= 2,
+        s"instruction feed is not pipelined: max consecutive pc increments = $maxRun")
+    }
+  }
 }
