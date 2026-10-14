@@ -94,9 +94,9 @@ A Pblock around the NPU does **not** help — it forces SLR (Laguna) crossings a
 the routing blows up; the engine was made to fit by reducing it (W=4 + the
 2-stage feed pipeline), not by floorplanning.
 
-With that, the engine fabric domain closes at 200 MHz (WNS ≈ +0.05 ns, 0 failing
-endpoints) and the whole design reports *"All user specified timing constraints
-are met."*
+With that, the engine fabric domain closes at 200 MHz (`WNS ≈ +0.05 ns`,
+0 failing endpoints; `+0.035 ns` on the later pipelined-frontend build) and the
+whole design reports *"All user specified timing constraints are met."*
 
 ## Build
 

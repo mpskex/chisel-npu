@@ -192,7 +192,7 @@ handoff for the bring-up record).
 ```mermaid
 graph LR
     HOST["host driver\n(ChiselNPU.run)"] -->|"CODE section\ninstruction words"| FE
-    FE["NpuProgramEngineFrontend\nLRU 8×2×4-word prefetch cache\npc / PROG_LEN / ctrl regs"] -->|"word + valid"| ENG
+    FE["NpuProgramEngineFrontend\nLRU 8×2×4-word prefetch cache\nfetch engine + IFQ (depth 8)\npc / PROG_LEN / ctrl regs"] -->|"word + valid (1/cyc)"| ENG
     ENG["NpuProgramEngine\ndecode + raw-signal dispatch"] -->|"in_a/in_b/in_accum\nctrl.busy/keep/use_accum"| MMA
     ENG -->|"vle/vse requests"| DMA["NpuDmaEngine\nAXI4 master (L3 ↔ RF + fills)"]
     MMA["MMALU\nK×K systolic array\n(all timing inside)"] -->|"out[K] at clct"| ENG
@@ -201,18 +201,25 @@ graph LR
 ```
 
 - **Frontend** (`npuFrontend.scala`): fetches 16 B lines (4 words) from CODE
-  via the shared DMA, caches them in an 8-set×2-way LRU cache, streams words
-  in order, counts `mma.last` frames, and exposes the ctrl register map
-  (CTRL/STATUS/ERR_INFO/FETCH_STATS/PROG_LEN + debug). Writes to
-  PROG_LEN/start invalidate the cache.
-- **Engine** (`npuProgramEngine.scala`): states `IDLE, DMA_REQ, DMA_WAIT,
-  DONE_1, ILLEGAL` plus a capture FIFO (vd queue, depth 2K+4). For each
-  `mma`/`mma.last` it asserts one feed tick (`busy=1, keep=1, use_accum=1`)
-  with the combinational RF reads `in_a=VX[vs1]`, `in_b=VX[vs2]`,
-  `in_accum=VR[vs3]` (x0 → 0), stays in IDLE (back-to-back feeds = the MMALU
-  K-burst), and pushes `vd`. Each clct pulse (one per feed, 2n−1 later) pops
-  the FIFO and writes the collector's output column to `VR[vd]`. After an
-  `mma.last`'s own capture, `keep` drops for one tick — the MMALU boundary
+  via the shared DMA and caches them in an 8-set×2-way LRU cache. A **fetch
+  engine** (fetch pc `fpc`) enqueues `{word, pc}` into a small **instruction
+  FIFO** (IFQ, depth 8); an **issue stage** drives the engine from the IFQ head
+  and pops one word per cycle when `instr_ready` — decoupled fetch/issue (a
+  fetch→IFQ→issue pipeline, ~1 word/cycle) rather than the earlier
+  `RUN_FETCH→RUN_ISSUE→RUN_WAIT` handshake (~2–3 cycles/word). It counts
+  `mma.last` frames on issue, does demand-fill + next-line prefetch, and
+  exposes the ctrl register map (CTRL/STATUS/ERR_INFO/FETCH_STATS/PROG_LEN +
+  debug). Writes to PROG_LEN/start invalidate the cache. `done` asserts once
+  all words are issued (`fpc == PROG_LEN && IFQ empty`) and the engine drained.
+  (See `docs/designs/04.streamed-issuing.md` §12.)
+- **Engine** (`npuProgramEngine.scala`): the windowed-scoreboard streamed
+  dispatcher (see `docs/designs/04.streamed-issuing.md` for the authoritative
+  model). For each `mma`/`mma.last` it asserts one feed tick
+  (`busy=1, keep=1, use_accum=1`) with the RF reads `in_a=VX[vs1]`,
+  `in_b=VX[vs2]`, `in_accum=VR[vs3]` (x0 → 0), and pushes `vd`. Each clct pulse
+  (one per feed, 2n−1 later) pops the FIFO and writes the collector's output
+  column to `VR[vd]`. After an `mma.last`'s own capture, `keep` drops for one
+  tick — the MMALU boundary
   that resets the PEs for the next session. `keep` is held high otherwise
   (the MMALU idle pattern).
 

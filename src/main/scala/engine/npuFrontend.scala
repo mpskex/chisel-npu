@@ -5,9 +5,11 @@
 //
 //  Program instructions live in the CODE section (entry at the base).  The
 //  frontend fetches 16 B lines (4 words) through the engine's shared DMA
-//  (fetch_fill_* ports), caches them in an 8-set × 2-way binary-LRU cache
-//  (64 instructions), and streams words to the execution core with
-//  pc = 0..PROG_LEN-1.  On io.illegal_out it latches ERR_INFO, sets
+//  (fetch_fill_* ports) and caches them in an 8-set × 2-way binary-LRU cache
+//  (64 instructions).  A fetch engine walks the fetch pc and enqueues
+//  {word, pc} into a small instruction FIFO (IFQ, depth 8); an issue stage
+//  feeds the execution core from the IFQ head at up to one word per cycle
+//  (fetch and issue decoupled).  On io.illegal_out it latches ERR_INFO, sets
 //  STATUS.illegal and halts (done asserts).
 //
 //  ctrl_lite registers (word-addressable via ctrl_addr[3:0]):

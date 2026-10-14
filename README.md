@@ -28,9 +28,10 @@ This is a chisel workbench designed for someone who like docker containers and v
   a Scala `java.lang.Float` reference (`NCoreBackendQuantSpec`,
   `NCoreBackendGemmSoftmaxSpec`).
 - **Streamed program engine** (`engine/NpuProgramEngineFrontend`, K=16, N=8,
-  dispatch window `W`): a fetched-instruction frontend + issue window with a
-  mask-based scoreboard, unit queues, MMA capture/chaining and a 2-stage MMALU
-  feed pipeline. This is the FPGA top (`src/main/scala/top/top.scala`, `W=4`).
+  dispatch window `W`): a pipelined frontend (fetch engine → instruction FIFO →
+  issue, ~1 word/cycle) feeding an issue window with a mask-based scoreboard,
+  unit queues, MMA capture/chaining and a 2-stage MMALU feed pipeline. This is
+  the FPGA top (`src/main/scala/top/top.scala`, `W=4`).
 - **FPGA reference platform**: Kintex-7 `xc7k480tffg1156-2` with PCIe Gen2×8 +
   dual DDR3 + the K=16 streamed program engine at 200 MHz fabric. See
   [docs/implementations/FPGA_XC7K480T.md](docs/implementations/FPGA_XC7K480T.md).
