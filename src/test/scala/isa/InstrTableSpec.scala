@@ -31,11 +31,11 @@ class InstrTableSpec extends AnyFlatSpec {
 
   // (opcode, funct3) pairs that are legal under neutral attributes:
   // all table entries, all funct3 for NOP (funct3 don't-care), and the CVT
-  // pairs whose source format is the neutral code S8 (0).
+  // pairs whose destination format (funct7[2:0]) is the neutral code S8 (0).
   private val legalNeutral: Set[(Int, Int)] = {
     val fromDefs   = InstrTable.defs.map(d => (d.opcode, d.funct3)).toSet
     val nopAll     = (0 to 7).map(f3 => (0x00, f3)).toSet
-    val cvtNeutral = InstrTable.cvtPairs.filter(_.src == S8).map(p => (0x14, p.dst)).toSet
+    val cvtNeutral = InstrTable.cvtPairs.filter(_.dst == S8).map(p => (0x14, p.src)).toSet
     fromDefs ++ nopAll ++ cvtNeutral
   }
 
@@ -47,7 +47,7 @@ class InstrTableSpec extends AnyFlatSpec {
     for (d <- InstrTable.defs)
       assert(d.opcode <= 0x7F && d.opcode >= 0 && d.funct3 >= 0 && d.funct3 <= 7,
         s"out-of-range ${d.mnemonic}: opcode=${d.opcode} funct3=${d.funct3}")
-    assert(InstrTable.cvtPairs.map(p => (p.dst, p.src)).distinct.size == InstrTable.cvtPairs.size,
+    assert(InstrTable.cvtPairs.map(p => (p.src, p.dst)).distinct.size == InstrTable.cvtPairs.size,
       "duplicate cvt pair")
     // byOpcode must cover exactly the expected opcode set (explicit literal,
     // so a missing/spurious family is caught), and each group must be well
@@ -81,15 +81,15 @@ class InstrTableSpec extends AnyFlatSpec {
       }
 
       for (p <- InstrTable.cvtPairs) {
-        val w = encR(0x14, p.dst, f7Cvt(p.src), 0, 0, 0)
+        val w = encR(0x14, p.src, f7Cvt(p.dst), 0, 0, 0)
         dut.io.instr.poke((w.toLong & 0xFFFFFFFFL).U)
         dut.clock.step(0)
         assert(!dut.io.illegal.peek().litToBoolean,
-          s"cvt(dst=${p.dst},src=${p.src}) unexpectedly illegal")
+          s"cvt(src=${p.src},dst=${p.dst}) unexpectedly illegal")
         assert(peekEnum(dut, dut.io.decoded.family) == BigInt(0x14),
-          s"cvt(dst=${p.dst},src=${p.src}): family != 0x14")
+          s"cvt(src=${p.src},dst=${p.dst}): family != 0x14")
         assert(peekEnum(dut, dut.io.decoded.valu.op) == p.op.litValue,
-          s"cvt(dst=${p.dst},src=${p.src}): valu.op mismatch")
+          s"cvt(src=${p.src},dst=${p.dst}): valu.op mismatch")
       }
     }
   }

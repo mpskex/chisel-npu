@@ -259,7 +259,7 @@ class InstrDecoderSpec extends AnyFlatSpec {
 
   "InstrDecoder" should "assert illegal for vcvt same src==dst" in {
     simulate(new InstrDecoder) { dut =>
-      val illegalCvt = encR(0x14, 3, f7Cvt(srcFmt=3), 0, 0, 0)
+      val illegalCvt = encR(0x14, 3, f7Cvt(dstFmt=3), 0, 0, 0)
       dut.io.instr.poke((illegalCvt.toLong & 0xFFFFFFFFL).U)
       dut.clock.step(0)
       assert(dut.io.illegal.peek().litToBoolean, "Same src==dst cvt should be illegal")
@@ -560,11 +560,11 @@ class InstrDecoderSpec extends AnyFlatSpec {
 
   "InstrDecoder" should "flag invalid CVT combinations as illegal" in {
     simulate(new InstrDecoder) { dut =>
-      for (dst <- Seq(6, 7)) // reserved dst format codes
-        check(dut, encR(0x14, dst, f7Cvt(srcFmt = S32), 0, 1, 0),
+      for (src <- Seq(6, 7)) // reserved source format codes (funct3)
+        check(dut, encR(0x14, src, f7Cvt(dstFmt = S32), 0, 1, 0),
           OpFamily.VALU_CVT, VecOp.vadd, expectIllegal = true)
-      for ((dst, src) <- Seq((S16, S8), (F32, S16), (S8, S16))) // uncorrelated
-        check(dut, encR(0x14, dst, f7Cvt(srcFmt = src), 0, 1, 0),
+      for ((src, dst) <- Seq((S16, S8), (F32, S16), (S8, S16))) // uncorrelated
+        check(dut, encR(0x14, src, f7Cvt(dstFmt = dst), 0, 1, 0),
           OpFamily.VALU_CVT, VecOp.vadd, expectIllegal = true)
     }
   }

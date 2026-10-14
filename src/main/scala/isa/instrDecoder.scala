@@ -68,7 +68,7 @@ class InstrDecoder extends Module {
   val f7Dtype = f7(InstrBits.F7_DTYPE_HI, InstrBits.F7_DTYPE_LO)
 
   // cvt-specific funct7 sub-fields
-  val f7CvtSrc = f7(InstrBits.F7_CVT_SRC_HI, InstrBits.F7_CVT_SRC_LO)
+  val f7CvtDst = f7(InstrBits.F7_CVT_DST_HI, InstrBits.F7_CVT_DST_LO)
   val f7CvtSat = f7(InstrBits.F7_CVT_SAT)
   val f7CvtRnd = f7(InstrBits.F7_CVT_RND_HI, InstrBits.F7_CVT_RND_LO)
   val f7Bf8    = f7(InstrBits.F7_CVT_BF8)
@@ -117,10 +117,10 @@ class InstrDecoder extends Module {
       }
     }
   }
-  when (opBits === 0x14.U) {          // CVT: legality from correlated (dst, src)
+  when (opBits === 0x14.U) {          // CVT: legality from correlated (src, dst)
     f3OK := false.B
     for (p <- InstrTable.cvtPairs)
-      when (f3 === p.dst.U && f7CvtSrc === p.src.U) { vecOp := p.op; f3OK := true.B }
+      when (f3 === p.src.U && f7CvtDst === p.dst.U) { vecOp := p.op; f3OK := true.B }
   }
 
   // ---------- Width decode — drive as raw UInt(2.W) to match NCoreVALUBundle ----------

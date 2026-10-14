@@ -21,7 +21,7 @@
 //    [6:5] dtype  : 00=INT  01=FP   10=BF     11=reserved
 //
 //  vcvt (VALU_CVT family) uses funct7 differently:
-//    [2:0] src format code  (see FmtCode enum)
+//    [2:0] dst format code  (see FmtCode enum)
 //    [3]   saturate
 //    [5:4] round mode
 //    [6]   BF8 variant      0=E4M3  1=E5M2
@@ -60,7 +60,7 @@ object InstrBits {
   val F7_DTYPE_LO = 5;  val F7_DTYPE_HI = 6   // [6:5] in funct7
 
   // vcvt funct7 sub-fields
-  val F7_CVT_SRC_LO = 0; val F7_CVT_SRC_HI = 2  // [2:0]
+  val F7_CVT_DST_LO = 0; val F7_CVT_DST_HI = 2  // [2:0] dst format
   val F7_CVT_SAT    = 3                           // [3]
   val F7_CVT_RND_LO = 4; val F7_CVT_RND_HI = 5  // [5:4]
   val F7_CVT_BF8    = 6                           // [6] BF8 variant
@@ -125,11 +125,11 @@ case class Funct7Attrs(
 }
 
 case class CvtFunct7(
-  srcFmt: Int = 0,
+  dstFmt: Int = 0,
   sat:    Boolean = true,
   round:  Int = 0,
   bf8E5M2: Boolean = false,
 ) {
   def encode: Int =
-    (srcFmt & 7) | ((if (sat) 1 else 0) << 3) | ((round & 3) << 4) | ((if (bf8E5M2) 1 else 0) << 6)
+    (dstFmt & 7) | ((if (sat) 1 else 0) << 3) | ((round & 3) << 4) | ((if (bf8E5M2) 1 else 0) << 6)
 }

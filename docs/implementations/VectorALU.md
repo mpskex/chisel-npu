@@ -59,7 +59,7 @@ graph TD
 Key properties:
 
 - **K lanes** processed in parallel; all three widths (N, 2N, 4N bits) are available simultaneously.
-- **1-cycle latency** for all ops except `vfma` (2 cycles) and rounding CVT ops (1–2 cycles).
+- **1-cycle latency** for all ops except `vfma` (2 cycles).
 - **Three output ports** registered with 1-cycle latency:
   - `out_vx` — `Vec(K, UInt(N.W))` — INT8/BF8 results; VX write bank
   - `out_ve` — `Vec(K, UInt(2N.W))` — INT16/BF16 results; VE write bank
@@ -240,9 +240,9 @@ Decoder asserts `illegal` if src == dst.
 | `vcvt_s8_s32` | s8 | s32 | `in_a_vx` | `out_vr` | 1 |
 | `vcvt_s32_s8` | s32 | s8 | `in_a_vr` | `out_vx` | 1 |
 | `vcvt_s32_f32` | s32 | f32 | `in_a_vr` | `out_vr` | 1 |
-| `vcvt_f32_s32` | f32 | s32 | `in_a_vr` | `out_vr` | 1–2 |
+| `vcvt_f32_s32` | f32 | s32 | `in_a_vr` | `out_vr` | 1 |
 | `vcvt_s8_f32` | s8 | f32 | `in_a_vx` | `out_vr` | 1 |
-| `vcvt_f32_s8` | f32 | s8 | `in_a_vr` | `out_vx` | 1–2 |
+| `vcvt_f32_s8` | f32 | s8 | `in_a_vr` | `out_vx` | 1 |
 | `vcvt_f32_bf16` | f32 | bf16 | `in_a_vr` | `out_ve` | 1 |
 | `vcvt_bf16_f32` | bf16 | f32 | `in_a_ve` | `out_vr` | 1 |
 | `vcvt_f32_bf8` | f32 | bf8 | `in_a_vr` | `out_vx` | 1 |

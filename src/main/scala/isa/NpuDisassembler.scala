@@ -9,7 +9,7 @@
 //
 //  Legality mirrors InstrDecoder:
 //    * NOP (0x00) is the sole funct3 don't-care opcode.
-//    * CVT (0x14) legality is the correlated (dst=funct3, src=funct7[2:0]) pair.
+//    * CVT (0x14) legality is the correlated (src=funct3, dst=funct7[2:0]) pair.
 //    * every other family is legal iff (opcode, funct3) appears in the table AND
 //      the funct7 attribute sub-fields are not reserved, i.e. width
 //      (funct7[1:0], bits [26:25]) != 3 and dtype (funct7[6:5], bits [31:30])
@@ -40,7 +40,7 @@ object NpuDisassembler {
 
   // (dst funct3, src funct7[2:0]) → vcvt mnemonic.
   private val cvtByPair: Map[(Int, Int), String] =
-    InstrTable.cvtPairs.map(p => (p.dst, p.src) -> opNames(p.op.litValue)).toMap
+    InstrTable.cvtPairs.map(p => (p.src, p.dst) -> opNames(p.op.litValue)).toMap
 
   def apply(word: Int): String = {
     val opcode = word & 0x7F
@@ -49,9 +49,9 @@ object NpuDisassembler {
     val dtype  = (word >> 30) & 0x3   // funct7[6:5] — reserved value 3
 
     if (opcode == 0x14) {
-      // CVT: legality is the correlated (dst, src) pair, src in funct7[2:0].
-      val src = (word >> 25) & 0x7
-      cvtByPair.get((funct3, src)) match {
+      // CVT: legality is the correlated (src=funct3, dst=funct7[2:0]) pair.
+      val dstFmt = (word >> 25) & 0x7
+      cvtByPair.get((funct3, dstFmt)) match {
         case Some(mnem) => withTail(mnem, s"rd(${rd(word)}), rs1(${rs1(word)})")
         case None       => "illegal"
       }

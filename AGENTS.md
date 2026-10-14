@@ -78,7 +78,7 @@ funct7 [4]   = saturate
 funct7 [6:5] = dtype   (0=INT, 1=FP, 2=BF)
 ```
 
-CVT family (`opcode=0x14`) repurposes `funct7[2:0]` as the source format code and `funct7[3]`
+CVT family (`opcode=0x14`) repurposes `funct7[2:0]` as the destination format code and `funct7[3]`
 as saturate. See `src/main/scala/isa/instrFormat.scala` for the full `CvtFunct7` layout.
 
 ### Opcode family assignments (values: `src/main/scala/isa/instSetArch.scala`; decode map: `src/main/scala/isa/InstrTable.scala`)

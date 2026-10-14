@@ -119,8 +119,8 @@ object Funct3Lut {
 }
 
 // VALU_CVT (opcode=0x14): type conversions
-// funct3 = destination format code (FmtCode object in instrFormat.scala)
-// funct7[2:0] = source format code; funct7[3]=sat; funct7[5:4]=round; funct7[6]=BF8 variant
+// funct3 = source format code (FmtCode object in instrFormat.scala)
+// funct7[2:0] = destination format code; funct7[3]=sat; funct7[5:4]=round; funct7[6]=BF8 variant
 // Width is determined by src/dst format (e.g. s32 implies VR; s8 implies VX).
 
 // VALU_BCAST (opcode=0x15): scalar broadcast to all K lanes

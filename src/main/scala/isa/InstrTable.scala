@@ -38,7 +38,7 @@ object Fmt {
 sealed trait Attr
 
 case object AttrStd  extends Attr   // R/I VALU: width/round/sat/dtype
-case object AttrCvt  extends Attr   // CVT: src/sat/round/bf8 (see cvtPairs)
+case object AttrCvt  extends Attr   // CVT: dst/sat/round/bf8 (see cvtPairs)
 case object AttrMem  extends Attr   // LD/ST: funct7 overlaps the immediate
 case object AttrNone extends Attr   // NOP: no attributes
 
@@ -59,10 +59,10 @@ case class InstrDef(
 )
 
 // ---------------------------------------------------------------------------
-// CvtPair — one legal CVT (dst, src) format pair.  funct3 carries the dst
-// format code; funct7[2:0] carries the src format code.
+// CvtPair — one legal CVT (src, dst) format pair.  funct3 carries the src
+// format code; funct7[2:0] carries the dst format code.
 // ---------------------------------------------------------------------------
-case class CvtPair(dst: Int, src: Int, op: VecOp.Type)
+case class CvtPair(src: Int, dst: Int, op: VecOp.Type)
 
 // ---------------------------------------------------------------------------
 // InstrTable — the decode map.
@@ -81,7 +81,7 @@ object InstrTable {
   // legality must special-case NOP rather than consult funct3 membership.
   //
   // CVT (0x14) is not represented here at all; its legality is the correlated
-  // (dst, src) format pairs in `cvtPairs`.
+  // (src, dst) format pairs in `cvtPairs`.
   // -------------------------------------------------------------------------
   val defs: Seq[InstrDef] = Seq(
     // -- NOP (0x00) — sole funct3 don't-care opcode; single entry at funct3=0 --
@@ -164,7 +164,7 @@ object InstrTable {
   )
 
   // -------------------------------------------------------------------------
-  // cvtPairs — the 12 legal CVT (dst, src) format pairs.
+  // cvtPairs — the 12 legal CVT (src, dst) format pairs.
   // Format codes: S8=0, S16=1, S32=2, F32=3, BF16=4, BF8=5.
   // -------------------------------------------------------------------------
   val cvtPairs: Seq[CvtPair] = Seq(
@@ -194,7 +194,7 @@ object InstrTable {
   require(byMnemonic.size == defs.size, "InstrTable: duplicate mnemonic")
   require(defs.forall(d => d.opcode >= 0 && d.opcode <= 0x7F && d.funct3 >= 0 && d.funct3 <= 7),
     "InstrTable: opcode must fit 7 bits and funct3 must be in 0..7")
-  require(cvtPairs.map(p => (p.dst, p.src)).distinct.size == cvtPairs.size,
+  require(cvtPairs.map(p => (p.src, p.dst)).distinct.size == cvtPairs.size,
     "InstrTable: duplicate cvt pair")
 
   // -------------------------------------------------------------------------

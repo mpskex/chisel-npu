@@ -39,7 +39,7 @@ class NpuDisassemblerSpec extends AnyFlatSpec {
   // ==========================================================================
   it should "round-trip every CVT pair" in {
     for (p <- InstrTable.cvtPairs) {
-      val w = encR(0x14, p.dst, f7Cvt(p.src), 2, 1, 0)
+      val w = encR(0x14, p.src, f7Cvt(p.dst), 2, 1, 0)
       val m = cvtMnemonic(p)
       val got = NpuDisassembler(w)
       assert(got.startsWith(m),
