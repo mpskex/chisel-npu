@@ -20,7 +20,7 @@ Backing design notes: [`ip/vivado/xcvu9p/README.md`](https://github.com/mpskex/c
 | VID:DID | `10ee:903f`, subsystem `0007` |
 | DDR4 | 4× MIG UltraScale+ (`MT40A1G16WBU-083E`, 72-bit, ECC), 300 MHz ui_clk |
 | Fabric clock | 200 MHz (`clk_wiz_fabric` MMCM from `axi_aclk` 250 MHz) |
-| JTAG | Digilent cable on the server, `hw_server` at `<server>:3121` |
+| JTAG | Digilent cable on the server, `hw_server` at `10.16.0.35:3121` |
 
 ## Architecture
 
@@ -118,7 +118,7 @@ The board is programmed from the **dev host** through the server's
 
 ```tcl
 open_hw_manager
-connect_hw_server -url <server>:3121 -allow_non_jtag
+connect_hw_server -url 10.16.0.35:3121 -allow_non_jtag
 current_hw_target [lindex [get_hw_targets] 0]
 open_hw_target
 current_hw_device [lindex [get_hw_devices xcvu9p_0] 0]
@@ -126,7 +126,7 @@ set_property PROGRAM.FILE {ip/vivado/xcvu9p/top_npu_vu9p.bit} [current_hw_device
 program_hw_devices [current_hw_device]
 ```
 
-## Host bring-up (`<server>`)
+## Host bring-up (`10.16.0.35`)
 
 The AMD FCH does not enumerate the card after a hot JTAG load:
 
@@ -147,8 +147,8 @@ The AMD FCH does not enumerate the card after a hot JTAG load:
 ## Validation
 
 ```bash
-FPGA_HOST=mpsk@<server> make py-deploy     # rsync + build + udev + selftest
-FPGA_HOST=mpsk@<server> make py-test-hw    # 7/7 PASS
+FPGA_HOST=10.16.0.35 make py-deploy     # rsync + build + udev + selftest
+FPGA_HOST=10.16.0.35 make py-test-hw    # 7/7 PASS
 ```
 
 Selftest: section round-trip + program run `pc=7 OK`. Hardware suite:

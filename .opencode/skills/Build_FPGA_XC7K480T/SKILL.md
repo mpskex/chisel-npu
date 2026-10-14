@@ -124,6 +124,20 @@ The same K=16 `NpuProgramEngineFrontend` (`top.sv`, W=4) is built for
 `xcvu9p-flgb2104-2-e` by `ip/vivado/xcvu9p/scripts/build_npu_vu9p.tcl` →
 `ip/vivado/xcvu9p/top_npu_vu9p.bit`.
 
+**Alivu9p board host (fixed): `mpsk-vu9p-server` = `10.16.0.35`** — SSH
+(`SSH_IDENTITY=~/.ssh/id_fpga_local`), passwordless sudo, remote `hw_server`
+at `10.16.0.35:3121`. Program + verify:
+```bash
+source .env.sh
+# 1. program the bitstream over the networked hw_server
+"$VIVADO" -mode batch -source <tcl that does: connect_hw_server -url 10.16.0.35:3121 -allow_non_jtag; open_hw_target; program_hw_devices xcvu9p_0>
+# 2. warm reboot so PCIe (10ee:903f @ 10:00.0) enumerates, then load the out-of-tree xdma
+FPGA_HOST=10.16.0.35 make py-deploy     # rsync + build + udev + selftest
+FPGA_HOST=10.16.0.35 make py-test-hw    # 7/7 PASS
+```
+Do NOT use the `.env.sh` default `FPGA_HOST=10.16.0.31` (that is the
+xc7k480t Kintex host); the vu9p server is always `10.16.0.35`.
+
 - **Placement directive**: `set_property STEPS.PLACE_DESIGN.ARGS.DIRECTIVE
   ExtraTimingOpt` — the multi-SLR device is congested around the GTY/PCIe edge
   under the default placer.
