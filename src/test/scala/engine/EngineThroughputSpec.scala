@@ -72,4 +72,63 @@ class EngineThroughputSpec extends AnyFlatSpec {
       }
     }
   }
+
+  "DMA-bound cadence (B3)" should "sweep DDR read latency for reloaded operands" in {
+    for (lat <- Seq(1, 100, 200)) {
+      simulate(new StreamHarness(K = K, readLatency = lat)) { dut =>
+        StreamSpecUtil.resetSession(dut)
+        val prog = Seq(vle8(4, NpuSections.SECT_A, 0), vle8(8, NpuSections.SECT_B, 0)) ++
+          (0 until 16).flatMap(m => Seq(
+            vle8(4, NpuSections.SECT_A, m * K), vle8(8, NpuSections.SECT_B, m * K),
+            mma(0, 4, 8, 0), vse32(0, NpuSections.SECT_OUT, (m % 8) * 4 * K))) :+ mmaLast(0, 0, 0, 0)
+        prog.foreach(StreamSpecUtil.issue(dut, _))
+        StreamSpecUtil.runToDrain(dut)
+        StreamSpecUtil.printPerf(s"B3 reload lat=$lat", K, StreamSpecUtil.perf(dut, K))
+      }
+    }
+  }
+
+  "RAW serialization (B4)" should "report MACs/cycle for a chained C reduction" in {
+    for (n <- Seq(8, 32)) {
+      simulate(new StreamHarness(K = K)) { dut =>
+        StreamSpecUtil.resetSession(dut)
+        // rd=3, vs3=3: VR[3]=VX[12..15] is disjoint from rs1=4/rs2=8; each mma
+        // reads the previous mma's VR[3] via C -> RAW chain. One vse per mma
+        // drains capQ (single vd, so the vse->mma WAR also serializes).
+        val prog = Seq(vle8(4, NpuSections.SECT_A, 0), vle8(8, NpuSections.SECT_B, 0)) ++
+          (0 until n).flatMap(i => Seq(
+            mma(3, 4, 8, 3), vse32(3, NpuSections.SECT_OUT, (i % 8) * 4 * K))) :+ mmaLast(0, 0, 0, 0)
+        prog.foreach(StreamSpecUtil.issue(dut, _))
+        StreamSpecUtil.runToDrain(dut)
+        StreamSpecUtil.printPerf(s"B4 chain n=$n", K, StreamSpecUtil.perf(dut, K))
+      }
+    }
+  }
+
+  def s8(v: Int): Int = { val b = v & 0xFF; if (b >= 128) b - 256 else b }
+
+  "Realistic tile (B5)" should "report MACs/cycle for vle/mma/vse tiles" in {
+    val T = 16
+    val aVals = Array.tabulate(T, K)((m, i) => s8(m * 3 + i + 1))
+    val bVals = Array.tabulate(K)(j => s8(50 + j))
+    simulate(new StreamHarness(K = K, readLatency = 100)) { dut =>
+      StreamSpecUtil.resetSession(dut)
+      StreamSpecUtil.preloadI8(dut, NpuSections.A, aVals.flatten.map(_ & 0xFF))
+      StreamSpecUtil.preloadI8(dut, NpuSections.B, bVals.map(_ & 0xFF))
+      val prog = Seq(vle8(8, NpuSections.SECT_B, 0)) ++
+        (0 until T).flatMap(m => Seq(
+          vle8(4, NpuSections.SECT_A, m * K),
+          mma(0, 4, 8, 0),
+          vse32(0, NpuSections.SECT_OUT, m * 4 * K))) :+ mmaLast(0, 0, 0, 0)
+      prog.foreach(StreamSpecUtil.issue(dut, _))
+      StreamSpecUtil.runToDrain(dut)
+      StreamSpecUtil.printPerf(s"B5 tile T=$T", K, StreamSpecUtil.perf(dut, K))
+      // the LAST stored capture must be a column of the running sum Σ_{t≤T-1} a_t·b
+      val out = StreamSpecUtil.readI32(dut, NpuSections.OUT, T * K)
+      val g = out.slice((T - 1) * K, T * K)
+      val pe = Array.tabulate(K, K)((i, j) => (0 until T).map(t => aVals(t)(i) * bVals(j)).sum)
+      assert(StreamSpecUtil.columnsOf(g, pe).nonEmpty,
+        s"B5 final capture is not a running-sum column: ${g.toList}")
+    }
+  }
 }
