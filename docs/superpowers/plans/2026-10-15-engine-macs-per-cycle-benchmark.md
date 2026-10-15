@@ -602,6 +602,46 @@ git commit -m "docs: Phase 1 benchmark results"
 
 ---
 
+## Measured results (Phase 1)
+
+K=32, W=16; peak = 1024 MACs/cyc. Full suite: `make test` → 36 suites, 135
+tests, **all passed** (1 h 17 m). Values are MACs/cycle.
+
+| Case | Configuration | MACs/cyc | %peak |
+|:--|:--|--:|--:|
+| A1 array ceiling (feed-phase) | continuous `keep=1`, M=2K | 1024.0 | 100.0% |
+| B1 resident + per-`mma` `vse` | R=32/128/512, Vd=1 | 10.0 / 10.3 / 10.4 | ~1.0% |
+| B1 resident + per-`mma` `vse` | R=32/128/512, Vd=4 | 11.7 / 12.2 / 12.3 | ~1.2% |
+| B2 short rounds | N=4 / 16 / 64 | 5.2 / 5.5 / 5.6 | ~0.5% |
+| B3 reloaded operands | DDR latency 1 / 100 / 200 | 8.3 / 3.1 / 1.9 | 0.8 / 0.3 / 0.2% |
+| B4 RAW chain (`vs3=rd`) | n=8 / 32 | 8.9 / 10.0 | ~1.0% |
+| B5 realistic tile | T=16, latency 100 | 4.7 | 0.5% |
+| C1 full frontend | R=64, resident | 10.2 | 1.0% |
+
+### Reading
+
+1. **The array is not the problem.** A1 shows the `K×K` grid is feedable at
+   one feed/cycle (= 100% peak); everything below 100% is dispatcher overhead.
+2. **The dominant cap is the capture round-trip, not the window.** B1 is ~1%
+   of peak and is nearly flat in R and only mildly sensitive to the `vd` ring
+   (Vd=1 vs Vd=4), so the `W/(2n+16)` window-cap hypothesis is *not* what binds
+   here. The serial `mma → clctD (≈2n+16 ≈ 80 cyc) → write → vse` round-trip
+   sets the cadence.
+3. **The boundary countdown dominates short rounds** (B2 ≈ 5 MACs/cyc; the
+   `6K−1` countdown is ~191 cycles per `mma.last`).
+4. **DDR latency dominates when operands are not resident** (B3 falls 8.3→1.9
+   as latency rises), so operand reuse / prefetch matters more than dispatch
+   for reloaded patterns.
+5. **The frontend is cheap** — C1 (10.2) ≈ B1 (10.3), i.e. fetch/IFQ/decode
+   adds little; the dispatcher/capture path is the target.
+
+### Phase-2 implication
+
+Attack the capture/completion path (spec §6 **L1** completion decoupling and
+**L3** completion latency) and the boundary overlap (**L4**); the window-depth
+cap (L2) is not the current binding constraint at K=32. Re-measure with this
+same matrix after each change.
+
 ## Follow-on (not in this plan)
 
 - **Phase 2** — dispatch/pipeline optimization selected from the Phase-1 table
