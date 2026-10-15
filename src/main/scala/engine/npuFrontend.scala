@@ -19,6 +19,8 @@
 //    0x0C  ERR_INFO     faulting instruction word
 //    0x10  FETCH_STATS  misses[15:0] | prefetches[15:0]
 //    0x14  PROG_LEN     instruction count (words after the entry)
+//    0x40  CYCLES       free-running session cycle count (RO)
+//    0x44  MACS         useful K² MACs, excluding mma.last (RO)
 // -----------------------------------------------------------------------------
 
 package engine
@@ -409,5 +411,8 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
                   core.io.dbg_traj(14),
                   0.U(2.W)),
      0x2C.U -> Cat(core.io.dbg_traj(15), 0.U(26.W)),
+    // Perf counters: 0x40 = session cycles, 0x44 = useful K² MACs (excl. mma.last)
+    0x40.U -> core.io.dbg_cycles,
+    0x44.U -> core.io.dbg_mac,
   ))
 }
