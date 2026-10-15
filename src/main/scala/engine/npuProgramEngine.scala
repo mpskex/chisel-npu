@@ -215,7 +215,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
         m := 1.U << rd
       } .elsewhen (memWidth === 1.U) {
         m := (1.U << (rd ## 0.U(1.W))) | (1.U << (rd ## 1.U(1.W)))
-      } .otherwise {
+      } .elsewhen (memWidth === 2.U) {
         m := (1.U << (rd ## 0.U(2.W))) | (1.U << (rd ## 1.U(2.W))) |
              (1.U << (rd ## 2.U(2.W))) | (1.U << (rd ## 3.U(2.W)))
       }
@@ -230,7 +230,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
         m := 1.U << rd
       } .elsewhen (memWidth === 1.U) {
         m := (1.U << (rd ## 0.U(1.W))) | (1.U << (rd ## 1.U(1.W)))
-      } .otherwise {
+      } .elsewhen (memWidth === 2.U) {
         m := (0xF.U << (rd << 2))(L - 1, 0)
       }
     } .elsewhen (family === OpFamily.MMA.asUInt) {
@@ -466,7 +466,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
           Mux(isStore && slots(s).useCapData, vsePopData(lane), 0.U)
         dmaQTail := dmaQTail + 1.U
         dmaQCount := dmaQCount + 1.U
-      }
+      } .otherwise { slots(s).done := true.B }   // DispatchUnit.NONE: retire defensively
     }
   }
 
@@ -512,6 +512,9 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   rf.io.vx_r_addr(1) := Mux(feedValid, feedRs2, 0.U)
   rf.io.vr_r_addr(1) := Mux(feedValid, feedVs3, 0.U)
 
+  // The program engine drives MMALU `keep` from the boundary gate
+  // (`keep := !boundaryPulse`); the decoded `mma_keep` (funct7[4]) is retained
+  // for `NCoreBackend` but is ignored at the engine top.
   mmalu.io.ctrl.keep      := !boundaryPulse
   mmalu.io.ctrl.busy      := feedValid
   mmalu.io.ctrl.use_accum := feedValid
@@ -588,12 +591,22 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   // ==========================================================================
   // Window entry (the frontend streams into the window)
   // ==========================================================================
+  val mmaRangeBad =
+    (dec.family === OpFamily.MMA) &&
+    (dec.rd >= (L / 4).U || dec.rs1 >= L.U || dec.rs2 >= L.U ||
+     (dec.rs3 =/= 0.U && dec.rs3 >= (L / 4).U))
+  val classSize =
+    MuxLookup(dec.mem_width, L.U)(Seq(1.U -> (L / 2).U, 2.U -> (L / 4).U))
+  val memRangeBad =
+    (dec.family === OpFamily.LD || dec.family === OpFamily.ST) &&
+    (dec.rd >= classSize)
   val illegalCond =
     decoder.io.illegal ||
     (dec.family === OpFamily.MMA && dec.mma_reset) ||
     ((dec.family === OpFamily.LD || dec.family === OpFamily.ST) && dec.rs1 > 3.U) ||
     (dec.family =/= OpFamily.NOP && dec.family =/= OpFamily.LD &&
-     dec.family =/= OpFamily.ST && dec.family =/= OpFamily.MMA)
+     dec.family =/= OpFamily.ST && dec.family =/= OpFamily.MMA) ||
+    mmaRangeBad || memRangeBad
 
   io.instr_ready := !wFull && !illegalAny
 

@@ -34,7 +34,7 @@ Confusing them is the primary source of errors in this codebase.
 | Symbol | Meaning | Default (test) | Default (top) |
 |:---:|:---|:---:|:---:|
 | **`N`** (spoken: **N(bits)**) | Base lane width in bits for a VX register. Equals MMALU's `nbits`. Always `N(bits)` in prose to avoid confusion. | 8 | 8 |
-| **`L`** | Number of base VX registers. Must be divisible by 4 for VE/VR aliasing. | 32 | 32 |
+| **`L`** | Number of base VX registers. Must be divisible by 4 for VE/VR aliasing. | 32 | 16 |
 | **`K`** | SIMD lane count per register. At the backend boundary, `K == MMALU.n` (the array side). | 8 | 16 |
 
 The FPGA top is the streamed **program engine** (`engine/NpuProgramEngineFrontend`),
@@ -52,6 +52,9 @@ Register-class aliasing over a shared physical byte array (`L × K × N/8` bytes
 | VX[0..L-1] | 32 | N bits | native |
 | VE[0..L/2-1] | 16 | 2N bits | `VE[i] ≡ VX[2i] ∥ VX[2i+1]` |
 | VR[0..L/4-1] | 8 | 4N bits | `VR[i] ≡ VX[4i..4i+3]` |
+
+The counts above are the `L=32` test default. At the FPGA top, `L = K = 16`,
+so the counts are **VX 16 / VE 8 / VR 4** (aliasing is unchanged).
 
 **MMALU `n` vs VALU/backend `K`**: MMALU's `n` is the *systolic array side length*, not a lane count. `NCoreBackend` enforces `K == mmalu.n` at instantiation. Do not conflate them.
 
@@ -75,7 +78,7 @@ funct7 [4]   = saturate
 funct7 [6:5] = dtype   (0=INT, 1=FP, 2=BF)
 ```
 
-CVT family (`opcode=0x14`) repurposes `funct7[2:0]` as the source format code and `funct7[3]`
+CVT family (`opcode=0x14`) repurposes `funct7[2:0]` as the destination format code and `funct7[3]`
 as saturate. See `src/main/scala/isa/instrFormat.scala` for the full `CvtFunct7` layout.
 
 ### Opcode family assignments (values: `src/main/scala/isa/instSetArch.scala`; decode map: `src/main/scala/isa/InstrTable.scala`)
@@ -106,7 +109,7 @@ as saturate. See `src/main/scala/isa/instrFormat.scala` for the full `CvtFunct7`
 - The `VecWidth` ChiselEnum field inside `NCoreVALUBundle` is renamed to **`regCls`** (was `width`) to avoid a Chisel plugin naming conflict with `chisel3.Width`. Anywhere you see `.regCls`, that is the VX/VE/VR register-class selector.
 - The `opcode` field is the full 7-bit value and the decoder compares it against the whole 7-bit field — do **not** truncate. `OpFamily` is a 6-bit enum (values 0x00..0x27); family validity is derived from membership in `OpFamily.all`, so any opcode outside the set (e.g. 0x40..0x7F) decodes as illegal rather than aliasing onto a valid family. `src/main/scala/isa/InstrTable.scala` is the single source of truth for the decode map.
 - `NpuAssembler` encodes instruction words as Scala `Int`. Values with bit 31 set are negative in Scala. Always poke as `(instr.toLong & 0xFFFFFFFFL).U` in tests.
-- CVT: `vcvt_s8_f32` means INT8→FP32 (wide output to VR). `vcvt_f32_s8` means FP32→INT8 (narrow output to VX). The naming convention is `vcvt_<dst>_<src>`.
+- CVT: `vcvt_s8_f32` means INT8→FP32 (wide output to VR). `vcvt_f32_s8` means FP32→INT8 (narrow output to VX). The naming convention is `vcvt_<src>_<dst>`.
 
 ## Source layout (`src/main/scala/`)
 
@@ -118,9 +121,7 @@ as saturate. See `src/main/scala/isa/instrFormat.scala` for the full `CvtFunct7`
 - `dma/npuDmaEngine.scala` — `NpuDmaEngine`: the engine's single AXI4 master.
 - `isa/` — `instrFormat.scala`, `instSetArch.scala`, `InstrTable.scala` (authoritative decode map), `NpuAssembler.scala`, `instrDecoder.scala`, `NpuDisassembler.scala`, `dataType.scala`, `micro_op/` (VALUMicroCode, MMALUMicroCode, memMicroCode).
 - `sram/register.scala` — legacy `RegisterBlock` (still used by old tests).
-- `sram/multiWidthRegister.scala` — `MultiWidthRegisterBlock` (VX/VE/VR aliased RF, used by NCoreBackend).
-- `sram/spm.scala` — `SPM(K, N, SPM_ROWS)`: scratch-pad memory, K-wide read/write, 1-cycle read latency.
-- `sram/sreg.scala` — `SpecialRegFile`: `.sreg` — tile_h/tile_w counters + `ConvParams` for future ld.tile/PAG.
+- `sram/multiWidthRegister.scala` — `MultiWidthRegisterBlock` (VX/VE/VR aliased RF, used by both `NCoreBackend` and `NpuProgramEngine`).
 - `utils/gates.scala`, `top/top.scala` (elaborates `NpuProgramEngineFrontend(K=16, N=8, W=4)` → `top.sv`).
 - `ip/vivado/` — packaged Vivado project. Not part of sbt build.
 

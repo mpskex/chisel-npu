@@ -8,10 +8,10 @@ nav:
   - Home: index.md
   - ISA Designs:
     - Instructions: designs/01.isa.md
+    - Memory (WIP): designs/02.memory.md
+    - Buses (WIP): designs/03.bus.md
     - Streamed dispatch (overview): designs/02.streamed-dispatch.md
     - Streamed issuing (detail): designs/04.streamed-issuing.md
-    - Memory: designs/02.memory.md
-    - Buses: designs/03.bus.md
   - Implementation:
     - Neural Core: implementations/NeuralCore.md
     - Processing Element: implementations/ProcessingElement.md

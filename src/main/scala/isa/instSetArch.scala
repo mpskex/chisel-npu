@@ -14,7 +14,7 @@
 //  Notation :
 //    N(bits) — base lane width in bits (default 8). MMALU's nbits.
 //    L       — number of VX base registers (default 32, must be div-by-4).
-//    K       — SIMD lane count per register (8 for tests, 64 at top).
+//    K       — SIMD lane count per register (8 for tests, 16 at top (FPGA program engine)).
 //              Equals MMALU's array-side n at the backend boundary.
 //    VX[0..L-1]   — L  registers of K × N    bits
 //    VE[0..L/2-1] — 16 registers of K × 2N   bits (alias VX[2i..2i+1])
@@ -119,8 +119,8 @@ object Funct3Lut {
 }
 
 // VALU_CVT (opcode=0x14): type conversions
-// funct3 = destination format code (FmtCode object in instrFormat.scala)
-// funct7[2:0] = source format code; funct7[3]=sat; funct7[5:4]=round; funct7[6]=BF8 variant
+// funct3 = source format code (FmtCode object in instrFormat.scala)
+// funct7[2:0] = destination format code; funct7[3]=sat; funct7[5:4]=round; funct7[6]=BF8 variant
 // Width is determined by src/dst format (e.g. s32 implies VR; s8 implies VX).
 
 // VALU_BCAST (opcode=0x15): scalar broadcast to all K lanes

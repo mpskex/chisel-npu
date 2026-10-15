@@ -4,7 +4,6 @@
 //
 //  Parameters:
 //    K    — SIMD lane count per register = MMALU array side (default 8).
-//           At the top level, K = 64 to match MMALU(new MMPE(), 64, 8, 32).
 //    N    — base lane width in bits / N(bits) (default 8).
 //    L    — number of VX base registers (default 32, must be div-by-4).
 //

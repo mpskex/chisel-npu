@@ -128,7 +128,7 @@ val innerLoop = Seq(
 
 ```mermaid
 gantt
-    title Quantization pipeline (K=4 example, 3K-2 = 10 MMA cycles)
+    title Quantization pipeline (K=4 example, 3n−1 = 11 MMA cycles)
     dateFormat  X
     axisFormat  %s
 
@@ -147,7 +147,7 @@ gantt
 | Phase | Instructions | Ticks |
 |:---|:---|:---:|
 | Setup (once) | 2× ext_write (DMA/loader) + 2× bcast.vr | 4 |
-| MMA pipeline | mma × (K-1) + mma.last | 3K−2 |
+| MMA pipeline | mma × (K-1) + mma.last | 3n−1 |
 | INT32 → FP32 | vcvt_s32_f32 | 1 |
 | Scale + shift | vfma | 2 |
 | FP32 → INT8 | vcvt_f32_s8 | 1 |
@@ -226,10 +226,12 @@ For K=1 scalar lane, inputs `a=10`, `w=5`, scale=0.01, zp=0:
 
 ---
 
-## Pipelining with Future Tiles
+## Pipelining Tiles
 
-Because VALU instructions execute independently of the MMALU pipeline, a future out-of-order
-front-end can overlap the post-quantization steps of tile N with the MMA drain of tile N+1:
+The streamed engine already overlaps independent work in-order through its dispatch window
+and scoreboard: the post-quantization steps of tile N proceed while tile N+1's MMAs feed,
+hiding the quantization overhead. The authoritative model is
+[`../designs/04.streamed-issuing.md`](../designs/04.streamed-issuing.md).
 
 ```mermaid
 gantt
@@ -258,5 +260,5 @@ The VALU operations for tile 0 (cycles 11–14) overlap the MMA streaming for ti
 - [ISA Reference](../designs/01.isa.md) — full instruction encoding and opcode families
 - [VectorALU](VectorALU.md) — VALU instruction reference (CVT, FP, FMA)
 - [Registers](Registers.md) — VX/VE/VR aliasing and port assignment
-- [Systolic Array](SystolicArray.md) — MMALU timing (3K−2 cycle pipeline)
+- [Systolic Array](SystolicArray.md) — MMALU timing (3n−1 cycle pipeline)
 - [Neural Core](NeuralCore.md) — backend architecture and parameter constraints

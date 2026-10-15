@@ -68,7 +68,7 @@ class InstrDecoder extends Module {
   val f7Dtype = f7(InstrBits.F7_DTYPE_HI, InstrBits.F7_DTYPE_LO)
 
   // cvt-specific funct7 sub-fields
-  val f7CvtSrc = f7(InstrBits.F7_CVT_SRC_HI, InstrBits.F7_CVT_SRC_LO)
+  val f7CvtDst = f7(InstrBits.F7_CVT_DST_HI, InstrBits.F7_CVT_DST_LO)
   val f7CvtSat = f7(InstrBits.F7_CVT_SAT)
   val f7CvtRnd = f7(InstrBits.F7_CVT_RND_HI, InstrBits.F7_CVT_RND_LO)
   val f7Bf8    = f7(InstrBits.F7_CVT_BF8)
@@ -97,23 +97,30 @@ class InstrDecoder extends Module {
   // funct3 match.  Reserved opcodes are rejected by familyOK regardless of
   // f3OK, so the true default cannot leak an unaliased reserved word.
   val f3OK = WireDefault(true.B)
-  // isIFmt flags a matched I-format row.  I-format instructions carry a 12-bit
-  // immediate where R/S-format families carry funct7, so the width/dtype
-  // attribute checks below are meaningless (and wrong) for them.
-  val isIFmt = WireDefault(false.B)
+  // widthExemptD / dtypeExemptD flag whether the matched row's funct7 width /
+  // dtype attribute is meaningful.  I-format instructions carry a 12-bit
+  // immediate where R/S-format families carry funct7, so both checks are
+  // meaningless (and wrong) for them; the width field is additionally absent
+  // for FP (0x16) / FP_FMA (0x17) rows, which carry a dtype but no
+  // register-class width.  The width exemption therefore covers I-format plus
+  // FP, while the dtype exemption is I-format-only.  InstrTable owns this
+  // classification; the fold below applies it from the matched def.
+  val widthExemptD = WireDefault(false.B)
+  val dtypeExemptD = WireDefault(false.B)
   for ((opcode, defs) <- InstrTable.byOpcode if opcode != 0x00 && opcode != 0x14) {
     when (opBits === opcode.U) {
       f3OK := false.B
       for (d <- defs) when (f3 === d.funct3.U) {
         vecOp := d.op; f3OK := true.B
-        if (d.fmt == Fmt.I) { isIFmt := true.B }
+        widthExemptD := InstrTable.widthExempt(d).B
+        dtypeExemptD := InstrTable.dtypeExempt(d).B
       }
     }
   }
-  when (opBits === 0x14.U) {          // CVT: legality from correlated (dst, src)
+  when (opBits === 0x14.U) {          // CVT: legality from correlated (src, dst)
     f3OK := false.B
     for (p <- InstrTable.cvtPairs)
-      when (f3 === p.dst.U && f7CvtSrc === p.src.U) { vecOp := p.op; f3OK := true.B }
+      when (f3 === p.src.U && f7CvtDst === p.dst.U) { vecOp := p.op; f3OK := true.B }
   }
 
   // ---------- Width decode — drive as raw UInt(2.W) to match NCoreVALUBundle ----------
@@ -149,12 +156,10 @@ class InstrDecoder extends Module {
   // Width bits are repurposed for src format in CVT family; skip width check for
   // CVT.  I-format rows carry an immediate in funct7, so width attributes do not
   // apply (this also subsumes the LD/ST exemption — both are I-format).
-  val widthOK = !((f7Width === 3.U) && !isIFmt &&
+  val widthOK = !((f7Width === 3.U) && !widthExemptD &&
     (family =/= OpFamily.VALU_FP) &&
     (family =/= OpFamily.VALU_FP_FMA) &&
-    (family =/= OpFamily.VALU_CVT) &&
-    (family =/= OpFamily.LD) &&
-    (family =/= OpFamily.ST))
+    (family =/= OpFamily.VALU_CVT))
 
   // ---------- Dtype decode ----------
   // BF8 variant from funct7[6] (cvt family) or bf8E5M2 forced
@@ -174,11 +179,13 @@ class InstrDecoder extends Module {
 
   // I-format immediate high bits alias funct7[6:5]; dtype is not applicable
   // (subsumes the LD/ST exemption — both are I-format).
-  val dtypeOK = !((f7Dtype === 3.U) && !isIFmt &&
-    (family =/= OpFamily.LD) &&
-    (family =/= OpFamily.ST))
+  val dtypeOK = !((f7Dtype === 3.U) && !dtypeExemptD)
 
   // ---------- MMA control ----------
+  // `mma_keep` here is the decoded funct7[4].  It is retained for
+  // `NCoreBackend`, but at the engine top the program engine drives MMALU
+  // `keep` from the boundary gate (`keep := !boundaryPulse`); the decoded
+  // `mma_keep` is ignored there.
   val mmaKeep  = WireDefault(false.B)
   val mmaLast  = WireDefault(false.B)
   val mmaReset = WireDefault(false.B)

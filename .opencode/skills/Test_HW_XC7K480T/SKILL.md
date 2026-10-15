@@ -234,7 +234,8 @@ The engine debug build wires the `u_npu_ila` core into the engine's
 
 ```bash
 # Build the engine ILA bitstream (K=16 engine):
-~/Xilinx/2025.2/Vivado/bin/vivado -mode batch \
+# Vivado is at $HOME/Vivado/2025.2/Vivado/bin/vivado (verified); source .env.sh first.
+"$VIVADO" -mode batch \
     -source ip/vivado/xc7k480t/scripts/build_npu_engine_with_ila.tcl
 
 # Flash it:

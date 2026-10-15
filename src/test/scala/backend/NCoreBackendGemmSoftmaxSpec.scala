@@ -291,7 +291,7 @@ class NCoreBackendGemmSoftmaxSpec extends AnyFlatSpec {
     // ----------------------------------------------------------------
     dut.io.vr_a_addr.poke(1.U)
     dut.io.vx_out_addr.poke(0.U)
-    issue(dut, vcvt(rd = 0, rs1 = 1, dstFmt = F32, srcFmt = S8, sat = true))
+    issue(dut, vcvt(rd = 0, rs1 = 1, srcFmt = F32, dstFmt = S8, sat = true))
 
     // ----------------------------------------------------------------
     // Phase 3: vrmax VX[0] → VR[3]; extWrite max → VX[5]; vsub → VX[1]

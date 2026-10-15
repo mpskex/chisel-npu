@@ -5,9 +5,11 @@
 //
 //  Program instructions live in the CODE section (entry at the base).  The
 //  frontend fetches 16 B lines (4 words) through the engine's shared DMA
-//  (fetch_fill_* ports), caches them in an 8-set × 2-way binary-LRU cache
-//  (64 instructions), and streams words to the execution core with
-//  pc = 0..PROG_LEN-1.  On io.illegal_out it latches ERR_INFO, sets
+//  (fetch_fill_* ports) and caches them in an 8-set × 2-way binary-LRU cache
+//  (64 instructions).  A fetch engine walks the fetch pc and enqueues
+//  {word, pc} into a small instruction FIFO (IFQ, depth 8); an issue stage
+//  feeds the execution core from the IFQ head at up to one word per cycle
+//  (fetch and issue decoupled).  On io.illegal_out it latches ERR_INFO, sets
 //  STATUS.illegal and halts (done asserts).
 //
 //  ctrl_lite registers (word-addressable via ctrl_addr[3:0]):
@@ -23,6 +25,7 @@ package engine
 
 import chisel3._
 import chisel3.util._
+import isa._
 
 class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends Module {
 
@@ -152,53 +155,66 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
   // ==========================================================================
   // Program counter + frames-done counter
   // ==========================================================================
-  val pc = RegInit(0.U(16.W))
+  val pc = RegInit(0.U(16.W))          // issued word's pc (STATUS / halt pc)
+  val fpc = RegInit(0.U(16.W))         // fetch pc: next word to enqueue
   val framesDone = RegInit(0.U(16.W))
-  val issuedWord = RegInit(0.U(32.W))   // word currently executing
-
-  val isMmaLast = issuedWord(6, 0) === 0x03.U && issuedWord(14, 12) === 1.U
+  val issuedWord = RegInit(0.U(32.W))  // word currently executing
 
   // ==========================================================================
-  // Instruction cache: 8 sets × 2 ways × 4-word lines
+  // Instruction FIFO (IFQ) — decouples fetch from issue so the core can be fed
+  // one word per cycle (a fetch/issue pipeline instead of the old
+  // RUN_FETCH→RUN_ISSUE→RUN_WAIT serialization).
+  // ==========================================================================
+  val IFQ_DEPTH = 8
+  val IFQ_A     = log2Ceil(IFQ_DEPTH)
+  val ifqWord  = RegInit(VecInit(Seq.fill(IFQ_DEPTH)(0.U(32.W))))
+  val ifqPc    = RegInit(VecInit(Seq.fill(IFQ_DEPTH)(0.U(16.W))))
+  val ifqHead  = RegInit(0.U(IFQ_A.W))
+  val ifqTail  = RegInit(0.U(IFQ_A.W))
+  val ifqCount = RegInit(0.U((IFQ_A + 1).W))
+  val ifqEmpty = ifqCount === 0.U
+  val ifqFull  = ifqCount === IFQ_DEPTH.U
+  val ifqHeadWord = ifqWord(ifqHead)
+  val ifqHeadPc   = ifqPc(ifqHead)
+
+  // ==========================================================================
+  // Instruction cache: 8 sets × 2 ways × 4-word lines (fetch-side lookup by fpc)
   // ==========================================================================
   val lineValid = RegInit(VecInit(Seq.fill(SETS * WAYS)(false.B)))
   val lineTag   = RegInit(VecInit(Seq.fill(SETS * WAYS)(0.U(11.W))))
   val lineData  = RegInit(VecInit(Seq.fill(SETS * WAYS)(0.U(128.W))))
   val mru       = RegInit(VecInit(Seq.fill(SETS)(false.B)))   // true = way1 most recent
 
-  val curL   = pc >> 2                       // line index (up to 16383 lines)
-  val curSet = curL(2, 0)
-  val curTag = curL(13, 3)                   // 11 bits: covers the full 16-bit pc
-  val hit0   = lineValid(curSet ## 0.U(1.W)) && lineTag(curSet ## 0.U(1.W)) === curTag
-  val hit1   = lineValid(curSet ## 1.U(1.W)) && lineTag(curSet ## 1.U(1.W)) === curTag
-  val lineHit = hit0 || hit1
-  val hitWay = Mux(hit1, 1.U, 0.U)
+  val fL   = fpc >> 2                        // line index of the fetch pc
+  val fSet = fL(2, 0)
+  val fTag = fL(13, 3)                       // 11 bits: covers the full 16-bit pc
+  val fHit0 = lineValid(fSet ## 0.U(1.W)) && lineTag(fSet ## 0.U(1.W)) === fTag
+  val fHit1 = lineValid(fSet ## 1.U(1.W)) && lineTag(fSet ## 1.U(1.W)) === fTag
+  val fLineHit = fHit0 || fHit1
+  val fHitWay  = Mux(fHit1, 1.U, 0.U)
 
-  val wi     = pc(1, 0)              // word index within the line
-  val curWord = Mux(lineHit,
-    (lineData(Mux(hit1, curSet ## 1.U(1.W), curSet ## 0.U(1.W))) >> (wi << 5.U))(31, 0),
+  val fWord = Mux(fLineHit,
+    (lineData(Mux(fHit1, fSet ## 1.U(1.W), fSet ## 0.U(1.W))) >> (fpc(1, 0) << 5.U))(31, 0),
     0.U)
 
-  // Prefetch target: the line after the current one (if any word of it is in range)
-  val nextL     = curL + 1.U
-  val prefetchValid = (nextL << 2.U) < progLenReg && !(
-    (lineValid(nextL(2, 0) ## 0.U(1.W)) && lineTag(nextL(2, 0) ## 0.U(1.W)) === nextL(13, 3)) ||
-    (lineValid(nextL(2, 0) ## 1.U(1.W)) && lineTag(nextL(2, 0) ## 1.U(1.W)) === nextL(13, 3)))
+  // Prefetch target: the line after the one being fetched (if any word in range)
+  val nextFL    = fL + 1.U
+  val prefetchValid = (nextFL << 2.U) < progLenReg && !(
+    (lineValid(nextFL(2, 0) ## 0.U(1.W)) && lineTag(nextFL(2, 0) ## 0.U(1.W)) === nextFL(13, 3)) ||
+    (lineValid(nextFL(2, 0) ## 1.U(1.W)) && lineTag(nextFL(2, 0) ## 1.U(1.W)) === nextFL(13, 3)))
 
   // ==========================================================================
-  // Run FSM
+  // Run state
   // ==========================================================================
   object RunState extends ChiselEnum {
-    val RUN_IDLE, RUN_FETCH, RUN_ISSUE, RUN_WAIT, RUN_DONE = Value
+    val RUN_IDLE, RUN_RUN, RUN_DONE = Value
   }
   val runState = RegInit(RunState.RUN_IDLE)
   val busy = runState =/= RunState.RUN_IDLE
-
-  val runIllegalSeen = RegInit(false.B)
-  val mmaLastCounted = RegInit(false.B)   // one-shot frames_done count per word
+  val running = runState === RunState.RUN_RUN
 
   // ==========================================================================
-  // Fill FSM (demand fills win; prefetches run during core execution)
+  // Fill FSM (demand fills win; prefetches run while the fetch engine has room)
   // ==========================================================================
   object FillState extends ChiselEnum {
     val IDLE, REQ, WAIT, DRAIN = Value
@@ -207,11 +223,10 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
   val fillLine  = RegInit(0.U(14.W))
   val fillWay   = RegInit(0.U(1.W))
 
-  val demandFill = runState === RunState.RUN_FETCH && !lineHit
-  val doPrefetch = fillState === FillState.IDLE &&
-                   runState === RunState.RUN_WAIT &&
-                   !core.io.instr_ready &&       // core busy → DMA free
-                   prefetchValid
+  val fetchActive = running && fpc < progLenReg
+  val demandFill  = running && fetchActive && !fLineHit
+  val doPrefetch  = fillState === FillState.IDLE && running && !demandFill &&
+                    !ifqFull && prefetchValid
 
   val startFill = (fillState === FillState.IDLE) && (demandFill || doPrefetch)
 
@@ -225,11 +240,11 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
   val commitFill = fillState === FillState.REQ && core.io.fetch_fill_done
 
   // Victim: LRU way of the set (mru=way1 → victim way0, and vice versa)
-  val victimWay = Mux(mru(curSet), 0.U, 1.U)
+  val victimWay = Mux(mru(fillLine(2, 0)), 0.U, 1.U)
 
   when (startFill) {
     fillState := FillState.REQ
-    fillLine  := Mux(demandFill, curL, nextL)
+    fillLine  := Mux(demandFill, fL, nextFL)
     fillWay   := victimWay   // demand fills only happen on a miss
     when (demandFill) { missCnt := missCnt + 1.U }
     .otherwise        { prefetchCnt := prefetchCnt + 1.U }
@@ -258,69 +273,65 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
   }
 
   // Update MRU on cache hits (way accessed last)
-  when (runState === RunState.RUN_FETCH && lineHit) {
-    mru(curSet) := hitWay === 1.U
+  when (running && fLineHit) {
+    mru(fSet) := fHitWay === 1.U
   }
 
   // ==========================================================================
-  // Run FSM transitions
+  // Fetch engine → IFQ, and IFQ → core (issue)
   // ==========================================================================
-  core.io.instr       := issuedWord
-  core.io.instr_valid := runState === RunState.RUN_ISSUE
+  val enqFire = fetchActive && !ifqFull && fLineHit
+  when (enqFire) {
+    ifqWord(ifqTail) := fWord
+    ifqPc(ifqTail)   := fpc
+    ifqTail          := ifqTail + 1.U
+    fpc              := fpc + 1.U
+  }
 
+  core.io.instr       := ifqHeadWord
+  core.io.instr_valid := running && !ifqEmpty
+  val deqFire = running && !ifqEmpty && core.io.instr_ready
+  when (deqFire) {
+    ifqHead    := ifqHead + 1.U
+    pc         := ifqHeadPc
+    issuedWord := ifqHeadWord
+    when (InstrTable.isMmaLastWord(ifqHeadWord)) { framesDone := framesDone + 1.U }
+  }
+
+  // IFQ occupancy: net an enqueue and a dequeue in the same cycle.
+  when (enqFire && deqFire) { ifqCount := ifqCount }
+  .elsewhen (enqFire)       { ifqCount := ifqCount + 1.U }
+  .elsewhen (deqFire)       { ifqCount := ifqCount - 1.U }
+
+  // ==========================================================================
+  // Run state transitions
+  // ==========================================================================
   switch (runState) {
     is (RunState.RUN_IDLE) {
       when (startEdge) {
         pc            := 0.U
+        fpc           := 0.U
         framesDone    := 0.U
         statusIllegal := false.B
-        runIllegalSeen := false.B
-        mmaLastCounted := false.B
-        runState      := RunState.RUN_FETCH
+        ifqHead       := 0.U
+        ifqTail       := 0.U
+        ifqCount      := 0.U
+        runState      := RunState.RUN_RUN
       }
     }
 
-    is (RunState.RUN_FETCH) {
-      // wait for the current line (demandFill drives the fill FSM)
-      when (lineHit) {
-        issuedWord := curWord
-        runState   := RunState.RUN_ISSUE
-      }
-    }
-
-    is (RunState.RUN_ISSUE) {
-      when (core.io.instr_ready) {
-        runState := RunState.RUN_WAIT
-      }
-    }
-
-    is (RunState.RUN_WAIT) {
-      when (core.io.illegal_out) { runIllegalSeen := true.B }
-      when (core.io.instr_ready) {
-        when (runIllegalSeen) {
-          errInstr      := issuedWord
-          errPc         := pc
-          statusIllegal := true.B
-          doneReg       := true.B
-          runState      := RunState.RUN_DONE
-        }         .otherwise {
-          when (isMmaLast && !mmaLastCounted) {
-            framesDone := framesDone + 1.U
-            mmaLastCounted := true.B
-          }
-          when (pc === progLenReg - 1.U) {
-            // the streamed dispatch retires the last word asynchronously;
-            // the program is only "done" once the engine pipeline drains
-            // (window empty + DMA + captures + boundary countdown).
-            when (core.io.drain) {
-              doneReg  := true.B
-              runState := RunState.RUN_DONE
-            }
-          } .otherwise {
-            pc       := pc + 1.U
-            runState := RunState.RUN_FETCH
-          }
-        }
+    is (RunState.RUN_RUN) {
+      when (core.io.illegal_out) {
+        errInstr      := issuedWord
+        errPc         := pc
+        statusIllegal := true.B
+        doneReg       := true.B
+        runState      := RunState.RUN_DONE
+      } .elsewhen (fpc === progLenReg && ifqEmpty && core.io.drain) {
+        // all words issued and the engine pipeline fully drained
+        // (window empty + DMA + captures + boundary countdown)
+        doneReg  := true.B
+        runState := RunState.RUN_DONE
       }
     }
 

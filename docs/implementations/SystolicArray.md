@@ -2,7 +2,7 @@
 
 [TOC]
 
-Systolic arrays are often the fundamental execution unit in modern NPU implementations. They are efficient in matrix multiplication, which is widely adopted in neural networks. However, it is not flexible to execute high performance vector or scalar operations. In general, a systolic array will have latency of $3N-2$ (from the first element of input matrices to the final element of the output matrix). To maximize the gain from a systolic array architecture, most implementation will have around $64\times 64$ grid of [PEs](ProcessingElement.md). Larger size of the grid will suffer more from the memory wall. Hence hardware engineers need to battle with this multi-constrained problem and try to find a sweet point for the design.
+Systolic arrays are often the fundamental execution unit in modern NPU implementations. They are efficient in matrix multiplication, which is widely adopted in neural networks. However, it is not flexible to execute high performance vector or scalar operations. In general, a systolic array will have latency of $3n-1$ (from the first element of input matrices to the final element of the output matrix). To maximize the gain from a systolic array architecture, most implementation will have around $64\times 64$ grid of [PEs](ProcessingElement.md). Larger size of the grid will suffer more from the memory wall. Hence hardware engineers need to battle with this multi-constrained problem and try to find a sweet point for the design.
 
 Improving IPC(Instruction per Cycle) of systolic arrays is quite straight forward. We will handle the pre-fetch and pipeline the stages for sure. We also need to design an appropriate control for the systolic array to make it exeuting instructions without bubbles in the array.
 
@@ -28,7 +28,7 @@ Those bubbles will drastically harm the performance if not handled properly. Som
 
 ## Timing of systolic array: with an $4\times 4$ array example
 
-We will discuss the timing with an $4\times 4$ systolic array. The latency from an $4\times 4$ systolic array is $3\times 4 - 2 = 10$. We have already demonstrated the system status at the first tick [in the previous section](#what-is-bubbles-in-a-systolic-array). And here is the system status at the 4-th tick:
+We will discuss the timing with an $4\times 4$ systolic array. The latency from an $4\times 4$ systolic array is $3\times 4 - 1 = 11$. We have already demonstrated the system status at the first tick [in the previous section](#what-is-bubbles-in-a-systolic-array). And here is the system status at the 4-th tick:
 
 <div style="text-align: center">
 <img src="../../images/sa_tick_4.png" width=60%/>

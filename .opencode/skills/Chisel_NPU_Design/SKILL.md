@@ -135,7 +135,9 @@ src/test/scala/
   avoid firtool "uninitialized sink" errors.
 
 - **CVT naming** — `vcvt_s8_f32` = INT8→FP32 (wide). `vcvt_f32_s8` =
-  FP32→INT8 (narrow). Convention: `vcvt_<dst>_<src>`.
+  FP32→INT8 (narrow). Convention: `vcvt_<src>_<dst>` (first token = source/input
+  format). `funct3` carries the **source** format, `funct7[2:0]` the
+  **destination** format.
 
 - **MMALU `n` vs VALU/backend `K`** — MMALU's `n` is the systolic array
   side length. `NCoreBackend` enforces `K == mmalu.n` at instantiation.

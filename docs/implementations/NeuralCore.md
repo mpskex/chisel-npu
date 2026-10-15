@@ -73,7 +73,7 @@ graph TB
 
 - Systolic array with K×K processing elements.
 - Parameters: `n = K` (array side), `nbits = N`, `accum_nbits = 4N`.
-- Latency: `3K − 2` clock cycles from first input row to last output column.
+- Latency: `3n−1` clock cycles from first input row to last output column.
 - Output: `Vec(K, SInt(4N.W))` — **written directly to VR write port 1 without truncation**.
 - See [Systolic Array](SystolicArray.md) for detailed timing.
 
@@ -113,7 +113,7 @@ sequenceDiagram
     VU->>RF: out_ve → VE write 0
     VU->>RF: out_vr → VR write 0
 
-    note over FE,MMA: Cycle 3K−2 — MMA finalise
+    note over FE,MMA: Cycle 3n−1 — MMA finalise
     MMA->>RF: out (INT32) → VR write 1
 ```
 
@@ -123,7 +123,7 @@ sequenceDiagram
     when `out_vx/ve/vr` are valid.
 
 !!! note "MMALU and VALU can overlap"
-    The MMALU pipeline (`3K−2` cycles) is independent of the VALU pipeline (1–2 cycles).
+    The MMALU pipeline (`3n−1` cycles) is independent of the VALU pipeline (1–2 cycles).
     A frontend scheduler can issue vector instructions (CVT, BCAST, FP) during the systolic
     array's drain phase to hide most of the quantization overhead.
 
@@ -184,15 +184,16 @@ The FPGA program path (the engine that replaced the fixed-function
 `npu_dma_master`): a frontend streams ISA words from DDR, and a deliberately
 thin engine decodes each instruction and drives the MMALU's raw signals
 directly. **Status: implemented and silicon-verified at K=16; the current FPGA
-build (xcvu9p) uses window depth `W=4` and closes timing at 200 MHz** (see the
-handoff for the bring-up record).
+build (xcvu9p) uses window depth `W=4` and closes timing at 200 MHz** (see
+[`SiliconBringup.md`](SiliconBringup.md) and [`FPGA_VU9P.md`](FPGA_VU9P.md) for
+the bring-up record).
 
 ### Architecture
 
 ```mermaid
 graph LR
     HOST["host driver\n(ChiselNPU.run)"] -->|"CODE section\ninstruction words"| FE
-    FE["NpuProgramEngineFrontend\nLRU 8×2×4-word prefetch cache\npc / PROG_LEN / ctrl regs"] -->|"word + valid"| ENG
+    FE["NpuProgramEngineFrontend\nLRU 8×2×4-word prefetch cache\nfetch engine + IFQ (depth 8)\npc / PROG_LEN / ctrl regs"] -->|"word + valid (1/cyc)"| ENG
     ENG["NpuProgramEngine\ndecode + raw-signal dispatch"] -->|"in_a/in_b/in_accum\nctrl.busy/keep/use_accum"| MMA
     ENG -->|"vle/vse requests"| DMA["NpuDmaEngine\nAXI4 master (L3 ↔ RF + fills)"]
     MMA["MMALU\nK×K systolic array\n(all timing inside)"] -->|"out[K] at clct"| ENG
@@ -200,48 +201,17 @@ graph LR
     FE -->|"fetch fills (shared DMA)"| DMA
 ```
 
-- **Frontend** (`npuFrontend.scala`): fetches 16 B lines (4 words) from CODE
-  via the shared DMA, caches them in an 8-set×2-way LRU cache, streams words
-  in order, counts `mma.last` frames, and exposes the ctrl register map
-  (CTRL/STATUS/ERR_INFO/FETCH_STATS/PROG_LEN + debug). Writes to
-  PROG_LEN/start invalidate the cache.
-- **Engine** (`npuProgramEngine.scala`): states `IDLE, DMA_REQ, DMA_WAIT,
-  DONE_1, ILLEGAL` plus a capture FIFO (vd queue, depth 2K+4). For each
-  `mma`/`mma.last` it asserts one feed tick (`busy=1, keep=1, use_accum=1`)
-  with the combinational RF reads `in_a=VX[vs1]`, `in_b=VX[vs2]`,
-  `in_accum=VR[vs3]` (x0 → 0), stays in IDLE (back-to-back feeds = the MMALU
-  K-burst), and pushes `vd`. Each clct pulse (one per feed, 2n−1 later) pops
-  the FIFO and writes the collector's output column to `VR[vd]`. After an
-  `mma.last`'s own capture, `keep` drops for one tick — the MMALU boundary
-  that resets the PEs for the next session. `keep` is held high otherwise
-  (the MMALU idle pattern).
+The frontend (`npuFrontend.scala`) fetches 16 B CODE lines through the shared
+DMA into an 8-set×2-way LRU cache and drives a decoupled fetch→IFQ→issue
+pipeline; the engine (`npuProgramEngine.scala`) is the windowed-scoreboard
+streamed dispatcher that issues DMA and MMALU work and captures each `mma`'s
+output column into `VR[vd]`. The `vse` that stores a captured column chains on
+the capture queue **in hardware** — no software NOP drain is needed
+([§8](../designs/04.streamed-issuing.md)) — and the collector `cnt` is
+deterministically reset at each collection window, so no issue-phase alignment
+is required ([§13](../designs/04.streamed-issuing.md)).
 
-### The mma session (K-burst) model
-
-```
-# one session (m feeds) → m output columns
-vle8  A[:,0] → VX[a0];  vle8  B[0] → VX[b0]
-mma   vd0, a0, b0, c          # feed 0; captures output column c0
-vle8  A[:,1] → VX[a1];  vle8  B[1] → VX[b1]
-mma   vd1, a1, b1, c          # feed 1; captures output column c1
-...
-mma.last vdN, aN, bN, c       # session end (+ keep=0 boundary)
-nop × nop_wait                # clct/drain window
-vse32 vd0 → OUT; vse32 vd1 → OUT; ...
-```
-
-- Each `mma` = one feed tick; the PEs accumulate the session's products
-  (`PE[i][j] += A[i]·B[j]` per feed — the MMALU's native K-burst).
-- Each mma's clct captures **one output column** of the session product to
-  its own `vd` (sim-verified: consecutive feeds → consecutive columns).
-- `mma.last` marks the session end; the keep=0 boundary (after its capture)
-  resets the PEs.
-- `vd_k[i] = Σ_m a_m[i]·b_m[col_k] + C[i]` (C = VR[vs3], added via
-  `use_accum`/`in_accum` at the capture).
-- **Known silicon caveat**: the captured column index is set by the issue
-  timing (the collector's phase); the sim verifies the clean consecutive
-  columns, and the silicon's phase must be aligned to the frontend's issue
-  pacing (documented follow-up).
+**The authoritative model is [`docs/designs/04.streamed-issuing.md`](../designs/04.streamed-issuing.md).**
 
 ### Status
 

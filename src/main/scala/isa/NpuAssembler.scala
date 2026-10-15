@@ -53,8 +53,8 @@ object NpuAssembler {
     (width & 3) | ((round & 3) << 2) | ((if (sat) 1 else 0) << 4) | ((dtype & 3) << 5)
 
   /** Encode funct7 for VALU_CVT. */
-  def f7Cvt(srcFmt: Int, sat: Boolean = true, round: Int = RNE, bf8E5M2: Boolean = false): Int =
-    (srcFmt & 7) | ((if (sat) 1 else 0) << 3) | ((round & 3) << 4) | ((if (bf8E5M2) 1 else 0) << 6)
+  def f7Cvt(dstFmt: Int, sat: Boolean = true, round: Int = RNE, bf8E5M2: Boolean = false): Int =
+    (dstFmt & 7) | ((if (sat) 1 else 0) << 3) | ((round & 3) << 4) | ((if (bf8E5M2) 1 else 0) << 6)
 
   /** Build R-type instruction word (returns Long to avoid signed-int overflow at bit 31). */
   def encR(opcode: Int, funct3: Int, funct7: Int, rd: Int, rs1: Int, rs2: Int): Int = {
@@ -215,15 +215,15 @@ object NpuAssembler {
   }
 
   // ---- VALU_CVT (opcode=0x14) ----------------------------------------------
-  // funct3 = dst fmt code; f7 encodes src + sat + round + bf8 variant
+  // funct3 = src fmt code; f7 encodes dst + sat + round + bf8 variant
 
   def vcvt(rd: Int, rs1: Int,
-           dstFmt: Int, srcFmt: Int,
+           srcFmt: Int, dstFmt: Int,
            sat: Boolean = true, round: Int = RNE,
            bf8E5M2: Boolean = false): Int = {
-    require(InstrTable.cvtPairs.exists(p => p.dst == dstFmt && p.src == srcFmt),
-      s"vcvt: no legal CVT pair (dst=$dstFmt, src=$srcFmt)")
-    encR(0x14, dstFmt, f7Cvt(srcFmt, sat, round, bf8E5M2), rd, rs1, 0)
+    require(InstrTable.cvtPairs.exists(p => p.src == srcFmt && p.dst == dstFmt),
+      s"vcvt: no legal CVT pair (src=$srcFmt, dst=$dstFmt)")
+    encR(0x14, srcFmt, f7Cvt(dstFmt, sat, round, bf8E5M2), rd, rs1, 0)
   }
 
   // Convenience aliases
