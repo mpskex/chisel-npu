@@ -109,6 +109,10 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     // ---- Debug: collector {keep, dat_clct, cnt} trajectory (last 16 ticks) ----
     val dbg_traj = Output(Vec(16, UInt(6.W)))
 
+    // ---- Debug: per-session performance counters (benchmarking) ----
+    val dbg_cycles = Output(UInt(32.W))  // free-running session cycles
+    val dbg_mac    = Output(UInt(32.W))  // useful K² MACs (excl. mma.last)
+
     // ---- Instruction-line fetch (shared DMA; frontend issues fills) ----
     val fetch_fill_req  = Input(Bool())
     val fetch_fill_addr = Input(UInt(32.W))
@@ -894,12 +898,22 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   val dmaDoneCnt = RegInit(0.U(16.W))
   val traj      = RegInit(VecInit(Seq.fill(16)(0.U(6.W))))
   val trajSnap  = RegInit(VecInit(Seq.fill(16)(0.U(6.W))))
+  val cycleCnt  = RegInit(0.U(32.W))
+  val macCnt    = RegInit(0.U(32.W))
   when (feedValid)                                { mmaAccCnt := mmaAccCnt + 1.U }
   when (mmalu.io.clct)                            { clctCnt := clctCnt + 1.U }
   when (dmaDoneHead)                              { dmaDoneCnt := dmaDoneCnt + 1.U }
   for (i <- 0 until 15) traj(i) := traj(i + 1)
   traj(15) := Cat(mmalu.io.ctrl.keep, mmalu.io.dbg_dat_clct, mmalu.io.dbg_cnt)
   when (boundaryPulse) { trajSnap := traj }
+  when (io.session_reset) {
+    cycleCnt := 0.U
+    macCnt   := 0.U
+  }.otherwise {
+    cycleCnt := cycleCnt + 1.U
+    // only USEFUL feeds: the mma.last feed injects zeros, so exclude it
+    when (feedValid && !feedMmaLast) { macCnt := macCnt + (K * K).U }
+  }
   io.dbg_mma_acc := mmaAccCnt
   io.dbg_clct    := clctCnt
   io.dbg_win     := fifoCount(1, 0)
@@ -924,4 +938,6 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   io.drain := !slotsAny && !dma.io.busy && dmaQCount === 0.U &&
     fifoCount === 0.U && capQCount === 0.U && boundaryCnt === 0.U
   io.dbg_traj    := trajSnap
+  io.dbg_cycles  := cycleCnt
+  io.dbg_mac     := macCnt
 }

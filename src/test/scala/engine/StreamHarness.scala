@@ -130,6 +130,8 @@ class StreamHarness(val K: Int = 16, val readLatency: Int = 1) extends Module {
     val dbg_wcount   = Output(UInt(5.W))
     val dbg_bnd      = Output(UInt(7.W))
     val dbg_drain    = Output(Bool())
+    val dbg_cycles   = Output(UInt(32.W))
+    val dbg_mac      = Output(UInt(32.W))
   })
 
   val eng = Module(new NpuProgramEngine(K, 8))
@@ -149,6 +151,8 @@ class StreamHarness(val K: Int = 16, val readLatency: Int = 1) extends Module {
   io.dbg_wcount      := eng.io.dbg_wcount
   io.dbg_bnd         := eng.io.dbg_bnd
   io.dbg_drain       := eng.io.drain
+  io.dbg_cycles      := eng.io.dbg_cycles
+  io.dbg_mac         := eng.io.dbg_mac
 
   eng.io.fetch_fill_req  := false.B
   eng.io.fetch_fill_addr := 0.U
@@ -233,4 +237,33 @@ object StreamSpecUtil {
   /** The columns of `pe` that match `g` exactly (the capture search). */
   def columnsOf(g: Array[Int], pe: Array[Array[Int]]): Seq[Int] =
     (0 until pe(0).length).filter(c => (0 until g.length).forall(i => g(i) == pe(i)(c)))
+
+  def resetSession(dut: StreamHarness): Unit = {
+    dut.io.session_reset.poke(true.B); dut.clock.step()
+    dut.io.session_reset.poke(false.B)
+  }
+
+  def runToDrain(dut: StreamHarness, maxCycles: Int = 2000000): Unit = {
+    var n = 0
+    while (!dut.io.dbg_drain.peek().litToBoolean && n < maxCycles) { dut.clock.step(); n += 1 }
+    assert(dut.io.dbg_drain.peek().litToBoolean, s"session did not drain within $maxCycles cycles")
+  }
+
+  case class Perf(cycles: Long, feeds: Long, macs: Long) {
+    def macsPerCycle: Double = if (cycles == 0) 0.0 else macs.toDouble / cycles
+    def pctPeak(K: Int): Double = if (cycles == 0) 0.0 else 100.0 * feeds.toDouble / cycles
+  }
+
+  def perf(dut: StreamHarness, K: Int): Perf = {
+    val macs  = dut.io.dbg_mac.peek().litValue.toLong
+    val cyc   = dut.io.dbg_cycles.peek().litValue.toLong
+    // dbg_mac counts only useful (non-mma.last) K² MACs; derive useful feeds.
+    val feeds = macs / (K.toLong * K)
+    assert(feeds * K.toLong * K == macs, s"mac/feed mismatch: macs=$macs K=$K")
+    Perf(cyc, feeds, macs)
+  }
+
+  def printPerf(label: String, K: Int, p: Perf): Unit =
+    println(f"[perf] $label%-28s cycles=${p.cycles}%8d feeds=${p.feeds}%7d " +
+      f"macs=${p.macs}%12d macs/cyc=${p.macsPerCycle}%8.1f peak=${p.pctPeak(K)}%6.1f%%")
 }
