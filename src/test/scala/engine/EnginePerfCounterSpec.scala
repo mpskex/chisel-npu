@@ -36,9 +36,12 @@ class EnginePerfCounterSpec extends AnyFlatSpec {
       StreamSpecUtil.issue(dut, nop)
       StreamSpecUtil.runToDrain(dut)
       val c1 = dut.io.dbg_cycles.peek().litValue
+      val m1 = dut.io.dbg_mac.peek().litValue
       StreamSpecUtil.resetSession(dut)
       val c2 = dut.io.dbg_cycles.peek().litValue
-      assert(c1 > 0 && c2 == 0, s"counters must reset on session_reset (c1=$c1 c2=$c2)")
+      val m2 = dut.io.dbg_mac.peek().litValue
+      assert(c1 > 0 && c2 == 0, s"cycle counter must reset on session_reset (c1=$c1 c2=$c2)")
+      assert(m2 == 0, s"MAC counter must reset on session_reset (c1=$c1 m1=$m1 m2=$m2)")
     }
   }
 }

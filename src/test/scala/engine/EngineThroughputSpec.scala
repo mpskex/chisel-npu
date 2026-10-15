@@ -14,6 +14,12 @@ class EngineThroughputSpec extends AnyFlatSpec {
   "Array ceiling (A1)" should "reach 1 feed/cycle with a continuous keep=1 feed" in {
     simulate(new MMALU(new MMPE(8, 32), K, 8, 32)) { dut =>
       val M = 2 * K
+      var clctSeen = false
+      var datClctSeen = false
+      def observe(): Unit = {
+        if (dut.io.clct.peek().litToBoolean) clctSeen = true
+        if (dut.io.dbg_dat_clct.peek().litToBoolean) datClctSeen = true
+      }
       for (m <- 0 until M) {
         dut.io.ctrl.keep.poke(true.B); dut.io.ctrl.busy.poke(true.B)
         for (i <- 0 until K) {
@@ -23,17 +29,20 @@ class EngineThroughputSpec extends AnyFlatSpec {
         }
         dut.io.ctrl.use_accum.poke(false.B)
         dut.clock.step()
+        observe()
       }
       dut.io.ctrl.busy.poke(false.B); dut.io.ctrl.keep.poke(false.B)
-      // settling steps (not counted): let the systolic pipeline drain so the
-      // final feeds retire before we stop the clock.
-      for (_ <- 0 until 4 * K) { dut.clock.step() }
-      // Feed-phase rate only: the array is fed every feed cycle (1 feed/cyc =
-      // 100% peak). The 4*K settling steps above are drain, not feed, so they
-      // are excluded from the reported `cycles`.
+      // Drain/settling steps (not counted in the nominal feed-phase rate):
+      // the array latency is ~3n-1, so the collection pulses only land after
+      // the feed loop ends. Keep observing so we can assert the array ran.
+      for (_ <- 0 until 4 * K) { dut.clock.step(); observe() }
+      // Nominal driver-side feed-phase rate (the array is fed every feed
+      // cycle => 1 feed/cyc = 100%). This is a driver-side nominal figure, not
+      // a validated measured ceiling.
       val p = StreamSpecUtil.Perf(M.toLong, M.toLong, M.toLong * K * K)
-      StreamSpecUtil.printPerf(s"A1 MMALU M=$M", K, p)
-      assert(p.pctPeak(K) > 99.0)
+      StreamSpecUtil.printPerf(s"A1 MMALU feed-phase (nominal) M=$M", K, p)
+      assert(clctSeen || datClctSeen,
+        "no MMALU collection pulse observed: the systolic array did not run")
     }
   }
 

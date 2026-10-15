@@ -12,15 +12,15 @@
 //  (fetch and issue decoupled).  On io.illegal_out it latches ERR_INFO, sets
 //  STATUS.illegal and halts (done asserts).
 //
-//  ctrl_lite registers (word-addressable via ctrl_addr[3:0]):
+//  ctrl_lite registers (word-addressable via the 7-bit ctrl_addr[6:0]):
 //    0x00  start (W, bit0) / done (RO, bit1) / busy (RO, bit2)
 //    0x04  FRAMES       (config; reserved)
 //    0x08  STATUS       pc[15:0] | frames_done[15:0] | illegal
 //    0x0C  ERR_INFO     faulting instruction word
 //    0x10  FETCH_STATS  misses[15:0] | prefetches[15:0]
 //    0x14  PROG_LEN     instruction count (words after the entry)
-//    0x40  CYCLES       free-running session cycle count (RO)
-//    0x44  MACS         useful K² MACs, excluding mma.last (RO)
+//    0x40  CYCLES       session cycle count, latched at done (RO)
+//    0x44  MACS         useful K² MACs, excluding mma.last, latched at done (RO)
 // -----------------------------------------------------------------------------
 
 package engine
@@ -142,6 +142,11 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
   val errPc       = RegInit(0.U(16.W))
   val missCnt     = RegInit(0.U(16.W))
   val prefetchCnt = RegInit(0.U(16.W))
+  // Perf counters latched at session completion, so a host polling `done` and
+  // then reading 0x40/0x44 sees the final session counts, not inflated live
+  // values (the core's cycleCnt free-runs until the next session_reset).
+  val perfCycles  = RegInit(0.U(32.W))
+  val perfMacs    = RegInit(0.U(32.W))
 
   val startPrev = RegNext(startReg, init = false.B)
   val startEdge = startReg && !startPrev
@@ -152,7 +157,7 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
   when (io.ctrl_we && io.ctrl_addr === 0x0.U)  { startReg := io.ctrl_wdata(0) }
   when (io.ctrl_we && io.ctrl_addr === 0x4.U)  { framesReg := io.ctrl_wdata(15, 0) }
   when (io.ctrl_we && io.ctrl_addr === 0x14.U) { progLenReg := io.ctrl_wdata(15, 0) }
-  when (startEdge) { doneReg := false.B }
+  when (startEdge) { doneReg := false.B; perfCycles := 0.U; perfMacs := 0.U }
 
   // ==========================================================================
   // Program counter + frames-done counter
@@ -328,12 +333,16 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
         errPc         := pc
         statusIllegal := true.B
         doneReg       := true.B
+        perfCycles    := core.io.dbg_cycles
+        perfMacs      := core.io.dbg_mac
         runState      := RunState.RUN_DONE
       } .elsewhen (fpc === progLenReg && ifqEmpty && core.io.drain) {
         // all words issued and the engine pipeline fully drained
         // (window empty + DMA + captures + boundary countdown)
-        doneReg  := true.B
-        runState := RunState.RUN_DONE
+        doneReg    := true.B
+        perfCycles := core.io.dbg_cycles
+        perfMacs   := core.io.dbg_mac
+        runState   := RunState.RUN_DONE
       }
     }
 
@@ -411,8 +420,9 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
                   core.io.dbg_traj(14),
                   0.U(2.W)),
      0x2C.U -> Cat(core.io.dbg_traj(15), 0.U(26.W)),
-    // Perf counters: 0x40 = session cycles, 0x44 = useful K² MACs (excl. mma.last)
-    0x40.U -> core.io.dbg_cycles,
-    0x44.U -> core.io.dbg_mac,
+    // Perf counters: 0x40 = session cycles, 0x44 = useful K² MACs (excl. mma.last),
+    // latched at session completion.
+    0x40.U -> perfCycles,
+    0x44.U -> perfMacs,
   ))
 }

@@ -31,10 +31,12 @@ class FrontendThroughputSpec extends AnyFlatSpec {
     while (((dut.io.ctrl_rdata.peek().litValue >> 1) & 1) == 0 && n < 2000000) {
       dut.io.ctrl_addr.poke(0x0.U); dut.clock.step(); n += 1
     }
+    assert(n < 2000000, "done not reached within 2000000 cycles")
     dut.io.ctrl_addr.poke(0x44.U); dut.clock.step(0)
     val macs = dut.io.ctrl_rdata.peek().litValue.toLong
     dut.io.ctrl_addr.poke(0x40.U); dut.clock.step(0)
     val cyc = dut.io.ctrl_rdata.peek().litValue.toLong
+    assert(cyc > 0, "0x40 cycle count must be non-zero")
     (macs, cyc)
   }
 
