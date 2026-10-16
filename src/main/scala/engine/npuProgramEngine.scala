@@ -632,13 +632,10 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     for (i <- 0 until L) {
       when (wm(i)) { vxWrMask(i) := vxWrMask(i) & ~(1.U << sIdx).pad(W) }
     }
-    // L1 tag free (shadow): this mma completes → its tag is no longer live and
-    // its pending-writer bits are cleared from the tag mirror.
+    // L1 tag free (shadow): this mma completes → its tag is no longer live.
+    // The tagWrMask bit clear is handled by the net tag-mask update below.
     val tg = fifo(fifoTail).tag
     tagValid(tg) := false.B
-    for (i <- 0 until L) {
-      when (wm(i)) { tagWrMask(i) := tagWrMask(i) & ~((1.U << tg)(T - 1, 0)) }
-    }
     // push the capture value for the chained vse.  Default mode pushes every
     // non-mma.last clct; reduce mode pushes only the mma.last's accumulated
     // capture (see `capturePush`).
@@ -688,6 +685,27 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
      dec.family =/= OpFamily.ST && dec.family =/= OpFamily.MMA) ||
     mmaRangeBad || memRangeBad
 
+  // ---- Entry reader/writer slot sets (hoisted to top level so the P1a tag
+  //      mask net update can share them; purely combinational). ----
+  // vse capture-consumer detection: the source register's last writer was
+  // an mma capture (vxWrCap = the last writer's type).  NOTE: this must NOT
+  // require the producer to still be a pending prior slot (the old
+  // `vxWrMask & priorMask` check).  On silicon the mma's clctD can retire
+  // the producer before the store word streams into the window (the MIG's
+  // variable latency vs. the frontend's fetch cadence), so the store would
+  // silently miss the capture: it would read the RF instead of popping the
+  // capQ, the mma's capture entry would sit in capQ forever, and `drain`
+  // would never assert (the intermittent pc=4 wedge).  `vxWrCap(i)` alone
+  // records that an mma produced VX[i] and survives the producer's retire,
+  // so a store reading VX[i] must consume that capture.
+  val entSrmask = readSlotsL(dec.family.asUInt, dec.rd, dec.rs1, dec.rs2, dec.mem_width(1, 0), dec.rs3)
+  val entIsCapSource = WireDefault(false.B)
+  for (i <- 0 until L) {
+    when (entSrmask(i) && vxWrCap(i)) { entIsCapSource := true.B }
+  }
+  val entIsCapStore = dec.family === OpFamily.ST && entIsCapSource
+  val entSwmask = writeSlotsL(dec.family.asUInt, dec.rd, dec.mem_width(1, 0))
+
   io.instr_ready := !wFull && !illegalAny && tagNotFull
 
   when (io.instr_valid && !wFull && !illegalAny && tagNotFull) {
@@ -710,38 +728,27 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     slots(t).issued     := false.B
     slots(t).done       := dec.family === OpFamily.NOP
 
-    // ---- L1 tag allocation (shadow).  The tag is allocated at entry and freed
-    //      at completion.  `priorSnap` is the tagValid snapshot taken just
-    //      BEFORE this allocation: reading the register yields the pre-update
-    //      value, so it records exactly the tags live ahead of this one. ----
-    tagValid(tg)      := true.B
-    tagIsMma(tg)      := dec.family === OpFamily.MMA
-    tagIsLast(tg)     := dec.family === OpFamily.MMA && dec.mma_last
-    tagSlot(tg)       := wTail
-    slots(t).tag       := tg
-    slots(t).priorSnap := tagValid.asUInt
-    tagTail := tagTail + 1.U
-
-    // vse capture-consumer detection: the source register's last writer was
-    // an mma capture (vxWrCap = the last writer's type).  NOTE: this must NOT
-    // require the producer to still be a pending prior slot (the old
-    // `vxWrMask & priorMask` check).  On silicon the mma's clctD can retire
-    // the producer before the store word streams into the window (the MIG's
-    // variable latency vs. the frontend's fetch cadence), so the store would
-    // silently miss the capture: it would read the RF instead of popping the
-    // capQ, the mma's capture entry would sit in capQ forever, and `drain`
-    // would never assert (the intermittent pc=4 wedge).  `vxWrCap(i)` alone
-    // records that an mma produced VX[i] and survives the producer's retire,
-    // so a store reading VX[i] must consume that capture.
-    val srmask = readSlotsL(dec.family.asUInt, dec.rd, dec.rs1, dec.rs2, dec.mem_width(1, 0), dec.rs3)
-    val isCapSource = WireDefault(false.B)
-    for (i <- 0 until L) {
-      when (srmask(i) && vxWrCap(i)) {
-        isCapSource := true.B
+    // ---- L1 tag allocation (shadow).  Only real (non-NOP) entries allocate a
+    //      tag: a NOP is `done` at entry and never completes, so allocating for
+    //      it would leak one tag per NOP until `tagCount` hit T and stalled
+    //      entry forever.  `priorSnap` is the tagValid snapshot taken just
+    //      BEFORE this allocation (reading the register yields the pre-update
+    //      value, so it records exactly the tags live ahead of this one). ----
+    when (dec.family =/= OpFamily.NOP) {
+      tagValid(tg)      := true.B
+      tagIsMma(tg)      := dec.family === OpFamily.MMA
+      tagIsLast(tg)     := dec.family === OpFamily.MMA && dec.mma_last
+      tagSlot(tg)       := wTail
+      slots(t).tag       := tg
+      slots(t).priorSnap := tagValid.asUInt
+      tagTail := tagTail + 1.U
+      // newest writer tag per register (mirror of vxWrCap; never cleared)
+      for (i <- 0 until L) {
+        when (entSwmask(i)) { lastWrTag(i) := tg }
       }
     }
-    val isCapStore = dec.family === OpFamily.ST && isCapSource
-    slots(t).useCapData := isCapStore
+
+    slots(t).useCapData := entIsCapStore
 
     // scoreboard registration: readers + writers (mask, not single tag).
     // A capture-consumer store does NOT read the RF — its store data is the
@@ -753,26 +760,12 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     // vxWrMask still orders the store after its producer's capture, so
     // capture order is unchanged.
     for (i <- 0 until L) {
-      when (srmask(i) && !isCapStore) { vxRdMask(i) := vxRdMask(i) | (1.U << t)(W - 1, 0) }
+      when (entSrmask(i) && !entIsCapStore) { vxRdMask(i) := vxRdMask(i) | (1.U << t)(W - 1, 0) }
     }
-    val swmask = writeSlotsL(dec.family.asUInt, dec.rd, dec.mem_width(1, 0))
     for (i <- 0 until L) {
-      when (swmask(i)) {
+      when (entSwmask(i)) {
         vxWrMask(i) := vxWrMask(i) | (1.U << t)(W - 1, 0)
         vxWrCap(i)  := dec.family === OpFamily.MMA
-      }
-    }
-    // ---- L1 tag mirror of the scoreboard registration (shadow).  Same cap-
-    //      store exclusion on the reader side as the vxRdMask registration. ----
-    for (i <- 0 until L) {
-      when (srmask(i) && !isCapStore) {
-        tagRdMask(i) := tagRdMask(i) | (1.U << tg)(T - 1, 0)
-      }
-    }
-    for (i <- 0 until L) {
-      when (swmask(i)) {
-        tagWrMask(i) := tagWrMask(i) | (1.U << tg)(T - 1, 0)
-        lastWrTag(i) := tg
       }
     }
     wTail  := wTail + 1.U
@@ -931,22 +924,11 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     // capture read a zero array).  Only vle/vse completions touch slots.
     when (dmaHead.dir =/= 3.U) {
       slots(dmaHead.slotIdx).done := true.B
-      // L1 tag free (shadow): this DMA completes → free the carried tag and
-      // clear its bits from the tag mirrors.  Fetch fills (dir=3) never
-      // allocate a tag (placeholder tag=0), so they must not free one.
+      // L1 tag free (shadow): this DMA completes → free the carried tag.  The
+      // tagWrMask/tagRdMask bit clears are handled by the net tag-mask update.
+      // Fetch fills (dir=3) never allocate a tag (placeholder tag=0), so they
+      // must not free one.
       tagValid(dmaHead.tag) := false.B
-      when (dmaHead.dir === 0.U) {
-        tagWrMask(dmaHead.rfAddr) :=
-          tagWrMask(dmaHead.rfAddr) & ~((1.U << dmaHead.tag)(T - 1, 0))
-      } .elsewhen (dmaHead.dir === 1.U && !dmaHead.storeDataValid) {
-        val sl = slots(dmaHead.slotIdx)
-        val srmask = readSlotsL(sl.family, sl.rd, sl.rs1, sl.rs2, sl.memWidth, sl.vs3)
-        for (i <- 0 until L) {
-          when (srmask(i)) {
-            tagRdMask(i) := tagRdMask(i) & ~((1.U << dmaHead.tag)(T - 1, 0))
-          }
-        }
-      }
     }
     when (dmaHead.dir === 0.U) {
       // vle: the RF write completed → clear the producer bit
@@ -1000,18 +982,51 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
 
   // ==========================================================================
   // L1 tag ring occupancy (P1a shadow).  Tags are allocated at window entry
-  // (+1) and freed on an MMA clct or a DMA completion (-1 each; both can land
-  // on the same cycle).  The head walks forward over completed tags only,
-  // stopping at the tail.  The flush blocks above win on illegal/reset.
-  // At W=16 the live count never approaches T, so this never stalls entry.
+  // for NON-NOP words only (+1) and freed on an MMA clct or a DMA completion
+  // (-1 each; both can land on the same cycle).  The head walks forward over
+  // completed tags only, stopping at the tail.  The flush blocks above win on
+  // illegal/reset.  At W=16 the live count never approaches T.
   // ==========================================================================
+  val tagAlloc = windowEntry && (dec.family =/= OpFamily.NOP)
   val tagMmaFree = clctHasEntry
   val tagDmaFree = dmaDoneHead && dmaHead.dir =/= 3.U
   val tagFreeNum = Mux(tagMmaFree, 1.U, 0.U) + Mux(tagDmaFree, 1.U, 0.U)
   when (!illegalAny && !io.session_reset) {
-    tagCount := tagCount + Mux(windowEntry, 1.U, 0.U) - tagFreeNum
+    tagCount := tagCount + Mux(tagAlloc, 1.U, 0.U) - tagFreeNum
     when (tagHead =/= tagTail && !tagValid(tagHead)) {
       tagHead := tagHead + 1.U
+    }
+  }
+
+  // ---- L1 tag mask net set/clear (P1a shadow).  Entry SETS bit `tgAlloc`;
+  //      MMA completion, MMALU feed (reader release) and DMA completion CLEAR
+  //      bits.  All sources are folded into ONE connect per register so a
+  //      same-cycle set and clear can no longer race through last-connect (the
+  //      later entry assignment used to drop the completion's clear).  The
+  //      cap-store (reader) and dir=3/fetch (DMA) exclusions are preserved. ----
+  val tgAlloc      = tagTail
+  val mmaDoneTag   = fifo(fifoTail).tag
+  val mmaDoneWmask = (0xF.U << (fifo(fifoTail).vd << 2))(L - 1, 0)
+  val mmaFeedRmask = readSlotsL(OpFamily.MMA.asUInt, feedRd, feedRs1, feedRs2, 0.U, feedVs3)
+  val dmaVseSl     = slots(dmaHead.slotIdx)
+  val dmaVseSrmask = readSlotsL(dmaVseSl.family, dmaVseSl.rd, dmaVseSl.rs1,
+    dmaVseSl.rs2, dmaVseSl.memWidth, dmaVseSl.vs3)
+  when (!illegalAny && !io.session_reset) {
+    for (i <- 0 until L) {
+      val wrSet    = tagAlloc && entSwmask(i)
+      val wrClrMma = clctHasEntry && mmaDoneWmask(i)
+      val wrClrDma = dmaDoneHead && dmaHead.dir === 0.U && dmaHead.rfAddr === i.U
+      tagWrMask(i) := (tagWrMask(i) | Mux(wrSet, (1.U << tgAlloc)(T - 1, 0), 0.U(T.W))) &
+        ~Mux(wrClrMma, (1.U << mmaDoneTag)(T - 1, 0), 0.U(T.W)) &
+        ~Mux(wrClrDma, (1.U << dmaHead.tag)(T - 1, 0), 0.U(T.W))
+
+      val rdSet     = tagAlloc && entSrmask(i) && !entIsCapStore
+      val rdClrFeed = feedValid && mmaFeedRmask(i)
+      val rdClrDma  = dmaDoneHead && dmaHead.dir === 1.U &&
+        !dmaHead.storeDataValid && dmaVseSrmask(i)
+      tagRdMask(i) := (tagRdMask(i) | Mux(rdSet, (1.U << tgAlloc)(T - 1, 0), 0.U(T.W))) &
+        ~Mux(rdClrFeed, (1.U << feedTag)(T - 1, 0), 0.U(T.W)) &
+        ~Mux(rdClrDma, (1.U << dmaHead.tag)(T - 1, 0), 0.U(T.W))
     }
   }
 
