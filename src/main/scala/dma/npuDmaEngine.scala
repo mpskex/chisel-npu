@@ -152,7 +152,9 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
   val beats = beatsOf(reqWidth)
 
   // ---- Defaults ----
-  io.busy       := state =/= DmaState.IDLE
+  // busy must include a buffered-but-unpromoted request, else a caller that
+  // drains on !busy exits with a request still queued.
+  io.busy       := (state =/= DmaState.IDLE) || bufValid
   io.done       := false.B
   io.acc_valid  := false.B
   io.instr_valid := false.B
@@ -398,7 +400,10 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
     (state === DmaState.READ) || (state === DmaState.WDATA) ||
     (state === DmaState.WRESP) || (state === DmaState.WAW)
   val wantBuffer = io.req_valid && !bufValid && !io.done && state =/= DmaState.IDLE
-  io.req_ready := (state === DmaState.IDLE) || (dataPhaseStarted && !bufValid)
+  // Never advertise readiness while a buffered request is waiting to be
+  // promoted: in IDLE-with-buffer the new request would be silently dropped
+  // (the promote wins, and `wantBuffer` excludes IDLE).
+  io.req_ready := !bufValid && ((state === DmaState.IDLE) || dataPhaseStarted)
   when (wantBuffer) {
     bufValid  := true.B
     bufDir    := io.req_dir
