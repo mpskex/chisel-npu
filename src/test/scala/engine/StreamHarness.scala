@@ -8,6 +8,7 @@
 package engine
 
 import chisel3._
+import chisel3.util._
 import chisel3.simulator.EphemeralSimulator._
 import testUtil._
 import isa._
@@ -23,8 +24,8 @@ class LatencyRamModel(val readLatency: Int = 1) extends Module {
     val s_axi_awburst = Input(UInt(2.W))
     val s_axi_awvalid = Input(Bool())
     val s_axi_awready = Output(Bool())
-    val s_axi_wdata   = Input(UInt(128.W))
-    val s_axi_wstrb   = Input(UInt(16.W))
+    val s_axi_wdata   = Input(UInt(512.W))
+    val s_axi_wstrb   = Input(UInt(64.W))
     val s_axi_wlast   = Input(Bool())
     val s_axi_wvalid  = Input(Bool())
     val s_axi_wready  = Output(Bool())
@@ -36,7 +37,7 @@ class LatencyRamModel(val readLatency: Int = 1) extends Module {
     val s_axi_arburst = Input(UInt(2.W))
     val s_axi_arvalid = Input(Bool())
     val s_axi_arready = Output(Bool())
-    val s_axi_rdata   = Output(UInt(128.W))
+    val s_axi_rdata   = Output(UInt(512.W))
     val s_axi_rlast   = Output(Bool())
     val s_axi_rvalid  = Output(Bool())
     val s_axi_rready  = Input(Bool())
@@ -47,6 +48,7 @@ class LatencyRamModel(val readLatency: Int = 1) extends Module {
     val pre_wr_data = Input(UInt(128.W))
   })
 
+  val WORDS = 4    // 128-bit words per 512-bit AXI beat
   val mem = Mem(4096, UInt(128.W))
   io.dbg_rd_data := mem(io.dbg_rd_addr)
   when (io.pre_wr_en) { mem(io.pre_wr_addr) := io.pre_wr_data }
@@ -60,7 +62,7 @@ class LatencyRamModel(val readLatency: Int = 1) extends Module {
 
   io.s_axi_arready := !busy
   io.s_axi_rvalid  := rValid
-  io.s_axi_rdata   := mem((arAddr >> 4.U) + rCnt)
+  io.s_axi_rdata   := Cat((0 until WORDS).reverse.map(w => mem(((arAddr >> 4.U) + (WORDS.U * rCnt)) + w.U)))
   io.s_axi_rlast   := rValid && rCnt === arLen
 
   when (io.s_axi_arvalid && !busy) {
@@ -97,7 +99,12 @@ class LatencyRamModel(val readLatency: Int = 1) extends Module {
     wCnt      := 0.U
   }
   when (io.s_axi_wvalid && io.s_axi_wready) {
-    mem((awAddr >> 4.U) + wCnt) := io.s_axi_wdata
+    val wBase = (awAddr >> 4.U) + (WORDS.U * wCnt)
+    for (w <- 0 until WORDS) {
+      when (io.s_axi_wstrb(16 * w + 15, 16 * w).orR) {
+        mem(wBase + w.U) := io.s_axi_wdata(128 * w + 127, 128 * w)
+      }
+    }
     when (io.s_axi_wlast) { bValid := true.B }
     .otherwise            { wCnt := wCnt + 1.U }
   }
