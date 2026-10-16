@@ -64,6 +64,19 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   //      retires at issue/feed so the in-flight capacity is the tag ring, not
   //      the W-slot window).  T is the in-flight capacity; TAG_IDX indexes the
   //      ring.
+  //
+  //      ALIASING BOUND (do not retune silently): `priorSnap` is a snapshot of
+  //      `tagValid`, i.e. a raw T-bit vector of the ring positions live at
+  //      allocation time.  When a position frees it can be reallocated to a
+  //      *different* op while a younger op still holds a `priorSnap` recording
+  //      that position, so the snapshot aliases the new owner.  This is safe
+  //      only while the ring cannot wrap between an allocation and the
+  //      retirement of every op that snapshotted it, i.e. the design must hold
+  //      maxInFlight < T - W.  A generational scheme (tag + generation counter)
+  //      would remove the bound.  Retuning T (or CAPTURE_DELAY, which sets the
+  //      in-flight span) down to/below 2W + L requires that generational
+  //      `priorSnap` fix FIRST — otherwise the §13 mma.last ordering gate can
+  //      read a stale alias bit (miss a real prior mma or block on a dead one).
   val T = 128
   val TAG_IDX = log2Ceil(T)
   // The completion queues carry one entry per in-flight op, so they must be
@@ -193,7 +206,9 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     val done       = Bool()
     // ---- L1 tag ring (P1a shadow).  `tag` is the allocated ring index; the
     //      `priorSnap` is the tagValid snapshot taken just before its own
-    //      allocation (the hazard set for a later readiness rewrite). ----
+    //      allocation (the hazard set for a later readiness rewrite).  This is
+    //      a raw bit-per-ring-position snapshot and is only alias-safe while
+    //      maxInFlight < T - W — see the bound note at the `T` definition. ----
     val tag        = UInt(TAG_IDX.W)
     val priorSnap  = UInt(T.W)
   }
@@ -238,8 +253,10 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   val tagTail = RegInit(0.U(TAG_IDX.W))
   val tagCount = RegInit(0.U((TAG_IDX + 1).W))
   val tagValid = RegInit(VecInit(Seq.fill(T)(false.B)))
-  // P2 retire-at-feed: `tagFed` marks an allocation whose operands have been
-  // read (MMA feed) / enqueued (DMA).  The mma.last ordering gate (§13) must
+  // P2 retire-at-feed: `tagFed` marks an MMA allocation whose operands have
+  // been read at MMA feed.  It is NOT set for DMA ops (the §13 ordering gate
+  // tests `tagIsMma` first, so a DMA entry never reaches the `tagFed` test).
+  // The mma.last ordering gate (§13) must
   // block only on *prior MMAs that have not yet fed* — waiting for their
   // completion would serialize the whole reduce round's tail behind the
   // ~2n+CAPTURE_DELAY capture latency.  `tagValid` still means "not completed"
@@ -596,7 +613,12 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     // the same zero-forcing the vs3==0 accum path already does.
     mmaluInA(lane)     := Mux(feedValid && !feedMmaLast, rf.io.vx_r_data(0)(lane).asSInt, 0.S(N.W))
     mmaluInB(lane)     := Mux(feedValid && !feedMmaLast, rf.io.vx_r_data(1)(lane).asSInt, 0.S(N.W))
-    mmaluInAccum(lane) := Mux(feedValid,
+    // accum: mma.last must also zero-force the vs3 VR read.  The mma.last
+    // read-set mask is emptied (nothing ordered this read), so letting it read
+    // `vr_r_data(1)` would be a RAW/WAR hole — a concurrently-writing producer
+    // could still be in flight.  mma.last only starts the boundary countdown;
+    // the VR value is discarded (see the capture/accum-carry path), so force 0.
+    mmaluInAccum(lane) := Mux(feedValid && !feedMmaLast,
       Mux(feedVs3 === 0.U, 0.S((4 * N).W), rf.io.vr_r_data(1)(lane).asSInt),
       0.S((4 * N).W))
   }
