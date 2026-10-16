@@ -36,6 +36,7 @@ class TrajHarness extends Module {
   eng.io.instr := io.instr; eng.io.instr_valid := io.instr_valid
   io.instr_ready := eng.io.instr_ready; io.illegal_out := eng.io.illegal_out
   eng.io.session_reset := false.B
+  eng.io.reduce_mode := false.B
   eng.io.dbg_vx_addr := io.dbg_vx_addr; io.dbg_vx_data := eng.io.dbg_vx_data
   io.dbg_mma_acc := eng.io.dbg_mma_acc; io.dbg_clct := eng.io.dbg_clct
   io.dbg_traj := eng.io.dbg_traj

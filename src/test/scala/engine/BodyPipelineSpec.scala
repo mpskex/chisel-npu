@@ -22,12 +22,10 @@ class BodyPipelineSpec extends AnyFlatSpec {
     simulate(new StreamHarness(K = K)) { dut =>
       StreamSpecUtil.resetSession(dut)
       StreamSpecUtil.preloadI8(dut, NpuSections.A, Seq.fill(K)(3))
-      StreamSpecUtil.preloadI8(dut, NpuSections.SECT_B, Seq.fill(K)(5))
+      StreamSpecUtil.preloadI8(dut, NpuSections.B, Seq.fill(K)(5))
       val ph = StreamSpecUtil.traceRun(dut, round(128, Seq(0, 3, 4, 5)))
       StreamSpecUtil.printPhases("pipeline R=128 Vd=4", ph)
       assert(ph.bodyUtil >= 0.05, f"body at ${ph.bodyUtil * 100}%.1f%% of peak, want >=5%%")
     }
-  }
-}
   }
 }

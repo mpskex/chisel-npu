@@ -81,6 +81,13 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     // session cannot contaminate the next run.
     val session_reset = Input(Bool())
 
+    // Store-sparse reduce mode (opt-in, default OFF).  In a reduction round,
+    // the regular mmas accumulate in the array (the MMALU holds keep=1) and
+    // push no capture; only the round's FINAL (mma.last) feed pushes the
+    // accumulated capture, which a single trailing vse stores.  This removes
+    // the 128 B-per-feed store roofline from the array-pipeline body.
+    val reduce_mode = Input(Bool())
+
     // ---- Debug: RF VX read (testbench only) ----
     val dbg_vx_addr = Input(UInt(5.W))
     val dbg_vx_data = Output(Vec(K, UInt(N.W)))
@@ -563,10 +570,21 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   // the FIFO empty the old code still marked a STALE fifo(fifoTail).slotIdx
   // done — spuriously retiring the mma slot, so the mma never fed and the
   // capture read a zero array (the intermittent [0,0,0,0] wrong captures).
-  when (clctD && fifoCount =/= 0.U) {
+  // Capture-push policy.  Default (reduce_mode=0): per-feed capture — every
+  // non-mma.last clct pushes (the chained vse stores each running sum);
+  // mma.last is a session terminator and does not push.  Reduce mode
+  // (opt-in): the regular mmas accumulate in the array and push nothing; only
+  // the FINAL mma.last clct pushes the round's accumulated sum.  The SAME
+  // expression must drive both the push below and the capQCount net term (or
+  // the count desyncs and `drain` wedges).
+  val clctHasEntry  = clctD && fifoCount =/= 0.U
+  val clctIsMmaLast = fifo(fifoTail).isMmaLast
+  val capturePush   = clctHasEntry &&
+    Mux(io.reduce_mode, clctIsMmaLast, !clctIsMmaLast)
+
+  when (clctHasEntry) {
     val sIdx = fifo(fifoTail).slotIdx
     val cvd  = fifo(fifoTail).vd
-    val isMmaLast = fifo(fifoTail).isMmaLast
     capVd := cvd
     for (lane <- 0 until K) outBuf(lane) := mmalu.io.out(lane) + fifo(fifoTail).accum(lane)
     slots(sIdx).done := true.B
@@ -574,11 +592,10 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     for (i <- 0 until L) {
       when (wm(i)) { vxWrMask(i) := vxWrMask(i) & ~(1.U << sIdx).pad(W) }
     }
-    // push the capture value for the chained vse — the mma_last is a session
-    // terminator whose "capture" is the same array state, not a per-feed
-    // column; it must not enter the capture chain (the next round's first
-    // vse would otherwise pop it).
-    when (!isMmaLast) {
+    // push the capture value for the chained vse.  Default mode pushes every
+    // non-mma.last clct; reduce mode pushes only the mma.last's accumulated
+    // capture (see `capturePush`).
+    when (capturePush) {
       capQ(capQTail).valid := true.B
       for (lane <- 0 until K) capQ(capQTail).data(lane) :=
         (mmalu.io.out(lane) + fifo(fifoTail).accum(lane)).asUInt
@@ -591,7 +608,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   // assignments would let the later (push) overwrite the pop and drift the
   // count upward forever — leaving a phantom entry that blocks `drain`
   // (the R=128 non-drain wedge) even though head==tail.  Compute the net.
-  val capPush = clctD && fifoCount =/= 0.U && !fifo(fifoTail).isMmaLast
+  val capPush = capturePush
   val capPop  = vsePopCap
   when (capPush && capPop) { capQCount := capQCount }
   .elsewhen (capPush)      { capQCount := capQCount + 1.U }
