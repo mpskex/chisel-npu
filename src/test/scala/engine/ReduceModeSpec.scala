@@ -52,7 +52,7 @@ class ReduceModeSpec extends AnyFlatSpec {
         s"reduce capture is not the final running-sum column: ${out.toList}")
 
       println(f"[reduce] bodyUtil=${ph.bodyUtil * 100.0}%.1f%% body=${ph.body} feeds=${ph.bodyFeeds}")
-      assert(ph.bodyUtil >= 0.15, f"bodyUtil ${ph.bodyUtil * 100.0}%.1f%% < 15%%")
+      assert(ph.bodyUtil >= 0.8, f"bodyUtil ${ph.bodyUtil * 100.0}%.1f%% < 80%%")
     }
   }
 }

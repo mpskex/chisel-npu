@@ -60,17 +60,19 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   val VX_ADDR = log2Ceil(L)
   val VE_ADDR = log2Ceil(L / 2)
   val VR_ADDR = log2Ceil(L / 4)
-  // Sized for the xc7k480t: the dispatch state (window, queues) is
-  // the dominant logic; keep it compact for routability.
-  val FIFO_DEPTH = K          // in-flight feeds (≤ ~K at the DMA cadence)
-  val CAPQ_DEPTH = FIFO_DEPTH
-  val DMAQ_DEPTH = 4
-  val SLOT_IDX = log2Ceil(W)
-  // ---- L1 tag ring (P1a, SHADOW: allocated at entry, freed at completion).
-  //      T is the in-flight capacity; TAG_IDX indexes the ring.  At W=16 the
-  //      live tag count is bounded by the window, so this never stalls entry.
+  // ---- L1 tag ring (P2: allocated at entry, freed at completion; the slot
+  //      retires at issue/feed so the in-flight capacity is the tag ring, not
+  //      the W-slot window).  T is the in-flight capacity; TAG_IDX indexes the
+  //      ring.
   val T = 128
   val TAG_IDX = log2Ceil(T)
+  // The completion queues carry one entry per in-flight op, so they must be
+  // deep enough to hold the whole tag ring or feed issue stalls below peak
+  // (the vd FIFO also carries the K×32-bit `accum` column — decision (a)).
+  val FIFO_DEPTH = T          // in-flight feeds (vd FIFO, carries accum)
+  val CAPQ_DEPTH = T          // capture queue
+  val DMAQ_DEPTH = 4
+  val SLOT_IDX = log2Ceil(W)
 
   val io = IO(new Bundle {
     // ---- Instruction issue (frontend feeds this) ----
@@ -205,6 +207,10 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     val dmaWidth   = UInt(2.W)
     val rfAddr     = UInt(5.W)
     val l3Addr     = UInt(32.W)
+    // The vse's VX read mask captured at issue: the window slot retires at
+    // issue (P2), so the completion can no longer read it back off the slot to
+    // clear the reader tag bits.  (Unused for vle/fetch fills.)
+    val rdMask     = UInt(L.W)
     val storeDataValid = Bool()
     val storeData = Vec(K, UInt((4 * N).W))
   }
@@ -232,21 +238,39 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   val tagTail = RegInit(0.U(TAG_IDX.W))
   val tagCount = RegInit(0.U((TAG_IDX + 1).W))
   val tagValid = RegInit(VecInit(Seq.fill(T)(false.B)))
+  // P2 retire-at-feed: `tagFed` marks an allocation whose operands have been
+  // read (MMA feed) / enqueued (DMA).  The mma.last ordering gate (§13) must
+  // block only on *prior MMAs that have not yet fed* — waiting for their
+  // completion would serialize the whole reduce round's tail behind the
+  // ~2n+CAPTURE_DELAY capture latency.  `tagValid` still means "not completed"
+  // because it drives the RAW/WAR hazard snapshot and must stay live until the
+  // write is visible.
+  val tagFed   = RegInit(VecInit(Seq.fill(T)(false.B)))
   val tagIsMma = RegInit(VecInit(Seq.fill(T)(false.B)))
   val tagIsLast = RegInit(VecInit(Seq.fill(T)(false.B)))
   val tagSlot = RegInit(VecInit(Seq.fill(T)(0.U(SLOT_IDX.W))))
   val tagWrMask = RegInit(VecInit(Seq.fill(L)(0.U(T.W))))
   val tagRdMask = RegInit(VecInit(Seq.fill(L)(0.U(T.W))))
   val lastWrTag = RegInit(VecInit(Seq.fill(L)(0.U(TAG_IDX.W))))
-  val tagNotFull = tagCount =/= T.U
+  // Entry stalls once the ring is full.  The second term guards the
+  // out-of-order-free alias: with completion out of order the net `tagCount`
+  // can undercount the reachable span, so also refuse to allocate when the
+  // tail still points at a live entry (the oldest in-flight op will free it).
+  val tagNotFull = (tagCount =/= T.U) && !tagValid(tagTail)
 
   // The VX-slot sets an instruction reads/writes (L-bit masks).
   def readSlotsL(family: UInt, rd: UInt, rs1: UInt, rs2: UInt, memWidth: UInt,
-                 vs3: UInt = 0.U): UInt = {
+                 vs3: UInt = 0.U, isMmaLast: Bool = false.B): UInt = {
     val m = WireDefault(0.U(L.W))
     when (family === OpFamily.MMA.asUInt) {
-      m := (1.U << rs1) | (1.U << rs2) |
-        Mux(vs3 === 0.U, 0.U(L.W), (0xF.U << (vs3 << 2))(L - 1, 0))
+      // The mma.last is a session terminator: the engine ZERO-FORCES its
+      // operands (it must not read stale VX[0]), so its true read set is
+      // empty.  Counting its encoded vs1/vs2 as reads makes it RAW-wait on
+      // every prior mma's destination (VX[0]) completion, which serialises the
+      // reduce round's whole tail behind the capture latency.
+      m := Mux(isMmaLast, 0.U(L.W),
+        (1.U << rs1) | (1.U << rs2) |
+          Mux(vs3 === 0.U, 0.U(L.W), (0xF.U << (vs3 << 2))(L - 1, 0)))
     } .elsewhen (family === OpFamily.ST.asUInt) {
       when (memWidth === 0.U) {
         m := 1.U << rd
@@ -391,7 +415,8 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
 
   for (s <- 0 until W) {
     val sl = slots(s)
-    val rmask = readSlotsL(sl.family, sl.rd, sl.rs1, sl.rs2, sl.memWidth, sl.vs3)
+    val rmask = readSlotsL(sl.family, sl.rd, sl.rs1, sl.rs2, sl.memWidth, sl.vs3,
+      sl.isMmaLast)
     val wmask = writeSlotsL(sl.family, sl.rd, sl.memWidth)
     val rawOk = WireDefault(true.B)
     val warOk = WireDefault(true.B)
@@ -416,7 +441,8 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     }
     val priorMma = WireDefault(false.B)
     for (i <- 0 until T) {
-      when (tagValid(i) && tagIsMma(i) && !tagIsLast(i) && slots(s).priorSnap(i)) {
+      when (tagValid(i) && tagIsMma(i) && !tagIsLast(i) && !tagFed(i) &&
+            slots(s).priorSnap(i)) {
         priorMma := true.B
       }
     }
@@ -493,9 +519,15 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
           NpuSections.SECT_ACCUM.U(2.W) -> NpuSections.ACCUM.U(32.W),
           NpuSections.SECT_OUT.U(2.W)   -> NpuSections.OUT.U(32.W),
         )) + slots(s).off
+        // Snapshot the vse's VX read mask for the tag-reader clear at done.
+        dmaQ(dmaQTail).rdMask := readSlotsL(slots(s).family, slots(s).rd,
+          slots(s).rs1, slots(s).rs2, slots(s).memWidth, slots(s).vs3)
         dmaQ(dmaQTail).storeDataValid := isStore && slots(s).useCapData
         for (lane <- 0 until K) dmaQ(dmaQTail).storeData(lane) :=
           Mux(isStore && slots(s).useCapData, vsePopData(lane), 0.U)
+        // P2: the DMA slot retires at dmaQ enqueue; its tag carries the
+        // completion obligation (freed at dmaDoneHead).
+        slots(s).done := true.B
         dmaQTail := dmaQTail + 1.U
       } .otherwise { slots(s).done := true.B }   // DispatchUnit.NONE: retire defensively
     }
@@ -531,6 +563,13 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
 
   when (feedValid) {
     when (feedMmaLast) { boundaryCnt := (6 * K - 1).U }
+    // P2: the MMA slot retires at feed — the operands are read here and the
+    // write obligation now lives in the carried tag (freed at clctD).  The
+    // window slot is then free to be refilled, so in-flight capacity is the
+    // tag ring (T), not the W-slot window.
+    slots(feedSlot).done := true.B
+    // This tag has now been fed: it no longer blocks a later mma.last (§13).
+    tagFed(feedTag)      := true.B
     // the feed read its operands: its reader tag bits are cleared by the net
     // tag-mask update below (rdClrFeed).
   }
@@ -600,14 +639,13 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     Mux(io.reduce_mode, clctIsMmaLast, !clctIsMmaLast)
 
   when (clctHasEntry) {
-    val sIdx = fifo(fifoTail).slotIdx
     val cvd  = fifo(fifoTail).vd
     capVd := cvd
     for (lane <- 0 until K) outBuf(lane) := mmalu.io.out(lane) + fifo(fifoTail).accum(lane)
-    slots(sIdx).done := true.B
-    // L1 tag free: this mma completes → its tag is no longer live.  The
-    // tagValid clear and the tagWrMask bit clear are handled by the net
-    // tag updates below.
+    // P2: the slot already retired at feed — the completion no longer writes
+    // the window.  L1 tag free: this mma completes → its tag is no longer
+    // live.  The tagValid clear and the tagWrMask bit clear are handled by the
+    // net tag updates below.
     // push the capture value for the chained vse.  Default mode pushes every
     // non-mma.last clct; reduce mode pushes only the mma.last's accumulated
     // capture (see `capturePush`).
@@ -671,7 +709,8 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   // `tagIsMma` is never cleared when a tag is freed (only on flush), so the
   // freed producer tag still records that an mma produced VX[i] — exactly the
   // persistent semantics the old `vxWrCap(i)` flag provided.
-  val entSrmask = readSlotsL(dec.family.asUInt, dec.rd, dec.rs1, dec.rs2, dec.mem_width(1, 0), dec.rs3)
+  val entSrmask = readSlotsL(dec.family.asUInt, dec.rd, dec.rs1, dec.rs2,
+    dec.mem_width(1, 0), dec.rs3, dec.family === OpFamily.MMA && dec.mma_last)
   val entIsCapSource = WireDefault(false.B)
   for (i <- 0 until L) {
     when (entSrmask(i) && tagIsMma(lastWrTag(i))) { entIsCapSource := true.B }
@@ -712,6 +751,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     when (dec.family =/= OpFamily.NOP) {
       tagIsMma(tg)      := dec.family === OpFamily.MMA
       tagIsLast(tg)     := dec.family === OpFamily.MMA && dec.mma_last
+      tagFed(tg)        := false.B   // fresh allocation: not yet fed
       tagSlot(tg)       := wTail
       slots(t).tag       := tg
       slots(t).priorSnap := tagValid.asUInt
@@ -771,6 +811,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
       tagValid(q)  := false.B
       tagIsMma(q)  := false.B
       tagIsLast(q) := false.B
+      tagFed(q)    := false.B
       tagSlot(q)   := 0.U
     }
     for (i <- 0 until L) {
@@ -823,6 +864,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
       tagValid(q)  := false.B
       tagIsMma(q)  := false.B
       tagIsLast(q) := false.B
+      tagFed(q)    := false.B
       tagSlot(q)   := 0.U
     }
     for (i <- 0 until L) {
@@ -872,18 +914,12 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
 
   val dmaDoneHead = dma.io.done && dmaHead.valid && dmaHead.inFlight
   when (dmaDoneHead) {
-    // Fetch fills (dir=3) carry a placeholder slotIdx=0 (no window slot);
-    // marking slots(0).done here would spuriously retire whichever real
-    // instruction currently owns ring slot 0 (seen on silicon: the fetch fill
-    // completing before the mma fed marked the mma done → the mma never fed,
-    // capture read a zero array).  Only vle/vse completions touch slots.
-    when (dmaHead.dir =/= 3.U) {
-      slots(dmaHead.slotIdx).done := true.B
-      // L1 tag free: this DMA completes → free the carried tag.  The tagValid
-      // clear and the tagWrMask/tagRdMask bit clears are handled by the net
-      // tag updates below.  Fetch fills (dir=3) never allocate a tag
-      // (placeholder tag=0), so they must not free one.
-    }
+    // P2: the DMA slot already retired at issue (dmaQ enqueue), so completion
+    // no longer touches the window (and never the fetch fill's placeholder
+    // slotIdx=0).  L1 tag free: this DMA completes → free the carried tag.
+    // The tagValid clear and the tagWrMask/tagRdMask bit clears are handled by
+    // the net tag updates below.  Fetch fills (dir=3) never allocate a tag
+    // (placeholder tag=0), so they must not free one.
     dmaHead.valid := false.B
     dmaQHead  := dmaQHead + 1.U
   }
@@ -903,6 +939,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     dmaQ(dmaQTail).dmaWidth := 0.U
     dmaQ(dmaQTail).rfAddr := 0.U
     dmaQ(dmaQTail).l3Addr := io.fetch_fill_addr
+    dmaQ(dmaQTail).rdMask := 0.U
     dmaQ(dmaQTail).storeDataValid := false.B
     dmaQTail  := dmaQTail + 1.U
     fillPending := true.B
@@ -932,12 +969,42 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   val tagAlloc = windowEntry && (dec.family =/= OpFamily.NOP)
   val tagMmaFree = clctHasEntry
   val tagDmaFree = dmaDoneHead && dmaHead.dir =/= 3.U
-  val tagFreeNum = Mux(tagMmaFree, 1.U, 0.U) + Mux(tagDmaFree, 1.U, 0.U)
+  // 0/1/2 frees can land on one cycle (an MMA clctD and a DMA done).  A bare
+  // `1.U + 1.U` was truncating the dual-free to 0 (1-bit literal sum), losing
+  // tagCount decrements and wedging `drain` (tagCount stuck above zero) — make
+  // the width explicit.
+  val tagFreeNum = tagMmaFree.asUInt +& tagDmaFree.asUInt
+  val tgAlloc      = tagTail
+  val mmaDoneTag   = fifo(fifoTail).tag
+
+  // Effective (post-this-cycle-update) tag validity: the entry set wins over a
+  // same-cycle completion clear, matching the net connect used for `tagValid`.
+  def effTagValid(q: UInt): Bool = {
+    val set = tagAlloc && (tgAlloc === q)
+    val clr = (tagMmaFree && (mmaDoneTag === q)) ||
+              (tagDmaFree && (dmaHead.tag === q))
+    Mux(set, true.B, Mux(clr, false.B, tagValid(q)))
+  }
+
+  // Rotate the ring so index r is offset r from the head, then take the
+  // lowest still-live offset — the oldest live tag.  A priority encoder (not
+  // a `when`-accumulator) avoids a combinational cycle.
+  val effRing = Wire(Vec(T, Bool()))
+  for (r <- 0 until T) {
+    effRing(r) := effTagValid((tagHead + r.U)(TAG_IDX - 1, 0))
+  }
+  val anyLive   = effRing.asUInt.orR
+  val firstLive = PriorityEncoder(effRing)
+  val headNext  = Mux(anyLive, (tagHead + firstLive)(TAG_IDX - 1, 0), tagTail)
+
   when (!illegalAny && !io.session_reset) {
     tagCount := tagCount + Mux(tagAlloc, 1.U, 0.U) - tagFreeNum
-    when (tagHead =/= tagTail && !tagValid(tagHead)) {
-      tagHead := tagHead + 1.U
-    }
+    // Free in-order at the ring head, tolerant of out-of-order completion:
+    // tagHead points at the FIRST still-live ring entry (net of this cycle's
+    // set/clear); if the whole ring is free it meets the tail.  This catches
+    // up over a run of consecutive frees in ONE cycle (the P1 one-step walk
+    // lagged and left dead head room).
+    tagHead := headNext
   }
 
   // ---- L1 tag mask net set/clear (P1a shadow).  Entry SETS bit `tgAlloc`;
@@ -946,18 +1013,18 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   //      same-cycle set and clear can no longer race through last-connect (the
   //      later entry assignment used to drop the completion's clear).  The
   //      cap-store (reader) and dir=3/fetch (DMA) exclusions are preserved. ----
-  val tgAlloc      = tagTail
-  val mmaDoneTag   = fifo(fifoTail).tag
   val mmaDoneWmask = (0xF.U << (fifo(fifoTail).vd << 2))(L - 1, 0)
-  val mmaFeedRmask = readSlotsL(OpFamily.MMA.asUInt, feedRd, feedRs1, feedRs2, 0.U, feedVs3)
+  val mmaFeedRmask = readSlotsL(OpFamily.MMA.asUInt, feedRd, feedRs1, feedRs2, 0.U,
+    feedVs3, feedMmaLast)
   // A vle of VE/VR writes SEVERAL VX slots (writeSlotsL expands by the load
   // width); clearing only `rfAddr` leaks the wider load's tag into the fixed
   // `priorSnap` hazard set forever (a same-tag RAW can never clear → deadlock).
   // Use the full write mask, mirroring the entry registration.
   val dmaVleWmask  = writeSlotsL(OpFamily.LD.asUInt, dmaHead.rfAddr, dmaHead.dmaWidth)
-  val dmaVseSl     = slots(dmaHead.slotIdx)
-  val dmaVseSrmask = readSlotsL(dmaVseSl.family, dmaVseSl.rd, dmaVseSl.rs1,
-    dmaVseSl.rs2, dmaVseSl.memWidth, dmaVseSl.vs3)
+  // P2: the DMA window slot retired at issue, so the vse read mask is read
+  // from the queue entry (captured at issue) rather than the (possibly reused)
+  // slot.
+  val dmaVseSrmask = dmaHead.rdMask
   when (!illegalAny && !io.session_reset) {
     for (i <- 0 until L) {
       val wrSet    = tagAlloc && entSwmask(i)
@@ -1097,7 +1164,8 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   io.dbg_s2_last  := slots(2).isMmaLast
   val slotsAny = (0 until W).map(i => slots(i).valid).reduce(_ || _)
   io.drain := !slotsAny && !dma.io.busy && dmaQCount === 0.U &&
-    fifoCount === 0.U && capQCount === 0.U && boundaryCnt === 0.U
+    fifoCount === 0.U && capQCount === 0.U && boundaryCnt === 0.U &&
+    tagCount === 0.U
   io.dbg_traj    := trajSnap
   io.dbg_cycles  := cycleCnt
   io.dbg_mac     := macCnt
