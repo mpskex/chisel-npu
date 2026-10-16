@@ -415,9 +415,11 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   // one-tick latency shift is transparent).
   def firstForUnit(s: Int): Bool = {
     val first = WireDefault(true.B)
+    val isMma = slots(s).unit === DispatchUnit.MMALU
     for (i <- 0 until W) {
       when (slots(i).valid && slots(i).unit === slots(s).unit &&
-            ringDist(i.U) < ringDist(s.U)) {
+            ringDist(i.U) < ringDist(s.U) &&
+            !(isMma && slots(i).issued)) {
         first := false.B
       }
     }
@@ -469,36 +471,36 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
         for (lane <- 0 until K) dmaQ(dmaQTail).storeData(lane) :=
           Mux(isStore && slots(s).useCapData, vsePopData(lane), 0.U)
         dmaQTail := dmaQTail + 1.U
-        dmaQCount := dmaQCount + 1.U
       } .otherwise { slots(s).done := true.B }   // DispatchUnit.NONE: retire defensively
     }
   }
 
   when (vsePopCap) {
     capQHead  := capQHead + 1.U
-    capQCount := capQCount - 1.U
   }
 
   // ---- The MMALU feed + the vd FIFO enq at the feed ----
   // The pop (clctD) must not fire when the FIFO is empty: a stale clctD from
   // a previous session (still in the ShiftRegister) would underflow fifoCount
-  // and, via the completion block, spuriously retire a live slot.  The enq
-  // always writes its entry; a same-cycle pop nets the count (head/tail both
-  // advance) instead of dropping the write.
+  // and, via the completion block, spuriously retire a live slot.
+  // enq at the feed (head), pop at clctD (tail).  In the pipelined steady
+  // state a feed and a clctD coincide every cycle, so BOTH pointers must
+  // advance: the old code advanced only the head when they collided, which
+  // froze the tail, re-served the same (stale) head entry to the completion
+  // every cycle, and left every later slot without a completion — the body
+  // wedged after the first burst.  The net count keeps head-tail occupancy.
   when (feedValid) {
     fifo(fifoHead).slotIdx := feedSlot
     fifo(fifoHead).vd      := feedRd
     fifo(fifoHead).isMmaLast := feedMmaLast
     for (lane <- 0 until K) fifo(fifoHead).accum(lane) := mmaluInAccum(lane)
     fifoHead := fifoHead + 1.U
-    when (clctD && fifoCount =/= 0.U) { fifoCount := fifoCount }
-    .otherwise                          { fifoCount := fifoCount + 1.U }
-  } .otherwise {
-    when (clctD && fifoCount =/= 0.U) {
-      fifoTail  := fifoTail + 1.U
-      fifoCount := fifoCount - 1.U
-    }
   }
+  val fifoPop = clctD && fifoCount =/= 0.U
+  when (fifoPop) { fifoTail := fifoTail + 1.U }
+  when (feedValid && fifoPop) { fifoCount := fifoCount }
+  .elsewhen (feedValid)       { fifoCount := fifoCount + 1.U }
+  .elsewhen (fifoPop)         { fifoCount := fifoCount - 1.U }
 
   when (feedValid) {
     when (feedMmaLast) { boundaryCnt := (6 * K - 1).U }
@@ -581,9 +583,19 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
       for (lane <- 0 until K) capQ(capQTail).data(lane) :=
         (mmalu.io.out(lane) + fifo(fifoTail).accum(lane)).asUInt
       capQTail  := capQTail + 1.U
-      capQCount := capQCount + 1.U
     }
   }
+
+  // Net capture-queue occupancy: a clctD push and a vse pop collide every
+  // cycle in the pipelined steady state.  Two independent `capQCount :=`
+  // assignments would let the later (push) overwrite the pop and drift the
+  // count upward forever — leaving a phantom entry that blocks `drain`
+  // (the R=128 non-drain wedge) even though head==tail.  Compute the net.
+  val capPush = clctD && fifoCount =/= 0.U && !fifo(fifoTail).isMmaLast
+  val capPop  = vsePopCap
+  when (capPush && capPop) { capQCount := capQCount }
+  .elsewhen (capPush)      { capQCount := capQCount + 1.U }
+  .elsewhen (capPop)       { capQCount := capQCount - 1.U }
 
   clctPrev := clctD
 
@@ -651,11 +663,20 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
         isCapSource := true.B
       }
     }
-    slots(t).useCapData := dec.family === OpFamily.ST && isCapSource
+    val isCapStore = dec.family === OpFamily.ST && isCapSource
+    slots(t).useCapData := isCapStore
 
-    // scoreboard registration: readers + writers (mask, not single tag)
+    // scoreboard registration: readers + writers (mask, not single tag).
+    // A capture-consumer store does NOT read the RF — its store data is the
+    // capture latched out of the capQ at its issue (the DMA R2L `Mux(
+    // storeDataValid, reqStoreData, rf_r_vr_data)`) — so it registers no
+    // reader bit.  Registering one made the next mma that reuses the
+    // destination vd wait for the store's entire DMA to retire, serializing
+    // the body to one feed per capture latency (~80 cycles).  The RAW on
+    // vxWrMask still orders the store after its producer's capture, so
+    // capture order is unchanged.
     for (i <- 0 until L) {
-      when (srmask(i)) { vxRdMask(i) := vxRdMask(i) | (1.U << t)(W - 1, 0) }
+      when (srmask(i) && !isCapStore) { vxRdMask(i) := vxRdMask(i) | (1.U << t)(W - 1, 0) }
     }
     val swmask = writeSlotsL(dec.family.asUInt, dec.rd, dec.mem_width(1, 0))
     for (i <- 0 until L) {
@@ -807,7 +828,6 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     }
     dmaHead.valid := false.B
     dmaQHead  := dmaQHead + 1.U
-    dmaQCount := dmaQCount - 1.U
   }
 
   // ---- Fetch fills join the DMA queue (when no DMA instruction issues this
@@ -826,10 +846,22 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     dmaQ(dmaQTail).l3Addr := io.fetch_fill_addr
     dmaQ(dmaQTail).storeDataValid := false.B
     dmaQTail  := dmaQTail + 1.U
-    dmaQCount := dmaQCount + 1.U
     fillPending := true.B
   }
   when (io.fetch_fill_done) { fillPending := false.B }
+
+  // Net DMA-queue occupancy: a DMA issue (or a fetch fill) and a head
+  // completion can collide, and both advance their pointers.  Two independent
+  // `dmaQCount :=` assignments would let the later one win and drift the
+  // count, mis-reporting `dmaQFull` or underflowing the counter.  Compute the
+  // net explicitly.  The flush blocks above (illegal / session_reset) keep
+  // priority by clearing the count only when neither is asserted here.
+  val dmaEnq = dmaIssueAny || fillPush
+  when (!illegalAny && !io.session_reset) {
+    when (dmaEnq && dmaDoneHead) { dmaQCount := dmaQCount }
+    .elsewhen (dmaEnq)           { dmaQCount := dmaQCount + 1.U }
+    .elsewhen (dmaDoneHead)      { dmaQCount := dmaQCount - 1.U }
+  }
 
   // ==========================================================================
   // RF: DMA write ports + external read
