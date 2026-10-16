@@ -126,6 +126,18 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
   val reqStoreDataValid = RegInit(false.B)
   val reqStoreData = RegInit(VecInit(Seq.fill(K)(0.U((4 * N).W))))
 
+  // ---- One-deep next-request buffer (request pipelining) ----
+  // While the current burst's data phase is streaming, the host may present
+  // the next request; it is latched here and started (address phase) at DONE,
+  // overlapping the tail of the current response instead of an IDLE round-trip.
+  val bufValid  = RegInit(false.B)
+  val bufDir    = RegInit(0.U(2.W))
+  val bufWidth  = RegInit(0.U(2.W))
+  val bufRfAddr = RegInit(0.U(5.W))
+  val bufL3Addr = RegInit(0.U(32.W))
+  val bufStoreDataValid = RegInit(false.B)
+  val bufStoreData = RegInit(VecInit(Seq.fill(K)(0.U((4 * N).W))))
+
   val beatCnt  = RegInit(0.U(4.W))
   val buf      = RegInit(VecInit(Seq.fill(8)(0.U(128.W))))
   val timeoutCnt = RegInit(0.U(16.W))
@@ -133,19 +145,27 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
   val wtoCnt   = RegInit(0.U(16.W))   // write-phase timeout: re-issue the write
   val wtoRetry = RegInit(0.U(3.W))    // WRESP retries before forcing done
 
-  def beatsOf(w: UInt): UInt =
-    Mux(reqDir === 3.U, 1.U,  // fetch mode: single 16 B beat
+  def beatsOf(d: UInt, w: UInt): UInt =
+    Mux(d === 3.U, 1.U,  // fetch mode: single 16 B beat
       MuxLookup(w, BEATS_VX.U(4.W))(Seq(
         0.U -> BEATS_VX.U(4.W), 1.U -> BEATS_VE.U(4.W), 2.U -> BEATS_VR.U(4.W))))
 
-  val beats = beatsOf(reqWidth)
+  val beats    = beatsOf(reqDir, reqWidth)
+  val bufBeats = beatsOf(bufDir, bufWidth)
 
   // ---- Defaults ----
   io.busy       := state =/= DmaState.IDLE
   io.done       := false.B
   io.acc_valid  := false.B
   io.instr_valid := false.B
-  io.req_ready  := state === DmaState.IDLE
+  // Accept the next request once the current burst's data phase has started
+  // (i.e. the address phase is no longer the critical path), while the one-deep
+  // buffer is free.  AR is excluded so the address phase itself stays atomic.
+  val dataPhaseStarted = state === DmaState.READ || state === DmaState.RFW ||
+                         state === DmaState.WAW  || state === DmaState.WDATA ||
+                         state === DmaState.WRESP || state === DmaState.ACCW ||
+                         state === DmaState.INSTRW
+  io.req_ready  := !bufValid && (state === DmaState.IDLE || dataPhaseStarted)
   io.rf_w_vx_en := false.B
   io.rf_w_ve_en := false.B
   io.rf_w_vr_en := false.B
@@ -308,7 +328,9 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
       io.m_axi_wstrb   := 0xFFFF.U(16.W)
       io.m_axi_wlast   := beatCnt === beats - 1.U
       val wadv         = io.m_axi_wready && beatCnt < beats
-      when (io.m_axi_awready) {
+      // `awDone` may already be set when DONE issued the AW for a pipelined
+      // request; in that case the AW handshake is already behind us.
+      when (awDone || io.m_axi_awready) {
         awDone := true.B
         wtoCnt := 0.U
         when (beatCnt + Mux(wadv, 1.U, 0.U) === beats) { state := DmaState.WRESP }
@@ -383,7 +405,48 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
 
     is (DmaState.DONE) {
       io.done := true.B
-      state   := DmaState.IDLE
+      when (bufValid) {
+        // Promote the buffered request and begin its address phase in this
+        // cycle, so it overlaps the just-completed response (no IDLE trip).
+        reqDir    := bufDir
+        reqWidth  := bufWidth
+        reqRfAddr := bufRfAddr
+        reqL3Addr := bufL3Addr
+        reqStoreDataValid := bufStoreDataValid
+        for (lane <- 0 until K) reqStoreData(lane) := bufStoreData(lane)
+        beatCnt    := 0.U
+        timeoutCnt := 0.U
+        wtoCnt     := 0.U
+        wtoRetry   := 0.U
+        bufValid   := false.B
+        io.m_axi_awaddr := bufL3Addr
+        io.m_axi_awlen  := bufBeats - 1.U
+        io.m_axi_araddr := bufL3Addr
+        io.m_axi_arlen  := bufBeats - 1.U
+        when (bufDir === 1.U) {          // R2L: start the write address phase
+          io.m_axi_awvalid := true.B
+          awDone           := io.m_axi_awready
+          state            := DmaState.WAW
+        } .otherwise {                    // L2R / ACCUM / fetch: read address
+          io.m_axi_arvalid := true.B
+          io.m_axi_rready  := true.B
+          awDone           := false.B
+          state            := Mux(io.m_axi_arready, DmaState.READ, DmaState.AR)
+        }
+      } .otherwise {
+        state := DmaState.IDLE
+      }
     }
+  }
+
+  // ---- Latch a request presented while the current burst is in flight ----
+  when (state =/= DmaState.IDLE && io.req_valid && io.req_ready) {
+    bufValid  := true.B
+    bufDir    := io.req_dir
+    bufWidth  := Mux(io.req_dir === 2.U, 2.U, io.req_width)
+    bufRfAddr := io.req_rf_addr
+    bufL3Addr := io.req_l3_addr
+    bufStoreDataValid := io.req_store_data_valid
+    for (lane <- 0 until K) bufStoreData(lane) := io.req_store_data(lane)
   }
 }
