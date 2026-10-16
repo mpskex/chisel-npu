@@ -55,3 +55,17 @@
 
 ### P4 — Full regression + record
 - [ ] `make test`; record head/body/tail in the plan. Commit.
+
+## Measured results (L1 complete)
+
+| Metric | Before L1 | After L1 |
+|:--|--:|--:|
+| store-sparse reduce-mode body (K=32) | 18.0% | **97.0%** (body 629→66 cyc, 64 feeds) |
+| full suite `make test` | 36 suites / 135 | **40 suites / 140 tests, all pass** |
+
+- L1 delivered the Little's-law unlock: `C_mma` went from `W=16` to the tag-ring bound, so
+  reduce-mode body is now frontend-limited (`1/I ≈ 1`), not capacity-limited.
+- Remaining (default store-per-feed mode): bounded by the per-feed store / DMA rate — see the
+  burst/BW work (`docs/superpowers/plans/2026-10-16-burst-dma.md`), not L1.
+- Deferred to a future retune: a **generational `priorSnap`** is required before raising `T` or
+  lowering `CAPTURE_DELAY` (constraint `maxInFlight < T−W`); FPGA-top (K=16,W=4) sizing unvalidated.
