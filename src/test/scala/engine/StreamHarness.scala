@@ -128,6 +128,8 @@ class StreamHarness(val K: Int = 16, val readLatency: Int = 1) extends Module {
     val dbg_clct    = Output(UInt(16.W))
     val dbg_dma_done = Output(UInt(16.W))
     val dbg_wcount   = Output(UInt(5.W))
+    val dbg_capq     = Output(UInt(6.W))
+    val dbg_dmaq     = Output(UInt(3.W))
     val dbg_bnd      = Output(UInt(7.W))
     val dbg_drain    = Output(Bool())
     val dbg_cycles   = Output(UInt(32.W))
@@ -149,6 +151,8 @@ class StreamHarness(val K: Int = 16, val readLatency: Int = 1) extends Module {
   io.dbg_clct        := eng.io.dbg_clct
   io.dbg_dma_done    := eng.io.dbg_dma_done
   io.dbg_wcount      := eng.io.dbg_wcount
+  io.dbg_capq        := eng.io.dbg_capq
+  io.dbg_dmaq        := eng.io.dbg_dmaq
   io.dbg_bnd         := eng.io.dbg_bnd
   io.dbg_drain       := eng.io.drain
   io.dbg_cycles      := eng.io.dbg_cycles
@@ -266,4 +270,70 @@ object StreamSpecUtil {
   def printPerf(label: String, K: Int, p: Perf): Unit =
     println(f"[perf] $label%-28s cycles=${p.cycles}%8d feeds=${p.feeds}%7d " +
       f"macs=${p.macs}%12d macs/cyc=${p.macsPerCycle}%8.1f peak=${p.pctPeak(K)}%6.1f%%")
+
+  // ==========================================================================
+  // Array-pipeline phase segmentation (the head/body/tail model)
+  //   head = first feed  -> first capture   (systolic fill, ~3n-1)
+  //   body = first capture -> last feed     (must be 1 feed/cycle = peak)
+  //   tail = last feed   -> drain           (flush + boundary + stores)
+  // ==========================================================================
+  case class Phases(
+    firstFeedCyc: Long, firstClctCyc: Long, lastFeedCyc: Long, drainCyc: Long,
+    finalFeeds: Long, accAtFirstClct: Long,
+    maxW: Long, maxCapq: Long, maxDmaq: Long, maxBnd: Long) {
+    def head: Long       = firstClctCyc - firstFeedCyc
+    def body: Long       = lastFeedCyc - firstClctCyc
+    def tail: Long       = drainCyc - lastFeedCyc
+    def total: Long      = drainCyc - firstFeedCyc
+    def bodyFeeds: Long  = finalFeeds - accAtFirstClct
+    /** Feeds issued per cycle during the body; 1.0 = full utilization. */
+    def bodyUtil: Double = if (body <= 0) 0.0 else bodyFeeds.toDouble / body
+    /** Cycle count if the body ran at 1 feed/cycle (head + feeds + tail). */
+    def idealTotal: Long = head + finalFeeds + tail
+  }
+
+  /** Drive `prog` holding `instr_valid` continuously (the frontend's stream),
+    * tracing the engine's feed/collect/drain counters every cycle, and return
+    * the array-pipeline head/body/tail segmentation. */
+  def traceRun(dut: StreamHarness, prog: Seq[Int], maxCycles: Int = 2000000): Phases = {
+    var idx = 0
+    var firstFeed = -1L
+    var firstClct = -1L
+    var lastFeed = -1L
+    var drainCyc = -1L
+    var accAtFirstClct = BigInt(0)
+    var accPrev = BigInt(0)
+    var maxW = 0L; var maxCapq = 0L; var maxDmaq = 0L; var maxBnd = 0L
+    var n = 0
+    var done = false
+    while (!done && n < maxCycles) {
+      val valid = idx < prog.length
+      dut.io.instr.poke(if (valid) (prog(idx).toLong & 0xFFFFFFFFL).U else 0.U)
+      dut.io.instr_valid.poke(valid.B)
+      val cyc   = dut.io.dbg_cycles.peek().litValue.toLong
+      val acc   = dut.io.dbg_mma_acc.peek().litValue
+      val clct  = dut.io.dbg_clct.peek().litValue
+      val ready = dut.io.instr_ready.peek().litToBoolean
+      if (firstFeed < 0 && acc > 0) firstFeed = cyc
+      if (firstClct < 0 && clct > 0) { firstClct = cyc; accAtFirstClct = acc }
+      if (acc > accPrev) lastFeed = cyc
+      accPrev = acc
+      maxW    = math.max(maxW,    dut.io.dbg_wcount.peek().litValue.toLong)
+      maxCapq = math.max(maxCapq, dut.io.dbg_capq.peek().litValue.toLong)
+      maxDmaq = math.max(maxDmaq, dut.io.dbg_dmaq.peek().litValue.toLong)
+      maxBnd  = math.max(maxBnd,  dut.io.dbg_bnd.peek().litValue.toLong)
+      if (dut.io.dbg_drain.peek().litToBoolean && idx >= prog.length) { drainCyc = cyc; done = true }
+      else { dut.clock.step(); n += 1; if (valid && ready) idx += 1 }
+    }
+    assert(done, s"traceRun did not drain within $maxCycles cycles")
+    assert(firstFeed >= 0 && firstClct >= 0, "traceRun saw no feed or no capture")
+    Phases(firstFeed, firstClct, lastFeed, drainCyc, accPrev.toLong, accAtFirstClct.toLong,
+      maxW, maxCapq, maxDmaq, maxBnd)
+  }
+
+  def printPhases(label: String, p: Phases): Unit = {
+    println(f"[phase] $label%-26s head=${p.head}%6d body=${p.body}%7d tail=${p.tail}%6d " +
+      f"total=${p.total}%7d feeds=${p.finalFeeds}%5d bodyUtil=${p.bodyUtil * 100.0}%7.1f%%")
+    println(f"[phase]   maxW=${p.maxW}%3d maxCapq=${p.maxCapq}%3d maxDmaq=${p.maxDmaq}%2d maxBnd=${p.maxBnd}%3d")
+  }
 }
