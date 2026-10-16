@@ -84,16 +84,16 @@ class LatencyRamModel(val readLatency: Int = 1) extends Module {
     .otherwise            { rCnt := rCnt + 1.U }
   }
 
-  val awPending = RegInit(false.B)
+  val wActive   = RegInit(false.B)
   val awAddr    = RegInit(0.U(32.W))
   val awLen     = RegInit(0.U(8.W))
   val wCnt      = RegInit(0.U(8.W))
   val bValid    = RegInit(false.B)
-  io.s_axi_awready := !awPending
-  io.s_axi_wready  := awPending && !bValid
+  io.s_axi_awready := !wActive
+  io.s_axi_wready  := wActive
   io.s_axi_bvalid  := bValid
-  when (io.s_axi_awvalid && !awPending) {
-    awPending := true.B
+  when (io.s_axi_awvalid && io.s_axi_awready) {
+    wActive   := true.B
     awAddr    := io.s_axi_awaddr
     awLen     := io.s_axi_awlen
     wCnt      := 0.U
@@ -105,12 +105,11 @@ class LatencyRamModel(val readLatency: Int = 1) extends Module {
         mem(wBase + w.U) := io.s_axi_wdata(128 * w + 127, 128 * w)
       }
     }
-    when (io.s_axi_wlast) { bValid := true.B }
+    when (io.s_axi_wlast) { wActive := false.B; bValid := true.B }
     .otherwise            { wCnt := wCnt + 1.U }
   }
   when (bValid && io.s_axi_bready) {
-    bValid    := false.B
-    awPending := false.B
+    bValid := false.B
   }
 }
 

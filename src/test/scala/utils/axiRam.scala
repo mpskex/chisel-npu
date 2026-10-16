@@ -98,22 +98,26 @@ class AxiRamModel(val dropReadRequests: Int = 0, val DW: Int = 512) extends Modu
     .otherwise            { rCnt := rCnt + 1.U }
   }
 
-  // ---- Write channel ----
-  val awPending = RegInit(false.B)
-  val awAddr    = RegInit(0.U(32.W))
-  val awLen     = RegInit(0.U(8.W))
-  val wCnt      = RegInit(0.U(8.W))
-  val bValid    = RegInit(false.B)
+  // ---- Write channel (full-duplex) ----
+  // A new AW is accepted as soon as the previous burst's W beats have all
+  // arrived — independent of its still-outstanding B response — and the read
+  // channel is fully independent, so a stream of back-to-back writes is
+  // limited only by the W-beat rate, not by the response handshake.
+  val wActive = RegInit(false.B)
+  val awAddr  = RegInit(0.U(32.W))
+  val awLen   = RegInit(0.U(8.W))
+  val wCnt    = RegInit(0.U(8.W))
+  val bValid  = RegInit(false.B)
 
-  io.s_axi_awready := !awPending
-  io.s_axi_wready  := awPending && !bValid
+  io.s_axi_awready := !wActive
+  io.s_axi_wready  := wActive
   io.s_axi_bvalid  := bValid
 
-  when (io.s_axi_awvalid && !awPending) {
-    awPending := true.B
-    awAddr    := io.s_axi_awaddr
-    awLen     := io.s_axi_awlen
-    wCnt      := 0.U
+  when (io.s_axi_awvalid && io.s_axi_awready) {
+    wActive := true.B
+    awAddr  := io.s_axi_awaddr
+    awLen   := io.s_axi_awlen
+    wCnt    := 0.U
   }
 
   when (io.s_axi_wvalid && io.s_axi_wready) {
@@ -124,14 +128,14 @@ class AxiRamModel(val dropReadRequests: Int = 0, val DW: Int = 512) extends Modu
       }
     }
     when (io.s_axi_wlast) {
-      bValid := true.B
+      wActive := false.B   // next AW may now be accepted (B still outstanding)
+      bValid  := true.B
     } .otherwise {
       wCnt := wCnt + 1.U
     }
   }
 
   when (bValid && io.s_axi_bready) {
-    bValid    := false.B
-    awPending := false.B
+    bValid := false.B
   }
 }
