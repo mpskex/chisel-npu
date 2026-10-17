@@ -269,6 +269,12 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   val tagWrMask = RegInit(VecInit(Seq.fill(L)(0.U(T.W))))
   val tagRdMask = RegInit(VecInit(Seq.fill(L)(0.U(T.W))))
   val lastWrTag = RegInit(VecInit(Seq.fill(L)(0.U(TAG_IDX.W))))
+  // Per-register "last writer was an MMA capture" flag.  Persists like the old
+  // `vxWrCap`: set when a writer registers (false for vle, true for mma) and
+  // cleared when the register's pending-write tag mask empties on a vle
+  // completion.  Using this instead of `tagIsMma(lastWrTag(i))` removes the
+  // dependence on a freed tag's kind surviving in the reused ring entry.
+  val wrCap = RegInit(VecInit(Seq.fill(L)(false.B)))
   // Entry stalls once the ring is full.  The second term guards the
   // out-of-order-free alias: with completion out of order the net `tagCount`
   // can undercount the reachable span, so also refuse to allocate when the
@@ -732,7 +738,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     dec.mem_width(1, 0), dec.rs3, dec.family === OpFamily.MMA && dec.mma_last)
   val entIsCapSource = WireDefault(false.B)
   for (i <- 0 until L) {
-    when (entSrmask(i) && tagIsMma(lastWrTag(i))) { entIsCapSource := true.B }
+    when (entSrmask(i) && wrCap(i)) { entIsCapSource := true.B }
   }
   val entIsCapStore = dec.family === OpFamily.ST && entIsCapSource
   val entSwmask = writeSlotsL(dec.family.asUInt, dec.rd, dec.mem_width(1, 0))
@@ -774,9 +780,12 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
       slots(t).tag       := tg
       slots(t).priorSnap := tagValid.asUInt
       tagTail := tagTail + 1.U
-      // newest writer tag per register (never cleared)
+      // newest writer tag + writer kind per register
       for (i <- 0 until L) {
-        when (entSwmask(i)) { lastWrTag(i) := tg }
+        when (entSwmask(i)) {
+          lastWrTag(i) := tg
+          wrCap(i)     := dec.family === OpFamily.MMA
+        }
       }
     }
 
@@ -835,6 +844,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
       tagWrMask(i) := 0.U
       tagRdMask(i) := 0.U
       lastWrTag(i) := 0.U
+      wrCap(i)     := false.B
     }
     tagCount := 0.U
     for (q <- 0 until DMAQ_DEPTH) { dmaQ(q).valid := false.B; dmaQ(q).inFlight := false.B }
@@ -886,6 +896,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
       tagWrMask(i) := 0.U
       tagRdMask(i) := 0.U
       lastWrTag(i) := 0.U
+      wrCap(i)     := false.B
     }
     tagCount := 0.U
     for (q <- 0 until DMAQ_DEPTH) { dmaQ(q).valid := false.B; dmaQ(q).inFlight := false.B }
@@ -1018,9 +1029,14 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
       val wrSet    = tagAlloc && entSwmask(i)
       val wrClrMma = clctHasEntry && mmaDoneWmask(i)
       val wrClrDma = dmaDoneHead && dmaHead.dir === 0.U && dmaVleWmask(i)
-      tagWrMask(i) := (tagWrMask(i) | Mux(wrSet, (1.U << tgAlloc)(T - 1, 0), 0.U(T.W))) &
+      val wrNext = (tagWrMask(i) | Mux(wrSet, (1.U << tgAlloc)(T - 1, 0), 0.U(T.W))) &
         ~Mux(wrClrMma, (1.U << mmaDoneTag)(T - 1, 0), 0.U(T.W)) &
         ~Mux(wrClrDma, (1.U << dmaHead.tag)(T - 1, 0), 0.U(T.W))
+      tagWrMask(i) := wrNext
+      // Mirror the old `vxWrCap` clear: once a vle's write fully retires (mask
+      // empties) and no new writer registers this cycle, the register no longer
+      // holds a live capture.  Set at entry (below) wins via the guard.
+      when (wrClrDma && wrNext === 0.U && !wrSet) { wrCap(i) := false.B }
 
       val rdSet     = tagAlloc && entSrmask(i) && !entIsCapStore
       val rdClrFeed = feedValid && mmaFeedRmask(i)
