@@ -87,7 +87,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   // deep enough to hold the whole tag ring or feed issue stalls below peak
   // (the vd FIFO also carries the K×32-bit `accum` column — decision (a)).
   val FIFO_DEPTH = T          // in-flight feeds (vd FIFO, carries accum)
-  val CAPQ_DEPTH = T          // capture queue
+  val CAPQ_DEPTH = 16         // capture queue (chained vse drains promptly)
   val DMAQ_DEPTH = 4
   val SLOT_IDX = log2Ceil(W)
 
@@ -369,9 +369,14 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     val tag      = UInt(TAG_IDX.W)   // L1 ring tag
     val vd       = UInt(5.W)
     val isMmaLast = Bool()
-    val accum    = Vec(K, SInt((4 * N).W))
   }
   val fifo     = RegInit(VecInit(Seq.fill(FIFO_DEPTH)(0.U.asTypeOf(new VdEntry))))
+  // The C (accum) copy can be K*32 bits and FIFO_DEPTH deep.  A Vec of
+  // registers that deep/wide is read through a huge dynamic mux tree that does
+  // not map to BRAM and stalls synthesis.  Store it in a SyncReadMem (maps to
+  // BRAM) instead; the 1-cycle registered read is absorbed by the delayed
+  // completion stage below.
+  val accumMem = SyncReadMem(FIFO_DEPTH, Vec(K, SInt((4 * N).W)))
   val fifoHead = RegInit(0.U(log2Ceil(FIFO_DEPTH).W))
   val fifoTail = RegInit(0.U(log2Ceil(FIFO_DEPTH).W))
   val fifoCount = RegInit(0.U((log2Ceil(FIFO_DEPTH) + 1).W))
@@ -572,7 +577,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     fifo(fifoHead).tag     := feedTag
     fifo(fifoHead).vd      := feedRd
     fifo(fifoHead).isMmaLast := feedMmaLast
-    for (lane <- 0 until K) fifo(fifoHead).accum(lane) := mmaluInAccum(lane)
+    accumMem.write(fifoHead, mmaluInAccum)
     fifoHead := fifoHead + 1.U
   }
   val fifoPop = clctD && fifoCount =/= 0.U
@@ -659,41 +664,56 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   // expression must drive both the push below and the capQCount net term (or
   // the count desyncs and `drain` wedges).
   val clctHasEntry  = clctD && fifoCount =/= 0.U
-  val clctIsMmaLast = fifo(fifoTail).isMmaLast
-  val capturePush   = clctHasEntry &&
-    Mux(io.reduce_mode, clctIsMmaLast, !clctIsMmaLast)
+
+  // ---- Delayed completion stage.  The C (accum) copy now lives in a BRAM
+  //      (`accumMem`), whose read is registered (1 cycle).  At clctD we latch
+  //      the settled array output + the FIFO entry's metadata and issue the
+  //      BRAM read; one cycle later the completion effects run, using
+  //      `compOut + accumRd` (= array column + C).  This is a pure latency
+  //      shift; the capture value and semantics are unchanged.
+  val compValid = RegInit(false.B)
+  val compTag   = RegInit(0.U(TAG_IDX.W))
+  val compVd    = RegInit(0.U(5.W))
+  val compLast  = RegInit(false.B)
+  val compOut   = RegInit(VecInit(Seq.fill(K)(0.S((4 * N).W))))
+  val accumRd = Wire(Vec(K, SInt((4 * N).W)))
+  accumRd := accumMem.read(fifoTail)   // data for fifoTail(clctD) appears next cycle
 
   when (clctHasEntry) {
-    val cvd  = fifo(fifoTail).vd
-    capVd := cvd
-    for (lane <- 0 until K) outBuf(lane) := mmalu.io.out(lane) + fifo(fifoTail).accum(lane)
-    // P2: the slot already retired at feed — the completion no longer writes
-    // the window.  L1 tag free: this mma completes → its tag is no longer
-    // live.  The tagValid clear and the tagWrMask bit clear are handled by the
-    // net tag updates below.
-    // push the capture value for the chained vse.  Default mode pushes every
-    // non-mma.last clct; reduce mode pushes only the mma.last's accumulated
-    // capture (see `capturePush`).
+    compTag  := fifo(fifoTail).tag
+    compVd   := fifo(fifoTail).vd
+    compLast := fifo(fifoTail).isMmaLast
+    compOut  := mmalu.io.out
+  }
+  compValid := clctHasEntry
+
+  val capturePush = compValid &&
+    Mux(io.reduce_mode, compLast, !compLast)
+
+  when (compValid) {
+    capVd := compVd
+    val capValue = Wire(Vec(K, SInt((4 * N).W)))
+    for (lane <- 0 until K) {
+      capValue(lane) := compOut(lane) + accumRd(lane)
+      outBuf(lane)   := capValue(lane)
+    }
     when (capturePush) {
       capQ(capQTail).valid := true.B
-      for (lane <- 0 until K) capQ(capQTail).data(lane) :=
-        (mmalu.io.out(lane) + fifo(fifoTail).accum(lane)).asUInt
+      for (lane <- 0 until K) capQ(capQTail).data(lane) := capValue(lane).asUInt
       capQTail  := capQTail + 1.U
     }
   }
 
-  // Net capture-queue occupancy: a clctD push and a vse pop collide every
-  // cycle in the pipelined steady state.  Two independent `capQCount :=`
-  // assignments would let the later (push) overwrite the pop and drift the
-  // count upward forever — leaving a phantom entry that blocks `drain`
-  // (the R=128 non-drain wedge) even though head==tail.  Compute the net.
+  // Net capture-queue occupancy: a push and a vse pop can collide every cycle
+  // in the pipelined steady state; compute the net so the count cannot drift
+  // (a phantom entry would block `drain`).
   val capPush = capturePush
   val capPop  = vsePopCap
   when (capPush && capPop) { capQCount := capQCount }
   .elsewhen (capPush)      { capQCount := capQCount + 1.U }
   .elsewhen (capPop)       { capQCount := capQCount - 1.U }
 
-  clctPrev := clctD
+  clctPrev := compValid
 
   // the VR collect write one tick after the delayed capture
   rf.io.vr_w_en(1)   := clctPrev
@@ -847,6 +867,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
       wrCap(i)     := false.B
     }
     tagCount := 0.U
+    compValid := false.B
     for (q <- 0 until DMAQ_DEPTH) { dmaQ(q).valid := false.B; dmaQ(q).inFlight := false.B }
     for (q <- 0 until CAPQ_DEPTH) capQ(q).valid := false.B
     for (q <- 0 until FIFO_DEPTH) { fifo(q).isMmaLast := false.B }
@@ -899,6 +920,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
       wrCap(i)     := false.B
     }
     tagCount := 0.U
+    compValid := false.B
     for (q <- 0 until DMAQ_DEPTH) { dmaQ(q).valid := false.B; dmaQ(q).inFlight := false.B }
     for (q <- 0 until CAPQ_DEPTH) capQ(q).valid := false.B
     for (q <- 0 until FIFO_DEPTH) { fifo(q).isMmaLast := false.B }
@@ -992,7 +1014,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   // illegal/reset.  At W=16 the live count never approaches T.
   // ==========================================================================
   val tagAlloc = windowEntry && (dec.family =/= OpFamily.NOP)
-  val tagMmaFree = clctHasEntry
+  val tagMmaFree = compValid   // completion is delayed 1 cycle (BRAM read)
   val tagDmaFree = dmaDoneHead && dmaHead.dir =/= 3.U
   // 0/1/2 frees can land on one cycle (an MMA clctD and a DMA done).  A bare
   // `1.U + 1.U` was truncating the dual-free to 0 (1-bit literal sum), losing
@@ -1000,7 +1022,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   // the width explicit.
   val tagFreeNum = tagMmaFree.asUInt +& tagDmaFree.asUInt
   val tgAlloc      = tagTail
-  val mmaDoneTag   = fifo(fifoTail).tag
+  val mmaDoneTag   = compTag
 
   when (!illegalAny && !io.session_reset) {
     tagCount := tagCount + Mux(tagAlloc, 1.U, 0.U) - tagFreeNum
@@ -1012,7 +1034,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   //      same-cycle set and clear can no longer race through last-connect (the
   //      later entry assignment used to drop the completion's clear).  The
   //      cap-store (reader) and dir=3/fetch (DMA) exclusions are preserved. ----
-  val mmaDoneWmask = (0xF.U << (fifo(fifoTail).vd << 2))(L - 1, 0)
+  val mmaDoneWmask = (0xF.U << (compVd << 2))(L - 1, 0)
   val mmaFeedRmask = readSlotsL(OpFamily.MMA.asUInt, feedRd, feedRs1, feedRs2, 0.U,
     feedVs3, feedMmaLast)
   // A vle of VE/VR writes SEVERAL VX slots (writeSlotsL expands by the load
@@ -1027,7 +1049,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   when (!illegalAny && !io.session_reset) {
     for (i <- 0 until L) {
       val wrSet    = tagAlloc && entSwmask(i)
-      val wrClrMma = clctHasEntry && mmaDoneWmask(i)
+      val wrClrMma = compValid && mmaDoneWmask(i)
       val wrClrDma = dmaDoneHead && dmaHead.dir === 0.U && dmaVleWmask(i)
       val wrNext = (tagWrMask(i) | Mux(wrSet, (1.U << tgAlloc)(T - 1, 0), 0.U(T.W))) &
         ~Mux(wrClrMma, (1.U << mmaDoneTag)(T - 1, 0), 0.U(T.W)) &
