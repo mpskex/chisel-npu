@@ -211,6 +211,9 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     val rdSat      = Vec(6, Bool())
     val wrTgt      = Vec(4, UInt(WC.W))
     val wrSat      = Vec(4, Bool())
+    // L2c: one-cycle latch that seeds rdSat/wrSat from the registered targets
+    // on the cycle after entry (splits the entry -> reached -> sat path).
+    val initPending = Bool()
     // mma.last ordering: all prior non-last MMAs must have fed (§13).
     val lastTgt    = UInt(WC.W)
     val lastSat    = Bool()
@@ -538,16 +541,32 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     for (j <- 0 until 4) {
       when (wrValid(j) && !sl.wrSat(j)) { warOk := false.B }
     }
-    // Satisfied latches: set once the monotonic done counter first crosses the
-    // target captured at entry.  Never cleared until the slot is re-entered.
-    for (j <- 0 until 6) {
-      when (sl.valid && rdValid(j)) {
-        sl.rdSat(j) := sl.rdSat(j) || reached(wrDone(rdRegs(j)), sl.rdTgt(j))
+    // ---- L2c satisfied latches: the entry path only snapshots the targets
+    //      (decode -> counter mux -> target register, no subtract).  One cycle
+    //      later `initPending` seeds rdSat/wrSat from the registered target +
+    //      the done counters; afterwards the per-cycle monotonic set keeps a
+    //      target that was not yet met at init waiting.  Readiness only ever
+    //      consults the registered sat latches, never the live decode.
+    when (sl.initPending) {
+      sl.initPending := false.B
+      for (j <- 0 until 6) {
+        sl.rdSat(j) := rdValid(j) &&
+          reached(wrDone(rdRegs(j)), sl.rdTgt(j))
       }
-    }
-    for (j <- 0 until 4) {
-      when (sl.valid && wrValid(j)) {
-        sl.wrSat(j) := sl.wrSat(j) || reached(rdDone(wrRegs(j)), sl.wrTgt(j))
+      for (j <- 0 until 4) {
+        sl.wrSat(j) := wrValid(j) &&
+          reached(rdDone(wrRegs(j)), sl.wrTgt(j))
+      }
+    } .otherwise {
+      for (j <- 0 until 6) {
+        when (sl.valid && rdValid(j)) {
+          sl.rdSat(j) := sl.rdSat(j) || reached(wrDone(rdRegs(j)), sl.rdTgt(j))
+        }
+      }
+      for (j <- 0 until 4) {
+        when (sl.valid && wrValid(j)) {
+          sl.wrSat(j) := sl.wrSat(j) || reached(rdDone(wrRegs(j)), sl.wrTgt(j))
+        }
       }
     }
     when (sl.valid && sl.isMmaLast) {
@@ -904,20 +923,22 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
       }
     }
 
-    // ---- L2 count-scoreboard entry.  Capture the target for every operand
-    //      BEFORE this instruction's own issue increments: a reader waits for
-    //      the writes issued ahead of it, a writer for the reads ahead of it.
-    //      `rdSat`/`wrSat` start already-satisfied when the target is met. ----
+    // ---- L2c count-scoreboard entry.  Snapshot each operand's target from
+    //      the issue counter BEFORE this instruction registers (a reader waits
+    //      for the writes issued ahead of it, a writer for the reads ahead).
+    //      This is the short entry stage: decode -> counter mux -> target
+    //      register, with no `reached` subtract here.  The sat latches start
+    //      false; `initPending` seeds them from the registered targets on the
+    //      next cycle (see the per-slot readiness loop).
     for (j <- 0 until 6) {
       slots(t).rdTgt(j) := wrIss(entRdRegs(j))
-      slots(t).rdSat(j) := entRdValid(j) &&
-        reached(wrDone(entRdRegs(j)), wrIss(entRdRegs(j)))
+      slots(t).rdSat(j) := false.B
     }
     for (j <- 0 until 4) {
       slots(t).wrTgt(j) := rdIss(entWrRegs(j))
-      slots(t).wrSat(j) := entWrValid(j) &&
-        reached(rdDone(entWrRegs(j)), rdIss(entWrRegs(j)))
+      slots(t).wrSat(j) := false.B
     }
+    slots(t).initPending := true.B
     slots(t).lastTgt := mmaIssCnt
     slots(t).lastSat := reached(mmaFedCnt, mmaIssCnt)
 
@@ -1021,6 +1042,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
       slots(s).isStore    := false.B
       slots(s).illegal    := false.B
       slots(s).useCapData := false.B
+      slots(s).initPending := false.B
       for (j <- 0 until 6) {
         slots(s).rdTgt(j) := 0.U
         slots(s).rdSat(j) := false.B
