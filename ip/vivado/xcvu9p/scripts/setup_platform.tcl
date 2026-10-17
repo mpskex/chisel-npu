@@ -55,7 +55,7 @@ set_property -dict [list \
 if {[get_ips -quiet npu_dw] eq ""} {
     create_ip -name axi_dwidth_converter -vendor xilinx.com -library ip -module_name npu_dw
 }
-set_property -dict [list CONFIG.SI_DATA_WIDTH {128} CONFIG.MI_DATA_WIDTH {512} \
+set_property -dict [list CONFIG.SI_DATA_WIDTH {512} CONFIG.MI_DATA_WIDTH {512} \
     CONFIG.ADDR_WIDTH {64} CONFIG.SI_ID_WIDTH {4} CONFIG.PACKING_LEVEL {1}] [get_ips npu_dw]
 
 # ── bypass BAR 512 -> 32 downsizer + AXI4 -> AXI4-Lite ───────────────────────
@@ -73,7 +73,7 @@ set_property -dict [list CONFIG.DATA_WIDTH {32} CONFIG.ADDR_WIDTH {64}] [get_ips
 if {[get_ips -quiet npu_cc] eq ""} {
     create_ip -name axi_clock_converter -vendor xilinx.com -library ip -module_name npu_cc
 }
-set_property -dict [list CONFIG.DATA_WIDTH {128} CONFIG.ADDR_WIDTH {64} CONFIG.ID_WIDTH {4}] [get_ips npu_cc]
+set_property -dict [list CONFIG.DATA_WIDTH {512} CONFIG.ADDR_WIDTH {64} CONFIG.ID_WIDTH {4}] [get_ips npu_cc]
 if {[get_ips -quiet byp_cc] eq ""} {
     create_ip -name axi_clock_converter -vendor xilinx.com -library ip -module_name byp_cc
 }

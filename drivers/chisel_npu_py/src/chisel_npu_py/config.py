@@ -90,7 +90,7 @@ class NPUConfig:
 def default_config() -> NPUConfig:
     """The silicon-verified K=16 program-engine map (see NpuSections in
     npuProgramEngine.scala and the ctrl map in npuFrontend.scala)."""
-    k = 16
+    k = 32
     return NPUConfig(
         K=k,
         N=8,

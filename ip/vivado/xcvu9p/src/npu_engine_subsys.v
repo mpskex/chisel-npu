@@ -15,7 +15,7 @@
 
 module npu_engine_subsys #(
     parameter AXI_ADDR_WIDTH  = 64,
-    parameter AXI_DATA_WIDTH  = 128,
+    parameter AXI_DATA_WIDTH  = 512,
     parameter AXI_ID_WIDTH    = 4,
     parameter AXIL_ADDR_WIDTH = 12,
     parameter AXIL_DATA_WIDTH = 32
@@ -129,8 +129,8 @@ module npu_engine_subsys #(
     wire [2:0]  e_awsize, e_arsize;
     wire [1:0]  e_awburst, e_arburst;
     wire        e_awvalid, e_arvalid, e_wvalid, e_wlast, e_bready, e_rready;
-    wire [127:0] e_wdata;
-    wire [15:0] e_wstrb;
+    wire [AXI_DATA_WIDTH-1:0] e_wdata;
+    wire [AXI_DATA_WIDTH/8-1:0] e_wstrb;
 
     NpuProgramEngineFrontend u_engine (
         .clock           (aclk),
