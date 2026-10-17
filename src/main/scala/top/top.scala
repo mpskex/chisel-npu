@@ -7,16 +7,16 @@ import circt.stage.ChiselStage
 import engine._
 
 object Main extends App {
-  // Emit the program engine (frontend + execution core + DMA + MMALU).
-  // K = systolic array side (16 on the FPGA: the K=32 engine + XDMA + MIG
-  // exceeds the xc7k480t's routability — see build notes), N = 8 (byte lanes).
-  val K = 16
-  // W = dispatch-window depth.  W=8 did not close timing on xcvu9p at 200 MHz
-  // (many deep, route-dominated scoreboard/issue cones); W=4 shrinks the engine
-  // and its W-scaled logic so the design closes.  (Performance knob, not
-  // correctness.)
+  // Emit the program engine (frontend + execution core + DMA + MMALU) for the
+  // xcvu9p build.
+  // K = systolic array side, N = 8 (byte lanes).  K=32 matches the Phase-2
+  // L1/512-bit-AXI configuration (T = 128 tag ring, VR = 2 AXI beats).
+  val K = 32
+  // W = issue-window depth.  L1 (retire-at-issue + T=128 tag ring) carries the
+  // completion/hazard tags, so W no longer determines throughput; W=16 is the
+  // tested configuration.  (Timing is validated by the Vivado build.)
   val hdl = ChiselStage.emitSystemVerilog(
-    new NpuProgramEngineFrontend(K, 8, W = 4),
+    new NpuProgramEngineFrontend(K, 8, W = 16),
     firtoolOpts = Array("-disable-all-randomization", "-strip-debug-info")
   )
   Files.write(Paths.get("top.sv"), hdl.getBytes(StandardCharsets.UTF_8))
