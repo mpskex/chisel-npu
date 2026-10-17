@@ -51,12 +51,7 @@ set_property -dict [list \
     CONFIG.PRIMITIVE {MMCM} CONFIG.USE_LOCKED {true} CONFIG.USE_RESET {true} \
     CONFIG.RESET_TYPE {ACTIVE_LOW}] [get_ips clk_wiz_fabric]
 
-# ── NPU master 128 -> 512 upsizer (PACKING_LEVEL=1, no packing) ──────────────
-if {[get_ips -quiet npu_dw] eq ""} {
-    create_ip -name axi_dwidth_converter -vendor xilinx.com -library ip -module_name npu_dw
-}
-set_property -dict [list CONFIG.SI_DATA_WIDTH {512} CONFIG.MI_DATA_WIDTH {512} \
-    CONFIG.ADDR_WIDTH {64} CONFIG.SI_ID_WIDTH {4} CONFIG.PACKING_LEVEL {1}] [get_ips npu_dw]
+# npu_dw (128->512) removed: the engine is now 512-bit (pass-through).
 
 # ── bypass BAR 512 -> 32 downsizer + AXI4 -> AXI4-Lite ───────────────────────
 if {[get_ips -quiet byp_dw] eq ""} {
@@ -79,5 +74,5 @@ if {[get_ips -quiet byp_cc] eq ""} {
 }
 set_property -dict [list CONFIG.DATA_WIDTH {32} CONFIG.ADDR_WIDTH {64} CONFIG.ID_WIDTH {0}] [get_ips byp_cc]
 
-generate_target all [get_ips clk_wiz_fabric npu_dw byp_dw byp_pc npu_cc byp_cc]
+generate_target all [get_ips clk_wiz_fabric byp_dw byp_pc npu_cc byp_cc]
 puts "SETUP_DONE"
