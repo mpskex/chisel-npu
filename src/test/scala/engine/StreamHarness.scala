@@ -113,7 +113,7 @@ class LatencyRamModel(val readLatency: Int = 1) extends Module {
   }
 }
 
-class StreamHarness(val K: Int = 16, val readLatency: Int = 1) extends Module {
+class StreamHarness(val K: Int = 16, val readLatency: Int = 1, val W: Int = 16) extends Module {
   val io = IO(new Bundle {
     val instr       = Input(UInt(32.W))
     val instr_valid = Input(Bool())
@@ -143,7 +143,7 @@ class StreamHarness(val K: Int = 16, val readLatency: Int = 1) extends Module {
     val dbg_mac      = Output(UInt(32.W))
   })
 
-  val eng = Module(new NpuProgramEngine(K, 8))
+  val eng = Module(new NpuProgramEngine(K, 8, W))
   val ram = Module(new LatencyRamModel(readLatency))
 
   eng.io.instr       := io.instr

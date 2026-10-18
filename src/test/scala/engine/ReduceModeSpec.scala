@@ -31,16 +31,16 @@ class ReduceModeSpec extends AnyFlatSpec {
       (0 until R).map(_ => mma(0, 4, 8, 0)) ++
       Seq(mmaLast(0, 0, 0, 0), vse32(0, NpuSections.SECT_OUT, 0))
 
-  "Store-sparse reduce mode" should "capture only the round's final sum and drain" in {
+  def check(W: Int): Unit = {
     val R = 128
-    simulate(new StreamHarness(K = K)) { dut =>
+    simulate(new StreamHarness(K = K, W = W)) { dut =>
       dut.io.reduce_mode.poke(true.B)
       StreamSpecUtil.resetSession(dut)
       StreamSpecUtil.preloadI8(dut, NpuSections.A, Seq.fill(K)(3))
       StreamSpecUtil.preloadI8(dut, NpuSections.B, Seq.fill(K)(5))
 
       val ph = StreamSpecUtil.traceRun(dut, program(R))
-      StreamSpecUtil.printPhases(s"reduce R=$R", ph)
+      StreamSpecUtil.printPhases(s"reduce W=$W R=$R", ph)
 
       val out = StreamSpecUtil.readI32(dut, NpuSections.OUT, K)
       // The final running sum after R useful feeds (mma.last injects zeros):
@@ -51,8 +51,12 @@ class ReduceModeSpec extends AnyFlatSpec {
       assert(cols.nonEmpty,
         s"reduce capture is not the final running-sum column: ${out.toList}")
 
-      println(f"[reduce] bodyUtil=${ph.bodyUtil * 100.0}%.1f%% body=${ph.body} feeds=${ph.bodyFeeds}")
+      println(f"[reduce W=$W] bodyUtil=${ph.bodyUtil * 100.0}%.1f%% body=${ph.body} feeds=${ph.bodyFeeds}")
       assert(ph.bodyUtil >= 0.8, f"bodyUtil ${ph.bodyUtil * 100.0}%.1f%% < 80%%")
     }
   }
+
+  "Store-sparse reduce mode" should "capture only the round's final sum and drain" in check(W = 16)
+
+  it should "keep the body saturated at W=8 (L1 decouples throughput from W)" in check(W = 8)
 }
