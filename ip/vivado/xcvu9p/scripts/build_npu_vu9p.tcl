@@ -45,6 +45,45 @@ set_property top hw_platform [get_filesets sources_1]
 update_compile_order -fileset sources_1
 puts "TOP=[get_property top [get_filesets sources_1]]"
 
+# ── Force npu_cc to its configured 512-bit width ────────────────────────────
+# The engine AXI is 512 bits, but IP output products can be stale at 128 bits
+# (setup_platform reconfigures CONFIG.DATA_WIDTH without regenerating).  A
+# stale 128-bit npu_cc silently truncates every engine DMA transfer to the low
+# 16 bytes (Synth 8-689 width mismatch).  Regenerate + resynthesize the IP so
+# the stub and DCP match the 512-bit configuration.
+proc _cc_stub_is512 {} {
+    set pd [get_property DIRECTORY [current_project]]
+    set cands [concat \
+        [glob -nocomplain [file join $pd *.ip_user_files ip * npu_cc_stub.v]] \
+        [glob -nocomplain [file join $pd prj.cache ip * * * * npu_cc_stub.v]] \
+        [glob -nocomplain [file join [get_property IP_OUTPUT_DIR [get_ips npu_cc]] npu_cc_stub.v]]]
+    foreach s $cands {
+        if {![file exists $s]} { continue }
+        set fh [open $s r]; set t [read $fh]; close $fh
+        if {[string first "s_axi_wdata\[511:0\]" $t] >= 0} { return 1 }
+    }
+    return 0
+}
+if {[get_ips -quiet npu_cc] ne ""} {
+    if {![_cc_stub_is512]} {
+        puts "WARNING: npu_cc stub is stale (<512-bit); regenerating"
+        reset_target all [get_ips npu_cc]
+        set_property -dict [list CONFIG.DATA_WIDTH {512} CONFIG.ADDR_WIDTH {64} \
+                                 CONFIG.ID_WIDTH {4}] [get_ips npu_cc]
+        generate_target all [get_ips npu_cc]
+        if {[get_runs -quiet npu_cc_synth_1] ne ""} { reset_run npu_cc_synth_1 }
+    }
+    if {![_cc_stub_is512]} {
+        puts "ERROR: npu_cc stub is not 512-bit; run setup_platform.tcl cleanly"; exit 1
+    }
+    # Ensure the IP source-dir DCP (read by link_design) is the regenerated
+    # 512-bit one; a stale 128-bit copy there silently truncates the AXI.
+    set _src [file join [get_property IP_OUTPUT_DIR [get_ips npu_cc]] npu_cc.dcp]
+    set _dst [file join [get_property IP_DIR        [get_ips npu_cc]] npu_cc.dcp]
+    if {[file exists $_src]} { file copy -force $_src $_dst }
+    puts "NPU_CC_WIDTH=512"
+}
+
 set jobs 4
 if {[info exists ::env(VIVADO_JOBS)]} { set jobs $::env(VIVADO_JOBS) }
 
@@ -70,7 +109,9 @@ foreach ip [get_ips -quiet] {
     set ip_out_dir [get_property IP_OUTPUT_DIR [get_ips $ip]]
     set src_dcp [file join $ip_out_dir ${ip}.dcp]
     set dst_dcp [file join $ip_dir     ${ip}.dcp]
-    if {[file exists $src_dcp] && ![file exists $dst_dcp]} {
+    # Force-copy: a stale DCP in the IP source dir must not shadow the freshly
+    # synthesised one (this is how the 128-bit npu_cc was silently reused).
+    if {[file exists $src_dcp]} {
         file copy -force $src_dcp $dst_dcp
     }
 }

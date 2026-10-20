@@ -27,29 +27,47 @@ if {![file exists $CTX]} { set CTX [file join $RUN_DIR hw_platform_placed.dcp] }
 puts "INFO: opening checkpoint: $CTX"
 open_checkpoint $CTX
 
-# ── Pblock: all engine leaf cells into a compact single-SLR region ───────────
-set eng_leaves [get_cells -quiet -hier -filter {NAME =~ u_npu/u_engine/* && IS_PRIMITIVE == 1}]
-puts "INFO: engine primitive cells: [llength $eng_leaves]"
-if {[llength $eng_leaves] == 0} {
-    puts "ERROR: no engine cells matched u_npu/u_engine/*"
-    exit 1
-}
+# ── Pblock: the whole engine hierarchy into a single-SLR region ─────────────
+# Add the hierarchical cell (UG909), not a flat IS_PRIMITIVE leaf list: cells
+# created during opt_design/phys_opt (replicated/retimed registers) inherit the
+# pblock membership only through the hierarchy.  A leaf snapshot leaves those
+# new cells unconstrained, so they can land outside SLR0 and recreate long
+# SLR-crossing nets.
+set eng_hier [get_cells -quiet u_npu/u_engine]
+if {$eng_hier eq ""} { puts "ERROR: u_npu/u_engine not found"; exit 1 }
+puts "INFO: engine hierarchy cells: [llength [get_cells -quiet -hier -of_objects $eng_hier]]"
 create_pblock pblock_engine
-add_cells_to_pblock pblock_engine $eng_leaves
-# Compact 4x3 clock regions (was 4x5): ~157k LUT capacity vs 62k engine LUTs.
-resize_pblock pblock_engine -add {CLOCKREGION_X0Y5:CLOCKREGION_X3Y7}
-set_property SNAPPING_MODE ROUTING [get_pblocks pblock_engine]
+add_cells_to_pblock [get_pblocks pblock_engine] $eng_hier
+# Place the whole engine in SLR0 (X0..X5, Y0..Y4 = 30 clock regions, ~394k
+# LUTs for the ~177k-LUT engine).  The unconstrained placer spread it across
+# SLR0 + Y5 of SLR1, straddling the SLR boundary and colliding with the
+# XDMA/DDR (both in SLR1, Y5..Y9) -- the source of the routing congestion.
+resize_pblock [get_pblocks pblock_engine] -add {CLOCKREGION_X0Y0:CLOCKREGION_X5Y4}
+set_property IS_SOFT FALSE [get_pblocks pblock_engine]
+# SNAPPING_MODE ROUTING is a 7-series/DFX setting; leave it off for a normal
+# UltraScale+ hard pblock.
+set_property SNAPPING_MODE OFF [get_pblocks pblock_engine]
 puts "INFO: pblock_engine grid = [get_property GRID_RANGES [get_pblocks pblock_engine]]"
 
+# NOTE: a nested accumulator-BRAM pblock (X2Y3:X3Y4) was tried to pull the
+# accumMem write path closer to feedMmaLast_reg, but a hard box that small made
+# the router congest (30,910 overlaps, Explore failed).  Do not re-add it
+# without giving the placer more room; the engine-level SLR0 pblock is enough.
+
 # ── Re-place timing-first, then physical optimization ────────────────────────
+# (place_design forbids -sll_align_opt together with -directive; ExtraTimingOpt
+# plus the SLR0 pblock is the combination that placed cleanly before.)
 puts "INFO: place_design -directive ExtraTimingOpt ..."
 place_design -directive ExtraTimingOpt
 puts "INFO: phys_opt_design -directive AggressiveExplore ..."
 phys_opt_design -directive AggressiveExplore
 
-# ── Route with aggressive timing directives until legal ──────────────────────
+# ── Route: UG904 order Explore -> AggressiveExplore -> NoTimingRelaxation ────
+# Explore reports signoff-based timing; AlternateCLBRouting is a congestion
+# directive (not a timing fallback) and is only used if a route fails to
+# legalize because of congestion.
 set ok 0
-foreach d [list AggressiveExplore AlternateCLBRouting NoTimingRelaxation] {
+foreach d [list Explore AggressiveExplore NoTimingRelaxation] {
     puts "=== route_design -directive $d ==="
     if {[catch {route_design -directive $d} rerr]} {
         puts "WARNING: $d failed: $rerr"
@@ -59,6 +77,14 @@ foreach d [list AggressiveExplore AlternateCLBRouting NoTimingRelaxation] {
     puts "INFO: $d unrouted nets: [llength $un]"
     if {[llength $un] == 0} { set ok 1; break }
 }
+if {!$ok} {
+    puts "=== congestion fallback: route_design -directive AlternateCLBRouting ==="
+    if {![catch {route_design -directive AlternateCLBRouting} rerr]} {
+        set un [get_property UNROUTED_NETS [current_design]]
+        puts "INFO: AlternateCLBRouting unrouted nets: [llength $un]"
+        if {[llength $un] == 0} { set ok 1 }
+    }
+}
 
 report_timing_summary -file [file join $RUN_DIR vu9p_timing_pblock.rpt]
 puts "INFO: timing report -> [file join $RUN_DIR vu9p_timing_pblock.rpt]"
@@ -67,6 +93,19 @@ if {!$ok} {
     puts "ERROR: routing failed even with the Pblock"
     exit 1
 }
+
+# Save the routed checkpoint, then run post-route physical optimization.
+# This is the Performance_ExplorePostRoutePhysOpt mapping: post-route
+# phys_opt_design -directive Explore (signoff timing).  UG904 notes a second
+# run optimizes the results of the first, so follow with AggressiveExplore.
+write_checkpoint -force [file join $RUN_DIR hw_platform_routed.dcp]
+puts "INFO: post-route phys_opt_design -directive Explore ..."
+phys_opt_design -directive Explore
+report_timing_summary -max_paths 10 -file [file join $RUN_DIR vu9p_timing_postroute.rpt]
+puts "INFO: post-route phys_opt_design -directive AggressiveExplore (2nd pass) ..."
+phys_opt_design -directive AggressiveExplore
+report_timing_summary -max_paths 10 -file [file join $RUN_DIR vu9p_timing_postroute.rpt]
+puts "INFO: post-route timing -> [file join $RUN_DIR vu9p_timing_postroute.rpt]"
 
 write_bitstream -force $BIT_DST
 puts ""

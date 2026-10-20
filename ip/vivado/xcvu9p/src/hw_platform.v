@@ -133,7 +133,14 @@ module hw_platform
   always @(posedge clk_fabric or negedge arst_n)
     if (!arst_n) fab_rstn_sync <= 2'b00;
     else         fab_rstn_sync <= {fab_rstn_sync[0], 1'b1};
-  wire aresetn_fabric = fab_rstn_sync[1];
+  wire aresetn_fabric_raw = fab_rstn_sync[1];
+  // Drive the very-high-fanout fabric reset (async-reset pin of every engine /
+  // MMALU flop) through a global buffer so it uses the low-skew global clock
+  // network instead of general routing.  Routed as a general net it was the
+  // critical path: fab_rstn_sync_reg[1] -> MMPE_*/res_reg/R, 0 logic levels and
+  // ~5.15 ns of pure route at 200 MHz (the classic high-fanout reset problem).
+  wire aresetn_fabric;
+  BUFG u_bufg_fab_rstn (.I(aresetn_fabric_raw), .O(aresetn_fabric));
 
   // ── XDMA M_AXI (S00 of ddr_top) — same nets as hw_platform.v ───────────────
   wire              m_axi_awready;
