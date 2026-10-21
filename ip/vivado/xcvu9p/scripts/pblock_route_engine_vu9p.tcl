@@ -47,6 +47,18 @@ set_property IS_SOFT FALSE [get_pblocks pblock_engine]
 # SNAPPING_MODE ROUTING is a 7-series/DFX setting; leave it off for a normal
 # UltraScale+ hard pblock.
 set_property SNAPPING_MODE OFF [get_pblocks pblock_engine]
+# Put the 512-bit AXI clock converter (npu_cc) in SLR0 with the engine too.  It
+# was scattered across 23 clock regions including Y5 (SLR1), making the
+# engine->npu_cc path the critical one (4.66 ns route, 90%).  On the SLR0/SLR1
+# side of the same pblock the s_axi flops sit near the engine and only the
+# registered m_axi side crosses into SLR1 (the DDR).
+set cc [get_cells -quiet u_npu_cc]
+if {$cc ne ""} {
+    add_cells_to_pblock [get_pblocks pblock_engine] $cc
+    puts "INFO: added u_npu_cc to pblock_engine"
+} else {
+    puts "WARNING: u_npu_cc not found"
+}
 puts "INFO: pblock_engine grid = [get_property GRID_RANGES [get_pblocks pblock_engine]]"
 
 # NOTE: a nested accumulator-BRAM pblock (X2Y3:X3Y4) was tried to pull the
@@ -54,9 +66,11 @@ puts "INFO: pblock_engine grid = [get_property GRID_RANGES [get_pblocks pblock_e
 # the router congest (30,910 overlaps, Explore failed).  Do not re-add it
 # without giving the placer more room; the engine-level SLR0 pblock is enough.
 
-# ── Re-place timing-first, then physical optimization ────────────────────────
-# (place_design forbids -sll_align_opt together with -directive; ExtraTimingOpt
-# plus the SLR0 pblock is the combination that placed cleanly before.)
+# ── Re-place with pessimistic long-net delay (UG904 ExtraNetDelay_high) ──────
+# The ExtraTimingOpt placement met timing after place (-0.135) but failed after
+# route (-0.226) because the placer's wire estimates were optimistic on long /
+# high-fanout nets.  ExtraNetDelay_high raises those estimates so the placer
+# minimises route length up front.
 puts "INFO: place_design -directive ExtraTimingOpt ..."
 place_design -directive ExtraTimingOpt
 puts "INFO: phys_opt_design -directive AggressiveExplore ..."
