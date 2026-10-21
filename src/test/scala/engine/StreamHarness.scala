@@ -113,7 +113,7 @@ class LatencyRamModel(val readLatency: Int = 1) extends Module {
   }
 }
 
-class StreamHarness(val K: Int = 16, val readLatency: Int = 1, val W: Int = 16) extends Module {
+class StreamHarness(val K: Int = 16, val readLatency: Int = 1, val W: Int = 8) extends Module {
   val io = IO(new Bundle {
     val instr       = Input(UInt(32.W))
     val instr_valid = Input(Bool())

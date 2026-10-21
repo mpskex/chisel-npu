@@ -175,8 +175,27 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
   }
   io.instr_out := 0.U
 
-  // AXI defaults
-  io.m_axi_awaddr  := reqL3Addr
+  // AXI defaults.  The bus is 512-bit and ALL transfers use SIZE=6 (one 64-byte
+  // beat), so the AXI address MUST be 64-byte aligned.  The engine's addresses
+  // are only 16-byte (instruction lines) or 32-byte (VX) aligned, so align the
+  // AXI address down and recover the requested bytes with `rdOff` (the byte
+  // offset within the beat).  The old code issued SIZE=6 at the unaligned
+  // address and assumed the data was in the low lanes: on silicon that is an
+  // AXI protocol violation / wrong lane (VX at offset 32, CODE lines at 16/32/
+  // 48), while the Chisel RAM models ignored size and always returned low
+  // lanes, hiding it.
+  val beatMask  = "hFFFFFFC0".U(32.W)
+  val rdOff     = reqL3Addr(5, 0)             // byte offset inside the 64-B beat
+  // VX is VX_BYTES-aligned: select its VX_BYTES chunk within the 64-B beat
+  // (2-way for K=32, 4-way for K=16) instead of a 512-bit barrel shifter.
+  val vxChunks  = (DW / 8) / VX_BYTES
+  val vxLo      = log2Ceil(VX_BYTES)
+  val vxSel     = if (vxChunks > 1) rdOff(vxLo + log2Ceil(vxChunks) - 1, vxLo) else 0.U
+  // VE is VE_BYTES-aligned as well (1 beat: 1 chunk for K=32, 2 for K=16).
+  val veChunks  = (DW / 8) / VE_BYTES
+  val veLo      = log2Ceil(VE_BYTES)
+  val veSel     = if (veChunks > 1) rdOff(veLo + log2Ceil(veChunks) - 1, veLo) else 0.U
+  io.m_axi_awaddr  := (reqL3Addr & beatMask)
   io.m_axi_awlen   := beats - 1.U
   io.m_axi_awsize  := SZ.U
   io.m_axi_awburst := 1.U             // INCR
@@ -186,7 +205,7 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
   io.m_axi_wlast   := false.B
   io.m_axi_wvalid  := false.B
   io.m_axi_bready  := false.B
-  io.m_axi_araddr  := reqL3Addr
+  io.m_axi_araddr  := (reqL3Addr & beatMask)
   io.m_axi_arlen   := beats - 1.U
   io.m_axi_arsize  := SZ.U
   io.m_axi_arburst := 1.U
@@ -205,15 +224,28 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
   val wbytes = Wire(Vec(DW / 8, UInt(8.W)))
   for (b <- 0 until DW / 8) wbytes(b) := 0.U
   val wstrb = WireDefault(0.U((DW / 8).W))
-  when (reqWidth === 0.U) {          // VX: K lanes x 8 bit = 256 b, 1 beat
-    for (i <- 0 until K) wbytes(i) := io.rf_r_vx_data(i)
-    wstrb := ((BigInt(1) << VX_BYTES) - 1).U((DW / 8).W)   // low 32 B valid
-  }.elsewhen (reqWidth === 1.U) {    // VE: K lanes x 16 bit = 512 b, 1 beat
-    for (i <- 0 until K) {
-      wbytes(2 * i)     := io.rf_r_ve_data(i)(7, 0)
-      wbytes(2 * i + 1) := io.rf_r_ve_data(i)(15, 8)
+  when (reqWidth === 0.U) {          // VX: K lanes x 8 bit, 1 beat
+    // Place the VX_BYTES at its aligned chunk of the 64-B beat.
+    for (c <- 0 until vxChunks) {
+      when (vxSel === c.U) {
+        for (i <- 0 until K) wbytes(c * VX_BYTES + i) := io.rf_r_vx_data(i)
+      }
     }
-    wstrb := fullStrb
+    wstrb := MuxLookup(vxSel, 0.U((DW / 8).W))(
+      (0 until vxChunks).map(c =>
+        c.U -> (((BigInt(1) << VX_BYTES) - 1).U << (c * VX_BYTES))))
+  }.elsewhen (reqWidth === 1.U) {    // VE: K lanes x 16 bit, 1 beat
+    for (c <- 0 until veChunks) {
+      when (veSel === c.U) {
+        for (i <- 0 until K) {
+          wbytes(c * VE_BYTES + 2 * i)     := io.rf_r_ve_data(i)(7, 0)
+          wbytes(c * VE_BYTES + 2 * i + 1) := io.rf_r_ve_data(i)(15, 8)
+        }
+      }
+    }
+    wstrb := MuxLookup(veSel, 0.U((DW / 8).W))(
+      (0 until veChunks).map(c =>
+        c.U -> (((BigInt(1) << VE_BYTES) - 1).U << (c * VE_BYTES))))
   }.otherwise {                      // VR: 16 lanes x 32 bit per beat, 2 beats
     val lanesPerBeat = DW / 32
     for (i <- 0 until lanesPerBeat) {
@@ -230,9 +262,17 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
   val rfWDataVx = Wire(Vec(K, UInt(N.W)))
   val rfWDataVe = Wire(Vec(K, UInt((2 * N).W)))
   val rfWDataVr = Wire(Vec(K, UInt((4 * N).W)))
+  // The AXI read is 64-B aligned, so the requested vector starts at byte
+  // `rdOff` of the beat.  Select the aligned VX chunk (small mux, K-exact).
+  val vxBeat = MuxLookup(vxSel, 0.U((VX_BYTES * 8).W))(
+    (0 until vxChunks).map(c =>
+      c.U -> buf(0)((c + 1) * VX_BYTES * 8 - 1, c * VX_BYTES * 8)))
+  val veBeat = MuxLookup(veSel, 0.U((VE_BYTES * 8).W))(
+    (0 until veChunks).map(c =>
+      c.U -> buf(0)((c + 1) * VE_BYTES * 8 - 1, c * VE_BYTES * 8)))
   for (lane <- 0 until K) {
-    rfWDataVx(lane) := buf(0)(8 * lane + 7, 8 * lane)
-    rfWDataVe(lane) := buf(0)(16 * lane + 15, 16 * lane)
+    rfWDataVx(lane) := vxBeat(8 * lane + 7, 8 * lane)
+    rfWDataVe(lane) := veBeat(16 * lane + 15, 16 * lane)
     rfWDataVr(lane) := buf(lane / (DW / 32))(32 * (lane % (DW / 32)) + 31,
                                              32 * (lane % (DW / 32)))
   }
@@ -321,7 +361,13 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
 
     is (DmaState.INSTRW) {
       io.instr_valid := true.B
-      io.instr_out   := buf(0)(127, 0)
+      // 16-byte instruction line at byte offset rdOff within the 64-B beat.
+      // rdOff is a multiple of 16, so a 4:1 select of the 128-bit quarters.
+      io.instr_out := MuxLookup(rdOff(5, 4), buf(0)(127, 0))(Seq(
+        0.U -> buf(0)(127, 0),
+        1.U -> buf(0)(255, 128),
+        2.U -> buf(0)(383, 256),
+        3.U -> buf(0)(511, 384)))
       state := DmaState.DONE
     }
 

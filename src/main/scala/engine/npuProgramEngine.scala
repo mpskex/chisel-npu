@@ -528,6 +528,13 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   val feedVs3      = RegNext(issueMmaVs3,  0.U)
   val feedMmaLast  = RegNext(issueMmaLast, false.B)
 
+  // An mma.last that has issued but not yet fed.  boundaryCnt is armed at the
+  // feed (1 cycle after issue), so this closes the 1-cycle gap in which a
+  // following MMA could issue before the countdown starts (W=8 exposes it).
+  val mmaLastInFlight = (0 until W).map(i =>
+    slots(i).valid && slots(i).isMmaLast && slots(i).issued && !slots(i).done
+  ).reduce(_ || _)
+
   for (s <- 0 until W) {
     val sl = slots(s)
     val (rdRegs, rdValid) = readOperands(sl.family, sl.rd, sl.rs1, sl.rs2,
@@ -574,7 +581,12 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     }
     val unitOk = WireDefault(false.B)
     when (sl.unit === DispatchUnit.DMA) {
-      unitOk := !dmaQFull
+      // A capture-consuming store must not issue before its capture has been
+      // pushed into capQ: vsePopCap is gated on a non-empty queue but the
+      // store still latched the stale head and stored it.  The scoreboard
+      // alone lets the 2nd chained store slip ahead of the 2nd push at K=32
+      // (array latency), yielding an all-zero capture.
+      unitOk := !dmaQFull && (!sl.useCapData || capQCount =/= 0.U)
     } .elsewhen (sl.unit === DispatchUnit.MMALU) {
       // Reserve the pending (stage-2) feed slot so the 1-stage feed pipeline
       // can never overflow the FIFO.
@@ -587,7 +599,14 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     // cannot overtake one, start the boundary countdown, and gate the mma out.
     // Later MMAs cannot feed before it (in-order issue), so the snapshot of
     // the non-last issue count is exactly the prior-pending set.
-    val gateOk = !(sl.family === OpFamily.MMA.asUInt && boundaryCnt =/= 0.U) &&
+    //
+    // The boundary countdown is armed at the mma.last FEED (one cycle after
+    // its issue).  With a small window (W=8) a following MMA can become the
+    // head and issue in that one-cycle gap -- before boundaryCnt != 0 -- then
+    // feed immediately after the mma.last and corrupt the next round.  Block
+    // MMAs while an mma.last is issued-but-not-yet-fed too, independent of W.
+    val gateOk = !(sl.family === OpFamily.MMA.asUInt &&
+                    (boundaryCnt =/= 0.U || mmaLastInFlight)) &&
       !(sl.isMmaLast && !sl.lastSat)
     slotUnitOk(s) := unitOk
     slotsReady(s) := sl.valid && !sl.issued && !sl.done &&
@@ -618,8 +637,13 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   }
   val issueSel = Wire(Vec(W, Bool()))
   for (s <- 0 until W) {
+    // Re-check the boundary gate at the issue (same cycle): slotsReadyR is
+    // registered, so the slotsReady gate above is one cycle stale and cannot
+    // see the mma.last that issued in the previous cycle.
     issueSel(s) := slotsReadyR(s) && slotUnitOk(s) &&
-      !slots(s).issued && !slots(s).done && firstForUnit(s)
+      !slots(s).issued && !slots(s).done && firstForUnit(s) &&
+      !(slots(s).family === OpFamily.MMA.asUInt &&
+        (boundaryCnt =/= 0.U || mmaLastInFlight))
   }
 
   // ==========================================================================

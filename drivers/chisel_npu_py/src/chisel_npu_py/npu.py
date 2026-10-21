@@ -30,7 +30,13 @@ from .isa import Program
 
 
 def _words_bytes(words) -> bytes:
-    return Program(words).to_bytes()
+    """Pack the program words, padded so the engine's 64-byte-line fetch never
+    reads never-written DDR: the DMA issues a 64-byte beat for each 16-byte
+    instruction line, so the final line (and one beat past it) must be written.
+    """
+    b = Program(words).to_bytes()
+    padded = ((len(b) + 63) // 64) * 64 + 64
+    return b + bytes(padded - len(b))
 
 
 def _readback(buf: Buffer):
