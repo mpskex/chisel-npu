@@ -20,7 +20,12 @@ package testUtil
 import chisel3._
 import chisel3.util._
 
-class AxiRamModel(val dropReadRequests: Int = 0, val DW: Int = 512) extends Module {
+class AxiRamModel(val dropReadRequests: Int = 0, val DW: Int = 512,
+                  // Realistic-DRAM knobs: AR->R latency (plus 0..readJitter
+                  // pseudo-random extra) and W-last->B latency.  Defaults keep
+                  // the old 1-cycle / immediate behaviour.
+                  val readLatency: Int = 1, val readJitter: Int = 0, val longRead: Boolean = false,
+                  val bDelay: Int = 0) extends Module {
   require(DW % 128 == 0, s"AxiRamModel: DW=$DW must be a multiple of 128")
   val WORDS = DW / 128
   val STRB = DW / 8
@@ -66,32 +71,41 @@ class AxiRamModel(val dropReadRequests: Int = 0, val DW: Int = 512) extends Modu
   when (io.pre_wr_en) { mem(io.pre_wr_addr) := io.pre_wr_data }
 
   // ---- Read channel ----
-  val arPending = RegInit(false.B)
+  // AR is accepted, then rvalid is asserted after readLatency (+ jitter)
+  // cycles, modelling real DRAM/converter latency.  rvalid is held until the
+  // master takes each beat (AXI).  araddr must be 64-byte aligned now that the
+  // DMA aligns down and extracts by offset.
+  val arActive  = RegInit(false.B)
   val arAddr    = RegInit(0.U(32.W))
   val arLen     = RegInit(0.U(8.W))
   val rCnt      = RegInit(0.U(8.W))
   val rValid    = RegInit(false.B)
   val dropCnt   = RegInit(dropReadRequests.U(8.W))
+  val rWait     = RegInit(0.U(16.W))
+  val jitLfsr   = RegInit("hACE1".U(16.W))
 
+  val jitExtra = if (readJitter > 0) (jitLfsr % (readJitter + 1).U) else 0.U
   val rBase = (arAddr >> 4.U) + (WORDS.U * rCnt)
-  io.s_axi_arready := !arPending && !rValid
+  io.s_axi_arready := !arActive && !rValid
   io.s_axi_rvalid  := rValid
   io.s_axi_rdata   := Cat((0 until WORDS).reverse.map(w => mem(rBase + w.U)))
   io.s_axi_rlast   := rValid && rCnt === arLen
 
-  when (io.s_axi_arvalid && !arPending && !rValid) {
+  when (io.s_axi_arvalid && io.s_axi_arready) {
     when (dropCnt > 0.U) {
       dropCnt := dropCnt - 1.U
     } .otherwise {
-      arPending := true.B
-      arAddr    := io.s_axi_araddr
-      arLen     := io.s_axi_arlen
-      rCnt      := 0.U
+      arActive := true.B
+      arAddr   := io.s_axi_araddr
+      arLen    := io.s_axi_arlen
+      rCnt     := 0.U
+      rWait    := readLatency.U + jitExtra
+      jitLfsr  := jitLfsr(14, 0) ## (jitLfsr(15) ^ jitLfsr(13) ^ jitLfsr(12) ^ jitLfsr(10))
     }
   }
-  when (arPending) {
-    arPending := false.B
-    rValid    := true.B
+  when (arActive) {
+    when (rWait === 0.U) { arActive := false.B; rValid := true.B }
+    .otherwise           { rWait := rWait - 1.U }
   }
   when (rValid && io.s_axi_rready) {
     when (rCnt === arLen) { rValid := false.B }
@@ -108,6 +122,8 @@ class AxiRamModel(val dropReadRequests: Int = 0, val DW: Int = 512) extends Modu
   val awLen   = RegInit(0.U(8.W))
   val wCnt    = RegInit(0.U(8.W))
   val bValid  = RegInit(false.B)
+  val bPend   = RegInit(false.B)
+  val bWait   = RegInit(0.U(16.W))
 
   io.s_axi_awready := !wActive
   io.s_axi_wready  := wActive
@@ -129,12 +145,17 @@ class AxiRamModel(val dropReadRequests: Int = 0, val DW: Int = 512) extends Modu
     }
     when (io.s_axi_wlast) {
       wActive := false.B   // next AW may now be accepted (B still outstanding)
-      bValid  := true.B
+      bPend   := true.B
+      bWait   := bDelay.U  // realistic write-response latency
     } .otherwise {
       wCnt := wCnt + 1.U
     }
   }
 
+  when (bPend) {
+    when (bWait === 0.U) { bPend := false.B; bValid := true.B }
+    .otherwise           { bWait := bWait - 1.U }
+  }
   when (bValid && io.s_axi_bready) {
     bValid := false.B
   }

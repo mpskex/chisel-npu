@@ -10,7 +10,8 @@ import org.scalatest.flatspec.AnyFlatSpec
 import testUtil._
 import isa.NpuAssembler._
 
-class FrontendSpecHarness(val K: Int = 32) extends Module {
+class FrontendSpecHarness(val K: Int = 32, val readLatency: Int = 1,
+                          val readJitter: Int = 0, val bDelay: Int = 0) extends Module {
   val io = IO(new Bundle {
     val ctrl_addr  = Input(UInt(7.W))
     val ctrl_we    = Input(Bool())
@@ -49,7 +50,8 @@ class FrontendSpecHarness(val K: Int = 32) extends Module {
   })
 
   val fe = Module(new NpuProgramEngineFrontend(K, 8))
-  val ram = Module(new AxiRamModel())
+  val ram = Module(new AxiRamModel(readLatency = readLatency,
+    readJitter = readJitter, bDelay = bDelay))
 
   fe.io.ctrl_addr  := io.ctrl_addr
   fe.io.ctrl_we    := io.ctrl_we
