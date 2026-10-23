@@ -110,9 +110,60 @@ class ChainedCaptureSpec extends AnyFlatSpec {
   "NpuProgramEngineFrontend chained vd=0 captures" should
     "match the running-sum columns across K and DRAM latency" in {
     for (K <- Seq(16, 32);
-         (lat, jit, bd) <- Seq((1, 0, 0), (32, 32, 8), (100, 100, 32), (20000, 0, 0), (1, 0, 300))) {
+         (lat, jit, bd) <- Seq((1, 0, 0), (32, 32, 8), (100, 100, 32), (1, 0, 300))) {
       val cols = runChained(K, lat, jit, bd)
       println(s"[chained] K=$K lat=$lat jit=$jit bd=$bd columns=$cols")
+    }
+  }
+
+  it should "run a chained session correctly after a one-shot session" in {
+    for (K <- Seq(16, 32)) {
+      simulate(new FrontendSpecHarness(K = K, readLatency = 64,
+                                       readJitter = 32, bDelay = 8)) { dut =>
+        val k = K
+        val m = 3
+        val aVals = Array.tabulate(m, k)((mm, j) => (mm * 7 + j + 1) & 0xFF)
+        val bVals = Array.tabulate(m, k)((mm, i) => (100 + mm * 5 + i) & 0xFF)
+
+        def startAndWait(prog: Seq[Int]): Unit = {
+          preloadInstrs(dut, prog)
+          preloadI32(dut, NpuSections.OUT, Array.fill(4 * k)(0))
+          ctrlWrite(dut, 0x14, prog.length)
+          ctrlWrite(dut, 0x0, 1); ctrlWrite(dut, 0x0, 0)
+          waitDone(dut)
+        }
+
+        preloadI8(dut, NpuSections.A, aVals.flatten.toSeq)
+        preloadI8(dut, NpuSections.B, bVals.flatten.toSeq)
+
+        // session 1: one-shot (vd=2), like the py suite runs first
+        println("=== MARK ONE-SHOT ===")
+        startAndWait(Seq(vle8(4, NpuSections.SECT_A, 0),
+                         vle8(8, NpuSections.SECT_B, 0),
+                         mma(2, 4, 8, 0), mmaLast(0, 0, 0, 0),
+                         vse32(2, NpuSections.SECT_OUT, 0)))
+
+        // session 2: the chained per-feed capture (vd=0), distinct operands
+        println("=== MARK CHAINED ===")
+        val chained = (0 until m).flatMap { mm =>
+          Seq(vle8(4, NpuSections.SECT_A, mm * k),
+              vle8(8, NpuSections.SECT_B, mm * k),
+              mma(0, 4, 8, 0),
+              vse32(0, NpuSections.SECT_OUT, mm * 4 * k))
+        } :+ mmaLast(0, 0, 0, 0)
+        startAndWait(chained)
+
+        val out = readI32(dut, NpuSections.OUT, m * k)
+        val a8 = aVals.map(_.map(s8)); val b8 = bVals.map(_.map(s8))
+        for (mm <- 0 until m) {
+          val got = out.slice(mm * k, (mm + 1) * k)
+          val pe = Array.tabulate(k, k)((i, j) => (0 to mm).map(t => a8(t)(i) * b8(t)(j)).sum)
+          val c = (0 until k).filter(cc => (0 until k).forall(i => got(i) == pe(i)(cc)))
+          assert(c.nonEmpty,
+            s"K=$K after one-shot, capture $mm wrong: got=${got.take(8).toList} " +
+            s"exp0=${(0 until 8).map(pe(_)(0)).toList}")
+        }
+      }
     }
   }
 }

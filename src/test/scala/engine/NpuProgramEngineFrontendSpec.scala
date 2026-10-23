@@ -33,7 +33,7 @@ class FrontendSpecHarness(val K: Int = 32, val readLatency: Int = 1,
     val dbg_acc    = Output(UInt(16.W))
     val dbg_clctc  = Output(UInt(16.W))
     val dbg_dma    = Output(UInt(16.W))
-    val dbg_bnd    = Output(UInt(7.W))
+    val dbg_bnd    = Output(UInt(9.W))
     val dbg_drain  = Output(Bool())
     val dbg_mma_out0 = Output(UInt(32.W))
     val dbg_cnt    = Output(UInt(4.W))

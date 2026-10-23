@@ -113,7 +113,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     val dbg_win     = Output(UInt(2.W))    // capture FIFO occupancy (low bits)
     val dbg_dma_done = Output(UInt(16.W))  // DMA requests completed
     val dbg_wcount   = Output(UInt(5.W))   // dispatch window occupancy
-    val dbg_bnd      = Output(UInt(7.W))   // boundary countdown (0 when idle)
+    val dbg_bnd      = Output(UInt(9.W))   // boundary countdown (0 when idle)
     val dbg_dmaq     = Output(UInt(3.W))   // dma queue occupancy
     val dbg_capq     = Output(UInt(5.W))   // capture queue occupancy
     val dbg_mma_out0 = Output(UInt((4 * N).W))  // mmalu out lane 0
@@ -474,10 +474,17 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   val clctPrev = RegNext(false.B)   // one-tick delay between the clct and the VR write
 
   // ==========================================================================
-  // Boundary gate: 4K−1 countdown after the mma.last feed; keep=0 pulse at
-  // the 2K offset; mma-family issue gated on the countdown.
+  // Boundary gate: 6K−1 countdown after the mma.last feed (or session start).
+  // The array capture settles ~2K−2 + CAPTURE_DELAY after the last feed, so
+  // the keep=0 PE-reset pulse is scheduled at boundaryCnt==2K (4K−1 cycles in,
+  // safely after the drain) and mma-family issue stays gated for the full
+  // 6K−1 (the extra 2K lets the reset propagate before the next feed).
   // ==========================================================================
-  val boundaryCnt   = RegInit(0.U(7.W))
+  // 6*K-1 is the boundary countdown (191 at K=32, 383 at K=64): it must be
+  // wide enough for that, not 7 bits (7 bits truncated 191->63 so the keep=0
+  // array-reset pulse at 2K never fired at K=32 and the PE accumulators leaked
+  // across sessions).
+  val boundaryCnt   = RegInit(0.U(log2Ceil(6 * K + 1).W))
   val boundaryPulse = boundaryCnt === (2 * K).U
   when (boundaryCnt =/= 0.U) { boundaryCnt := boundaryCnt - 1.U }
 
@@ -1108,7 +1115,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     capQCount   := 0.U
     fifoHead    := fifoTail
     fifoCount   := 0.U
-    // Start the boundary countdown (4K-1): this gates the first mma feed for
+    // Start the boundary countdown (6K-1): this gates the first mma feed for
     // the full countdown and fires the keep=0 PE-reset pulse at the 2K offset
     // while the array is idle, so a leftover accumulator from a previous
     // session cannot contaminate this one (the doubled-capture silicon bug).
