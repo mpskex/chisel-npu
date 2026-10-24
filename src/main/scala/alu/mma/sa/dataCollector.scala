@@ -30,12 +30,29 @@ import isa.micro_op._
  */
 class DataCollector(val n: Int = 8, val nbits: Int = 8,
                     val captureDelay: Int = 16) extends Module {
+    // The snapshot delay is derived from the engine's capture point, not a
+    // magic constant.  The keep that starts a round is driven at feed F and
+    // reaches PE(0,0) at F+2 (pipe_ctrl(0)); rows are latched over the next n
+    // cycles, so the snapshot is pushed at F+2+n.  It is observed one cycle
+    // after its countdown reaches 0, i.e. at F+n+3+SNAP_DLY.  The engine
+    // samples the capture at clct + captureDelay = F+2n+captureDelay.
+    // Equating the two gives SNAP_DLY = n + captureDelay - 3.
+    require(captureDelay >= 3,
+      s"DataCollector: captureDelay=$captureDelay must be >= 3 for the snapshot timing")
+
     val io = IO(new Bundle {
         val dat_clct        = Input(Bool())
         val use_accum       = Input(Bool())
-        // PE(0,0)-aligned `keep` (pipe_ctrl(0).keep).  A 1->0 edge marks the
-        // diagonal reset wave that ends a round.
+        // PE(0,0)-aligned `keep` (MMALU pipe_ctrl(0).keep).  This is the
+        // existing NCoreMMALUCtrlBundle.keep bit, NOT a new ISA field: the
+        // collector needs the PE reset wave to snapshot the round's final
+        // column, and the control pipeline (ControlUnit -> pipe_ctrl) is not
+        // otherwise visible here.  A 1->0 edge marks the diagonal reset wave
+        // that ends a round.
         val keep_d          = Input(Bool())
+        // Session reset: flush the snapshot FIFO (an aborted session must not
+        // leave stale columns for the next one).
+        val session_reset   = Input(Bool())
         val accum_in        = Input(Vec(n, SInt(nbits.W)))
         val reg_in          = Input(Vec(n * n, SInt(nbits.W)))
         val reg_out         = Output(Vec(n, SInt(nbits.W)))
@@ -90,13 +107,13 @@ class DataCollector(val n: Int = 8, val nbits: Int = 8,
     // Per-round column snapshot (column 0, row-by-row on the reset wave).
     // ==========================================================================
     val SNAP_DEPTH = 4
-    val QDLY_BITS  = log2Ceil(2 * n + 16)
-    // Engine capture point: clct (busy delayed 2n) + CAPTURE_DELAY (16).
+    val QDLY_BITS  = log2Ceil(2 * n + captureDelay)
+    // Engine capture point: clct (busy delayed 2n) + captureDelay.
     // The reset wave starts at PE(0,0) two cycles after the mma.last feed;
     // rows are captured over the following n cycles, so a completed snapshot
-    // must be delayed (n + 13) cycles after it is pushed to land exactly on
-    // clct+16.
-    val SNAP_DLY   = n + 13
+    // must be delayed SNAP_DLY = n + captureDelay - 3 cycles after the push to
+    // land exactly on clct + captureDelay (derived in the require() above).
+    val SNAP_DLY   = n + captureDelay - 3
 
     val snapReg  = RegInit(VecInit(Seq.fill(n)(0.S(nbits.W))))
     val keepPrev = RegNext(io.keep_d, true.B)
@@ -156,15 +173,20 @@ class DataCollector(val n: Int = 8, val nbits: Int = 8,
 
     // Safety net: a session that aborts before its capture point pops would
     // leave a stale snapshot in the queue.  A long collect-idle window (far
-    // longer than any snapshot's lifetime) clears it.
+    // longer than any snapshot's lifetime) clears it, and the engine's
+    // session_reset flushes it immediately at the next session start.
     val idleCnt = RegInit(0.U(16.W))
     when (io.dat_clct) { idleCnt := 0.U }
     .elsewhen (idleCnt =/= 0xFFFF.U) { idleCnt := idleCnt + 1.U }
     val autoFlush = idleCnt === (4 * n + 32).U
-    when (autoFlush) {
+    when (autoFlush || io.session_reset) {
         for (k <- 0 until SNAP_DEPTH) { qValid(k) := false.B }
         qCount := 0.U
         qHead  := qTail
+    }
+    when (io.session_reset) {
+        snapActive := false.B
+        snapWr     := 0.U
     }
 
     for (lane <- 0 until n) {

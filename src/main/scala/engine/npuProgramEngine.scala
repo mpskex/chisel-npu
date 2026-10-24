@@ -486,8 +486,8 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   // round's first feed (all K feeds accumulate).  A leading first-feed reset
   // would instead reset on the *second* feed and silently drop the first.
   // ==========================================================================
-  // Kept for the debug/drain plumbing only; it is no longer armed.
-  val boundaryCnt = RegInit(0.U(log2Ceil(6 * K + 1).W))
+  // There is no inter-round boundary countdown any more (rounds pipeline);
+  // dbg_bnd is kept as a constant-0 status bit for the frontend/debug map.
 
   // ==========================================================================
   // MMALU
@@ -536,35 +536,39 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   val feedVs3      = RegNext(issueMmaVs3,  0.U)
   val feedMmaLast  = RegNext(issueMmaLast, false.B)
 
-  // roundOpen: false at session start and after an mma.last feed; true after
-  // any non-last MMA feed.
-  val roundOpen = RegInit(false.B)
   // Has any MMA fed in this session?  Idle keep=0 is only used to clear the
   // PEs before a session's first feed; once the session is running, an
   // mma.last in NON-reduce mode must NOT reset the array (the last non-last
   // feed's per-feed capture is still in flight for another ~2n+16 cycles).
   val feedSeen = RegInit(false.B)
   when (io.session_reset) {
-    roundOpen := false.B
-    feedSeen  := false.B
+    feedSeen := false.B
   } .elsewhen (feedValid) {
-    feedSeen  := true.B
-    when (feedMmaLast) { roundOpen := false.B }
-    .otherwise         { roundOpen := true.B }
+    feedSeen := true.B
   }
-  val feedFirst = feedValid && !feedMmaLast && !roundOpen
-  // keep=0 only for:
-  //   * the trailing mma.last reset in REDUCE mode (the next round's first
-  //     feed is reopened with keep=0 through the control pipeline), and
-  //   * the pre-first-feed idle of a session (clean start).
-  // Non-reduce mode must keep the PEs across the final mma.last until the
-  // pending per-feed capture has been sampled; the next session's idle reset
-  // clears them.
-  val keepReset = (feedValid && feedMmaLast && io.reduce_mode) ||
+  // Per-feed `keep` (active low reset).  This is the round-open control, but
+  // it must be presented one feed EARLY: the ControlUnit path to the PEs is
+  // one cycle deeper than the DataFeeder/operand path (reg(0) shift stage in
+  // ControlUnit + pipe_ctrl vs pipe_a/pipe_b).  A keep=0 driven on feed F is
+  // therefore applied to the operands of feed F+1.  Hence:
+  //   * the trailing mma.last of a reduce-mode round drives keep=0, which
+  //     resets the PEs exactly on the NEXT round's first feed (all K feeds
+  //     accumulate, and the previous round's snapshot is taken on the reset
+  //     wave before the reset is visible);
+  //   * the idle before a session's first feed drives keep=0, which resets on
+  //     that first feed (clean start, no cross-session residue);
+  //   * every other feed keeps accumulating (keep=1), including mma.last in
+  //     default mode so its capture is not destroyed.
+  // Driving keep=0 on the literal round-first feed instead would apply the
+  // reset on the SECOND feed and drop the first contribution (and the capture
+  // would carry the previous round's residue), so the reset is attached to
+  // the preceding mma.last as above.
+  val feedReset = (feedValid && feedMmaLast && io.reduce_mode) ||
                   (!feedValid && !feedSeen)
 
   // (No inter-round boundary gate: consecutive rounds pipeline.  The mma.last
-  // ordering gate below only waits for prior non-last MMAs to have fed.)
+  // ordering safety is enforced by the strict program-order feed invariant
+  // asserted below.)
 
   for (s <- 0 until W) {
     val sl = slots(s)
@@ -673,6 +677,38 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   }
 
   // ==========================================================================
+  // Hard invariant: MMA feed order == program order, one in-order feed/cycle.
+  // `firstForUnit` admits only the oldest not-yet-issued MMA of the unit, so
+  // at most one MMA issues per cycle, and the feed is a 1-cycle register with
+  // no backpressure — an mma.last therefore can never overtake a prior
+  // non-last feed (the ordering the old lastSat gate used to enforce).  These
+  // assertions make that contract explicit instead of relying on inspection.
+  // ==========================================================================
+  val mmaIssueSel = VecInit((0 until W).map(s =>
+    issueSel(s) && slots(s).unit === DispatchUnit.MMALU))
+  when (PopCount(mmaIssueSel) > 1.U) {
+    assert(false.B, "feed-order invariant: more than one MMA issued in a cycle")
+  }
+  for (s <- 0 until W) {
+    when (issueSel(s) && slots(s).unit === DispatchUnit.MMALU) {
+      for (i <- 0 until W) {
+        when (slots(i).valid && slots(i).unit === DispatchUnit.MMALU &&
+              ringDist(i.U) < ringDist(s.U) && !slots(i).issued) {
+          assert(false.B, "feed-order invariant: MMA issued out of program order")
+        }
+      }
+    }
+  }
+  when (feedValid && feedMmaLast) {
+    for (i <- 0 until W) {
+      when (slots(i).valid && slots(i).unit === DispatchUnit.MMALU &&
+            !slots(i).isMmaLast && slots(i).issued && !slots(i).done) {
+        assert(false.B, "feed-order invariant: mma.last fed before a prior non-last MMA")
+      }
+    }
+  }
+
+  // ==========================================================================
   // Issue actions
   // ==========================================================================
   for (s <- 0 until W) {
@@ -761,14 +797,13 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   rf.io.vx_r_addr(1) := Mux(feedValid, feedRs2, 0.U)
   rf.io.vr_r_addr(1) := Mux(feedValid, feedVs3, 0.U)
 
-  // Round reset (see the round-control block above).  `mma.last` carries the
-  // trailing keep=0 reset for the next round; the first feed of a round keeps
-  // accumulating (keep=1) because the control pipeline applies that reset to
-  // exactly this feed's operands.  The decoded `mma_keep` (funct7[4]) is
-  // retained for `NCoreBackend` but is ignored at the engine top.
-  mmalu.io.ctrl.keep      := !keepReset
+  // Per-feed round control (see the feedReset definition): the reset is
+  // presented on the mma.last feed, one feed before the round it opens,
+  // because the control path is one cycle deeper than the operand path.
+  mmalu.io.ctrl.keep      := !feedReset
   mmalu.io.ctrl.busy      := feedValid
   mmalu.io.ctrl.use_accum := feedValid
+  mmalu.io.session_reset  := io.session_reset
 
   for (lane <- 0 until K) {
     // in_a / in_b: read VX[vs1]/VX[vs2] on a normal mma feed; mma_last is a
@@ -1132,7 +1167,6 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     // No inter-round boundary countdown is armed (rounds pipeline).  The
     // session-start PE reset is the idle keep=0 driven before the session's
     // first feed; it lands on that first feed through the control pipeline.
-    boundaryCnt := 0.U
   }
 
   // ==========================================================================
@@ -1395,7 +1429,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   io.dbg_win     := fifoCount(1, 0)
   io.dbg_dma_done := dmaDoneCnt
   io.dbg_wcount   := wCount
-  io.dbg_bnd      := boundaryCnt
+  io.dbg_bnd      := 0.U
   io.dbg_dmaq     := dmaQCount
   io.dbg_capq     := capQCount
   io.dbg_mma_out0 := mmalu.io.out(0).asUInt
@@ -1412,7 +1446,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   io.dbg_s2_last  := slots(2).isMmaLast
   val slotsAny = (0 until W).map(i => slots(i).valid).reduce(_ || _)
   io.drain := !slotsAny && !dma.io.busy && dmaQCount === 0.U &&
-    fifoCount === 0.U && capQCount === 0.U && boundaryCnt === 0.U &&
+    fifoCount === 0.U && capQCount === 0.U &&
     tagCount === 0.U
   io.dbg_traj    := trajSnap
   io.dbg_cycles  := cycleCnt

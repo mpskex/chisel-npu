@@ -27,6 +27,7 @@ import chisel3._
         val in_b        = Input(Vec(n, SInt(nbits.W)))
         val in_accum    = Input(Vec(n, SInt(accum_nbits.W)))
         val ctrl        = Input(new NCoreMMALUCtrlBundle())
+        val session_reset = Input(Bool())   // flush the collector snapshot FIFO
         val out         = Output(Vec(n, SInt(accum_nbits.W)))
         val clct        = Output(Bool())
         val dbg_cnt     = Output(UInt(log2Ceil(n).W))   // collector phase
@@ -70,9 +71,13 @@ import chisel3._
     }
     dclct.io.dat_clct  := pipe_dat_clct
     dclct.io.use_accum := pipe_use_accum
+    dclct.io.session_reset := io.session_reset
     // PE(0,0)-aligned keep: the 1->0 edge is the diagonal reset wave that ends
     // a round.  The collector uses it to snapshot the round's running-sum
-    // column before the next round's first feed clears the PEs.
+    // column before the next round's first feed clears the PEs.  This is the
+    // existing ctrl-bundle keep bit (no new ISA field), tapped at PE(0,0)
+    // because the ControlUnit pipelines it and the collector has no other view
+    // of the reset wave.
     dclct.io.keep_d    := pipe_ctrl(0).keep
     io.clct            := pipe_clct
 
