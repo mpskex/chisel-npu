@@ -12,10 +12,10 @@
 //
 //  Per-round operands are loaded with a vle32 of two rounds' interleaved
 //  A/B rows (still distinct per-round data), so the operand traffic costs
-//  0.5 DMA ops/round instead of 2 x vle8.  Capture stores are issued a few
-//  rounds after their capture so a store is already satisfied when it reaches
-//  the in-order DMA head (otherwise it blocks the following rounds' loads for
-//  the whole ~2n+16 capture latency).  Capture order is preserved by capQ.
+//  0.5 DMA ops/round instead of 2 x vle8.  A capture vse is issued immediately
+//  after its round's mma.last and reads VR[0] directly (no capture queue); it
+//  is RAW-ordered behind the capture's RF write.  The next round's accumulate
+//  feeds do not wait on the store, so the rounds keep pipelining.
 //
 //  OUT section capacity = 4096 B = (4096/4K) captures.  The metric runs use
 //  more rounds than that, so stores wrap and the LAST `cap` captures survive;
@@ -57,32 +57,48 @@ class CrossMatmulPipelineSpec extends AnyFlatSpec {
       s"K=$K round $r capture is not its own running-sum column: got=${got.take(8).toList}")
   }
 
+  /** Capture-VR rotation depth.  A deferred store reads VR[capVr(round)]
+    * later than its capture, so the capture must still be resident: defer
+    * must be < capRot.  K=32 keeps 4 operand VRs (VR4..7) disjoint from the 4
+    * rotating capture VRs (VR0..3). */
+  def capRotOf(K: Int): Int = if (K >= 32) 4 else 1
+  /** Operand batches prefetched with one vle32 each. */
+  def prefetchOf(K: Int): Int = if (K >= 32) 3 else 2
+  /** Rounds between a capture and its store. */
+  def storeDeferOf(K: Int): Int = if (K >= 32) 3 else 0
+
   /** Build a round-major program using a vle32 per two rounds (A0,B0,A1,B1 of
     * the two rounds, lane-interleaved) and a vse32 per round.  `off(b)` maps
     * the two-round batch to its data offset; `storeSlot(s)` maps a round to
-    * its OUT slot. */
+    * its OUT slot.  Each round captures into VR[r % capRot]; the store is
+    * deferred by `storeDefer` rounds (still < capRot) so it is already
+    * capture-satisfied when it reaches the window and does not stall the
+    * following round's operand loads. */
   def program(K: Int, rounds: Int, off: Int => Int, storeSlot: Int => Int,
               prefetch: Int, storeDefer: Int): Seq[Int] = {
     val batches = rounds / 2
     require(rounds % 2 == 0)
-    val vr0 = 1
-    val nvr = K / 4 - 1             // usable VR registers (VR0 is the capture)
-    def vrOf(b: Int): Int = vr0 + (b % nvr)
+    val capRot = capRotOf(K)
+    val opVrs = K / 4 - capRot
+    require(opVrs >= 1, s"K=$K has no operand VRs after $capRot captures")
+    require(storeDefer < capRot, s"store defer $storeDefer >= capture rotation $capRot")
+    def vrOf(b: Int): Int = capRot + (b % opVrs)
+    def capVr(r: Int): Int = r % capRot
     def load(b: Int): Seq[Int] =
       if (b < 0 || b >= batches) Seq.empty
       else Seq(vle32(vrOf(b), NpuSections.SECT_A, off(b)))
     def store(s: Int): Seq[Int] =
       if (s < 0 || s >= rounds) Seq.empty
-      else Seq(vse32(0, NpuSections.SECT_OUT, storeSlot(s) * 4 * K))
+      else Seq(vse32(capVr(s), NpuSections.SECT_OUT, storeSlot(s) * 4 * K))
     (0 until math.min(prefetch, batches)).flatMap(load) ++
       (0 until batches).flatMap { b =>
         val vr = vrOf(b)
         val r0 = 2 * b; val r1 = r0 + 1
         load(b + prefetch) ++
-          (0 until K).map(_ => mma(0, 4 * vr, 4 * vr + 1, 0)) ++
-          Seq(mmaLast(0, 0, 0, 0)) ++ store(r0 - storeDefer) ++
-          (0 until K).map(_ => mma(0, 4 * vr + 2, 4 * vr + 3, 0)) ++
-          Seq(mmaLast(0, 0, 0, 0)) ++ store(r1 - storeDefer)
+          (0 until K).map(_ => mma(capVr(r0), 4 * vr, 4 * vr + 1, 0)) ++
+          Seq(mmaLast(capVr(r0), 0, 0, 0)) ++ store(r0 - storeDefer) ++
+          (0 until K).map(_ => mma(capVr(r1), 4 * vr + 2, 4 * vr + 3, 0)) ++
+          Seq(mmaLast(capVr(r1), 0, 0, 0)) ++ store(r1 - storeDefer)
       } ++
       (math.max(0, rounds - storeDefer) until rounds).flatMap(store)
   }
@@ -112,12 +128,11 @@ class CrossMatmulPipelineSpec extends AnyFlatSpec {
     // by runCorrect, its timing is unaffected).
     def off(b: Int): Int =
       if (b < halfB) 2048 + b * 4 * K else (b - halfB) * 4 * K
-    val prefetch = math.min(if (K == 16) 2 else 6, K / 4 - 2)
-    val storeDefer = if (K == 16) 10 else 12
+    val prefetch = prefetchOf(K)
+    val storeDefer = storeDeferOf(K)
     var pct = 0.0
     var phOpt: Option[StreamSpecUtil.Phases] = None
     simulate(new StreamHarness(K = K)) { dut =>
-      dut.io.reduce_mode.poke(true.B)
       StreamSpecUtil.resetSession(dut)
       preloadBatches(dut, K, rounds, off)
       val prog = program(K, rounds, off, s => s % cap, prefetch, storeDefer)
@@ -140,11 +155,10 @@ class CrossMatmulPipelineSpec extends AnyFlatSpec {
   def runCorrect(K: Int, rounds: Int): Unit = {
     val cap = 4096 / (4 * K)
     require(rounds <= cap)
-    val prefetch = math.min(if (K == 16) 2 else 6, K / 4 - 2)
-    val storeDefer = if (K == 16) 10 else 12
+    val prefetch = prefetchOf(K)
+    val storeDefer = storeDeferOf(K)
     def off(b: Int): Int = b * 4 * K
     simulate(new StreamHarness(K = K)) { dut =>
-      dut.io.reduce_mode.poke(true.B)
       StreamSpecUtil.resetSession(dut)
       preloadBatches(dut, K, rounds, off)
       val prog = program(K, rounds, off, s => s, prefetch, storeDefer)

@@ -211,7 +211,7 @@ class NpuProgramEngineFrontendSpec extends AnyFlatSpec {
         vle8(rd = 8, sect = NpuSections.SECT_B, off = 0),
         vle32(rd = 3, sect = NpuSections.SECT_ACCUM, off = 0),
         mma(rd = 2, vs1 = 4, vs2 = 8, vs3 = 3),
-        mmaLast(rd = 0, vs1 = 0, vs2 = 0, vs3 = 0),
+        mmaLast(rd = 2, vs1 = 0, vs2 = 0, vs3 = 3),
         vse32(src = 2, sect = NpuSections.SECT_OUT, off = 0),
       )
       preloadInstrs(dut, prog)
@@ -233,7 +233,7 @@ class NpuProgramEngineFrontendSpec extends AnyFlatSpec {
     }
   }
 
-  "NpuProgramEngineFrontend" should "run a streamed 3-mma session (running sums)" in {
+  "NpuProgramEngineFrontend" should "run three back-to-back reduce matmul rounds" in {
     simulate(new FrontendSpecHarness(K = 16)) { dut =>
       val k = 16
       val aVals = Array.tabulate(3, k)((m, j) => s8(m * 7 + j + 1))
@@ -241,24 +241,15 @@ class NpuProgramEngineFrontendSpec extends AnyFlatSpec {
       preload(dut, NpuSections.A, aVals.flatten.map(_ & 0xFF))
       preload(dut, NpuSections.B, bVals.flatten.map(_ & 0xFF))
 
-      // streamed form: reused operands (VX[4]/VX[8]) + vd=0 (VR[0], disjoint)
-      // + per-feed vse; captures = the running partial sums
-      val prog = Seq(
-        vle8(rd = 4, sect = NpuSections.SECT_A, off = 0),
-        vle8(rd = 8, sect = NpuSections.SECT_B, off = 0),
-        mma(rd = 0, vs1 = 4, vs2 = 8, vs3 = 0),
-        vse32(src = 0, sect = NpuSections.SECT_OUT, off = 0),
-        vle8(rd = 4, sect = NpuSections.SECT_A, off = 16),
-        vle8(rd = 8, sect = NpuSections.SECT_B, off = 16),
-        mma(rd = 0, vs1 = 4, vs2 = 8, vs3 = 0),
-        vse32(src = 0, sect = NpuSections.SECT_OUT, off = 64),
-        vle8(rd = 4, sect = NpuSections.SECT_A, off = 32),
-        vle8(rd = 8, sect = NpuSections.SECT_B, off = 32),
-        mma(rd = 0, vs1 = 4, vs2 = 8, vs3 = 0),
-        vse32(src = 0, sect = NpuSections.SECT_OUT, off = 128),
-        mmaLast(rd = 0, vs1 = 0, vs2 = 0, vs3 = 0),
-      )
-      preloadInstrs(dut, prog)
+      // reduce round = K accumulate feeds + mma.last (capture VR[0]) + one vse
+      val prog = (0 until 3).flatMap { m =>
+        Seq(vle8(rd = 4, sect = NpuSections.SECT_A, off = m * k),
+            vle8(rd = 8, sect = NpuSections.SECT_B, off = m * k)) ++
+          (0 until k).map(_ => mma(rd = 0, vs1 = 4, vs2 = 8, vs3 = 0)) ++
+          Seq(mmaLast(rd = 0, vs1 = 0, vs2 = 0, vs3 = 0),
+              vse32(src = 0, sect = NpuSections.SECT_OUT, off = m * 4 * k))
+      }
+      preloadInstrs(dut, prog.toSeq)
       ctrlWrite(dut, 0x14, prog.length)
       start(dut)
       waitDone(dut)
@@ -266,13 +257,13 @@ class NpuProgramEngineFrontendSpec extends AnyFlatSpec {
       val out = readI32(dut, NpuSections.OUT, 3 * k)
       for (m <- 0 until 3) {
         val g = out.slice(m * k, (m + 1) * k)
-        val pe = Array.tabulate(k, k)((i, j) => (0 to m).map(t => aVals(t)(i) * bVals(t)(j)).sum)
+        val pe = Array.tabulate(k, k)((i, j) => k * aVals(m)(i) * bVals(m)(j))
         val found = (0 until k).filter(c => (0 until k).forall(i => g(i) == pe(i)(c)))
-        assert(found.nonEmpty, s"capture $m is not a running-sum column: ${g.toList}")
+        assert(found.nonEmpty, s"round $m capture is not K*a*b: ${g.toList}")
       }
       val status = ctrlRead(dut, 0x8)
       assert(((status >> 31) & 1) == 0, "no illegal expected")
-      assert(((status >> 16) & 0x7FFF) == 1, "frames_done should be 1")
+      assert(((status >> 16) & 0x7FFF) == 3, "frames_done should be 3 (one per mma.last)")
     }
   }
 
@@ -287,7 +278,7 @@ class NpuProgramEngineFrontendSpec extends AnyFlatSpec {
         vle8(rd = 4, sect = NpuSections.SECT_A, off = 0),
         vle8(rd = 8, sect = NpuSections.SECT_B, off = 0),
         mma(rd = 2, vs1 = 4, vs2 = 8, vs3 = 0),
-        mmaLast(rd = 0, vs1 = 0, vs2 = 0, vs3 = 0),
+        mmaLast(rd = 2, vs1 = 0, vs2 = 0, vs3 = 0),
         vse32(src = 2, sect = NpuSections.SECT_OUT, off = 0),
       )
       preloadInstrs(dut, prog)
@@ -350,7 +341,7 @@ class NpuProgramEngineFrontendSpec extends AnyFlatSpec {
         vle8(rd = 4, sect = NpuSections.SECT_A, off = 0),
         vle8(rd = 8, sect = NpuSections.SECT_B, off = 0),
         mma(rd = 1, vs1 = 4, vs2 = 8, vs3 = 0),
-        mmaLast(rd = 0, vs1 = 0, vs2 = 0, vs3 = 0),
+        mmaLast(rd = 1, vs1 = 0, vs2 = 0, vs3 = 0),
         vse32(src = 1, sect = NpuSections.SECT_OUT, off = 0),
       )
       preloadInstrs(dut, prog)

@@ -64,7 +64,7 @@ class CaptureTraceSpec extends AnyFlatSpec {
       preloadI8(dut, NpuSections.A, a)
       preloadI8(dut, NpuSections.B, b)
       val prog = Seq(vle8(4, NpuSections.SECT_A, 0), vle8(8, NpuSections.SECT_B, 0),
-        mma(2, 4, 8, 0), mmaLast(0, 0, 0, 0), vse32(2, NpuSections.SECT_OUT, 0))
+        mma(2, 4, 8, 0), mmaLast(2, 0, 0, 0), vse32(2, NpuSections.SECT_OUT, 0))
       preloadInstrs(dut, prog)
 
       var wrong = 0

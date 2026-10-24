@@ -1,10 +1,9 @@
-"""Hardware tests: streamed mma sessions on the engine via ChiselNPU.run().
+"""Hardware tests: reduce-only matmul sessions on the engine via ChiselNPU.run().
 
-The streamed model: each mma feed accumulates the running product in the PEs
-and its clct captures ONE output column; the chained vse stores it; mma.last
-ends the session.  Zero NOP padding — the dispatch chains the dataflow.  The
-captured columns are located by search (the phase offset is issue-timing
-dependent) and verified against the running-sum numpy reference.
+Each round is K accumulate feeds + mma.last (which captures the accumulated
+column into VR[vd]) + one vse that stores VR[vd] directly.  There is no
+per-feed store.  The captured columns are located by search (the phase offset
+is issue-timing dependent) and verified against the K*a*b numpy reference.
 """
 
 from __future__ import annotations
@@ -26,19 +25,23 @@ def test_one_shot_session(npu: ChiselNPU):
     k = cfg.K
     a = np.arange(1, k + 1, dtype=np.int8)
     b = np.arange(100, 100 + k, dtype=np.int8)
+    # reduce round: K identical feeds accumulate, mma.last captures VR[0]
     words = [
         isa.vle8(4, isa.SECT_A, 0),
         isa.vle8(8, isa.SECT_B, 0),
-        isa.mma(2, 4, 8, 0),
+    ] + [
+        isa.mma(0, 4, 8, 0) for _ in range(k)
+    ] + [
         isa.mma_last(0, 0, 0, 0),
-        isa.vse32(2, isa.SECT_OUT, 0),
+        isa.vse32(0, isa.SECT_OUT, 0),
     ]
     result = npu.run(words, memories={"A": a, "B": b})
     got = result["OUT"][:k].astype(np.int32)
-    # one feed: vd[i] = a[i]·b[col] — locate the column
-    cols = [c for c in range(k) if np.array_equal(got, a.astype(np.int32) * int(b[c]))]
-    assert len(cols) == 1, f"one-shot capture not a single product column"
-    print(f"[hw] one-shot capture column: {cols[0]}")
+    # K feeds: vd[i] = K·a[i]·b[col] — locate the column
+    cols = [c for c in range(k)
+            if np.array_equal(got, k * a.astype(np.int32) * int(b[c]))]
+    assert len(cols) == 1, f"reduce capture not a K*a*b column"
+    print(f"[hw] reduce capture column: {cols[0]}")
 
 
 @pytest.mark.hw
@@ -51,15 +54,15 @@ def test_session_captures_columns(npu: ChiselNPU):
     bVals = np.array([[(100 + mm * 5 + i) & 0xFF for i in range(k)]
                       for mm in range(m)], dtype=np.uint8)
 
-    # streamed form: reused operands (VX[4]/VX[8]) + vd=0 (VR[0], disjoint)
-    # + per-feed vse; each capture = a column of the running partial sum
+    # reduce form: reused operands (VX[4]/VX[8]) + vd=0 (VR[0], disjoint);
+    # each round = K feeds + mma.last + one vse; capture = K*a_m*b_m
     words = []
     for mm in range(m):
         words.append(isa.vle8(4, isa.SECT_A, mm * k))
         words.append(isa.vle8(8, isa.SECT_B, mm * k))
-        words.append(isa.mma(0, 4, 8, 0))
+        words.extend(isa.mma(0, 4, 8, 0) for _ in range(k))
+        words.append(isa.mma_last(0, 0, 0, 0))
         words.append(isa.vse32(0, isa.SECT_OUT, mm * 4 * k))
-    words.append(isa.mma_last(0, 0, 0, 0))
 
     result = npu.run(words, memories={"A": aVals, "B": bVals})
     a8 = np.vectorize(_s8)(aVals).astype(np.int32)
@@ -68,13 +71,11 @@ def test_session_captures_columns(npu: ChiselNPU):
     cols = []
     for mm in range(m):
         got = result["OUT"][mm * k:(mm + 1) * k].astype(np.int32)
-        pe = np.zeros((k, k), dtype=np.int32)
-        for t in range(mm + 1):
-            pe += a8[t][:, None] * b8[t][None, :]
+        pe = k * (a8[mm][:, None] * b8[mm][None, :])
         found = [c for c in range(k) if np.array_equal(got, pe[:, c])]
-        assert len(found) == 1, f"capture {mm} is not a running-sum column"
+        assert len(found) == 1, f"reduce capture {mm} is not K*a_m*b_m"
         cols.append(found[0])
-    print(f"[hw] session capture columns: {cols}")
+    print(f"[hw] reduce capture columns: {cols}")
 
 
 @pytest.mark.hw

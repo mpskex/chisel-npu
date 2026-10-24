@@ -1,10 +1,13 @@
 // See README.md for license details.
 // -----------------------------------------------------------------------------
-//  StreamedChainedSpec.scala — two back-to-back rounds with no inter-round
-//  boundary stall.  In the pipelined engine an mma.last no longer inserts a
-//  6K-1 idle/reset window in the default (per-feed capture) mode, so the
-//  accumulator keeps running across the marker and every capture is a clean
-//  running-sum column of the whole session (no cross-round residue).
+//  StreamedChainedSpec.scala — two back-to-back reduce matmul rounds with no
+//  inter-round boundary stall.
+//
+//  Each round is K accumulate feeds + mma.last (capture into VR[0]) + one
+//  vse32 that reads VR[0] directly.  mma.last resets the PE wavefront for the
+//  next round; consecutive rounds must still feed back-to-back (the old
+//  boundary forced >= 4K-1 idle cycles).  Every round uses its own operand
+//  rows, so a capture that picked up another round's accumulator cannot pass.
 // -----------------------------------------------------------------------------
 
 package engine
@@ -20,38 +23,36 @@ class StreamedChainedSpec extends AnyFlatSpec {
 
   def s8(v: Int): Int = { val b = v & 0xFF; if (b >= 128) b - 256 else b }
 
-  "NpuProgramEngine" should "chain two back-to-back session rounds without a boundary stall" in {
+  "NpuProgramEngine" should "chain two back-to-back reduce rounds without a boundary stall" in {
     val k = 16
-    val n1 = 3
-    val n2 = 3
-    val aVals = Array.tabulate(n1 + n2, k)((m, j) => s8(m * 7 + j + 1))
-    val bVals = Array.tabulate(n1 + n2, k)((m, i) => s8(100 + m * 5 + i))
+    val rounds = 2
+    val aVals = Array.tabulate(rounds, k)((r, j) => s8(1 + ((r * 11 + j * 3) % 31)))
+    val bVals = Array.tabulate(rounds, k)((r, i) => s8(1 + ((r * 7 + i * 5) % 29)))
     simulate(new StreamHarness(K = 16, readLatency = 100)) { dut =>
       StreamSpecUtil.preloadI8(dut, NpuSections.A, aVals.flatten.map(_ & 0xFF))
       StreamSpecUtil.preloadI8(dut, NpuSections.B, bVals.flatten.map(_ & 0xFF))
 
-      def round(n: Int, aBase: Int, outOff: Int): Unit = {
-        for (m <- 0 until n) {
-          StreamSpecUtil.issue(dut, vle8(4, NpuSections.SECT_A, (aBase + m) * k))
-          StreamSpecUtil.issue(dut, vle8(8, NpuSections.SECT_B, (aBase + m) * k))
-          StreamSpecUtil.issue(dut, mma(0, 4, 8, 0))
-          StreamSpecUtil.issue(dut, vse32(0, NpuSections.SECT_OUT, (outOff + m) * 4 * k))
-        }
+      def round(r: Int): Unit = {
+        StreamSpecUtil.issue(dut, vle8(4, NpuSections.SECT_A, r * k))
+        StreamSpecUtil.issue(dut, vle8(8, NpuSections.SECT_B, r * k))
+        for (_ <- 0 until k) StreamSpecUtil.issue(dut, mma(0, 4, 8, 0))
         StreamSpecUtil.issue(dut, mmaLast(0, 0, 0, 0))
+        StreamSpecUtil.issue(dut, vse32(0, NpuSections.SECT_OUT, r * 4 * k))
       }
 
       // round 1, then immediately round 2 (no NOPs between)
-      round(n1, 0, 0)
-      round(n2, n1, n1)
+      round(0)
+      round(1)
 
-      // watch the feed timing
+      // watch the feed timing (each round has k non-last feeds + 1 mma.last)
+      val feedsPerRound = k + 1
       var lastFeedTick = BigInt(-1); var prevAcc = BigInt(0)
       var gapAfterLast = BigInt(-1)
       for (t <- 0 until 20000) {
         val acc = dut.io.dbg_mma_acc.peek().litValue
         if (acc != prevAcc) {
-          if (acc == BigInt(n1 + 1)) lastFeedTick = BigInt(t)  // round-1 mma.last feed
-          if (acc == BigInt(n1 + 2)) gapAfterLast = BigInt(t) - lastFeedTick
+          if (acc == BigInt(feedsPerRound)) lastFeedTick = BigInt(t)  // round-1 mma.last feed
+          if (acc == BigInt(feedsPerRound + 1)) gapAfterLast = BigInt(t) - lastFeedTick
           prevAcc = acc
         }
         dut.clock.step()
@@ -62,16 +63,15 @@ class StreamedChainedSpec extends AnyFlatSpec {
         assert(gapAfterLast <= BigInt(4),
           s"round boundary stall: round-2 first feed $gapAfterLast ticks after round-1 mma.last")
 
-      val out = StreamSpecUtil.readI32(dut, NpuSections.OUT, (n1 + n2) * k)
-      // each capture = a running-sum column over the whole session (there is
-      // no boundary reset between the two marker-separated rounds)
-      for (m <- 0 until n1 + n2) {
-        val g = out.slice(m * k, (m + 1) * k)
-        val pe = Array.tabulate(k, k)((i, j) => (0 to m).map(t => aVals(t)(i) * bVals(t)(j)).sum)
+      val out = StreamSpecUtil.readI32(dut, NpuSections.OUT, rounds * k)
+      // K identical feeds per round => the capture is K*a_r(i)*b_r(j).
+      for (r <- 0 until rounds) {
+        val g = out.slice(r * k, (r + 1) * k)
+        val pe = Array.tabulate(k, k)((i, j) => k * aVals(r)(i) * bVals(r)(j))
         val cols = StreamSpecUtil.columnsOf(g, pe)
-        assert(cols.nonEmpty, s"chained capture $m is not a running-sum column: ${g.toList}")
+        assert(cols.nonEmpty, s"reduce round $r capture is not K*a*b: ${g.toList}")
       }
-      println(s"chained n1=$n1 n2=$n2: OK (gap=$gapAfterLast)")
+      println(s"chained reduce rounds=$rounds k=$k: OK (gap=$gapAfterLast)")
     }
   }
 }

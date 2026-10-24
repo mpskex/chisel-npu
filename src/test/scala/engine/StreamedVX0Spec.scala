@@ -35,18 +35,18 @@ class StreamedVX0Spec extends AnyFlatSpec {
       for (m <- 0 until n) {
         StreamSpecUtil.issue(dut, vle8(4, NpuSections.SECT_A, m * k))
         StreamSpecUtil.issue(dut, vle8(8, NpuSections.SECT_B, m * k))
-        StreamSpecUtil.issue(dut, mma(0, 4, 8, 0))
+        for (_ <- 0 until k) StreamSpecUtil.issue(dut, mma(0, 4, 8, 0))
+        StreamSpecUtil.issue(dut, mmaLast(0, 0, 0, 0))
         StreamSpecUtil.issue(dut, vse32(0, NpuSections.SECT_OUT, m * 4 * k))
       }
-      StreamSpecUtil.issue(dut, mmaLast(0, 0, 0, 0))
-      for (t <- 0 until 10000) { dut.clock.step() }
+      StreamSpecUtil.runToDrain(dut)
       val out = StreamSpecUtil.readI32(dut, NpuSections.OUT, n * k)
       for (m <- 0 until n) {
         val g = out.slice(m * k, (m + 1) * k)
-        val pe = Array.tabulate(k, k)((i, j) => (0 to m).map(t => aVals(t)(i) * bVals(t)(j)).sum)
+        val pe = Array.tabulate(k, k)((i, j) => k * aVals(m)(i) * bVals(m)(j))
         val cols = StreamSpecUtil.columnsOf(g, pe)
         assert(cols.nonEmpty,
-          s"stale VX[0] leaked into capture $m: ${g.toList}")
+          s"stale VX[0] leaked into reduce capture $m: ${g.toList}")
       }
       println(s"vx0-contam streamed: OK")
     }

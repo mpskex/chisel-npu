@@ -94,7 +94,7 @@ class CaptureDeterminismSpec extends AnyFlatSpec {
         vle8(4, NpuSections.SECT_A, 0),
         vle8(8, NpuSections.SECT_B, 0),
         mma(2, 4, 8, 0),
-        mmaLast(0, 0, 0, 0),
+        mmaLast(2, 0, 0, 0),
         vse32(2, NpuSections.SECT_OUT, 0),
       )
       preloadInstrs(dut, prog)

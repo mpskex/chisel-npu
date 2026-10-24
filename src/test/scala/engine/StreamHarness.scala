@@ -120,7 +120,6 @@ class StreamHarness(val K: Int = 16, val readLatency: Int = 1, val W: Int = 8) e
     val instr_ready = Output(Bool())
     val illegal_out = Output(Bool())
     val session_reset = Input(Bool())
-    val reduce_mode   = Input(Bool())
 
     val dbg_rd_addr = Input(UInt(12.W))
     val dbg_rd_data = Output(UInt(128.W))
@@ -151,7 +150,6 @@ class StreamHarness(val K: Int = 16, val readLatency: Int = 1, val W: Int = 8) e
   io.instr_ready     := eng.io.instr_ready
   io.illegal_out     := eng.io.illegal_out
   eng.io.session_reset := io.session_reset
-  eng.io.reduce_mode   := io.reduce_mode
 
   eng.io.dbg_vx_addr := io.dbg_vx_addr
   io.dbg_vx_data     := eng.io.dbg_vx_data

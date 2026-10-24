@@ -125,19 +125,21 @@ class EngineThroughputSpec extends AnyFlatSpec {
       StreamSpecUtil.preloadI8(dut, NpuSections.A, aVals.flatten.map(_ & 0xFF))
       StreamSpecUtil.preloadI8(dut, NpuSections.B, bVals.map(_ & 0xFF))
       val prog = Seq(vle8(8, NpuSections.SECT_B, 0)) ++
-        (0 until T).flatMap(m => Seq(
-          vle8(4, NpuSections.SECT_A, m * K),
-          mma(0, 4, 8, 0),
-          vse32(0, NpuSections.SECT_OUT, m * 4 * K))) :+ mmaLast(0, 0, 0, 0)
+        (0 until T).flatMap(m => Seq(vle8(4, NpuSections.SECT_A, m * K)) ++
+          (0 until K).map(_ => mma(0, 4, 8, 0)) ++
+          Seq(mmaLast(0, 0, 0, 0),
+              vse32(0, NpuSections.SECT_OUT, m * 4 * K)))
       prog.foreach(StreamSpecUtil.issue(dut, _))
       StreamSpecUtil.runToDrain(dut)
       StreamSpecUtil.printPerf(s"B5 tile T=$T", K, StreamSpecUtil.perf(dut, K))
-      // the LAST stored capture must be a column of the running sum Σ_{t≤T-1} a_t·b
+      // each reduce round captures K*a_t*b
       val out = StreamSpecUtil.readI32(dut, NpuSections.OUT, T * K)
-      val g = out.slice((T - 1) * K, T * K)
-      val pe = Array.tabulate(K, K)((i, j) => (0 until T).map(t => aVals(t)(i) * bVals(j)).sum)
-      assert(StreamSpecUtil.columnsOf(g, pe).nonEmpty,
-        s"B5 final capture is not a running-sum column: ${g.toList}")
+      for (m <- 0 until T) {
+        val g = out.slice(m * K, (m + 1) * K)
+        val pe = Array.tabulate(K, K)((i, j) => K * aVals(m)(i) * bVals(j))
+        assert(StreamSpecUtil.columnsOf(g, pe).nonEmpty,
+          s"B5 round $m capture is not K*a_t*b: ${g.toList}")
+      }
     }
   }
 }

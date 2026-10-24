@@ -1,11 +1,11 @@
 // See README.md for license details.
 // -----------------------------------------------------------------------------
-//  ReduceModeSpec.scala — store-sparse reduce mode (opt-in).
+//  ReduceModeSpec.scala — store-sparse reduce mode (the only mode).
 //
-//  In reduce mode a reduction round feeds R mmas with NO per-mma capture/store;
-//  the regular mmas accumulate in the array (the MMALU holds keep=1) and only
-//  the round's FINAL (mma.last) feed pushes the accumulated capture.  The
-//  software then issues a single trailing vse32 to store that final result.
+//  A reduction round feeds R mmas with NO per-mma capture/store; the regular
+//  mmas accumulate in the array (the MMALU holds keep=1) and only the round's
+//  FINAL (mma.last) feed commits the accumulated capture to VR[vd].  The
+//  software then issues a single trailing vse32 that reads VR[vd] directly.
 //
 //  This removes the 128 B-per-feed store roofline from the array-pipeline
 //  body, so the body is limited only by the dispatch window / in-flight cap.
@@ -34,7 +34,6 @@ class ReduceModeSpec extends AnyFlatSpec {
   def check(W: Int): Unit = {
     val R = 128
     simulate(new StreamHarness(K = K, W = W)) { dut =>
-      dut.io.reduce_mode.poke(true.B)
       StreamSpecUtil.resetSession(dut)
       StreamSpecUtil.preloadI8(dut, NpuSections.A, Seq.fill(K)(3))
       StreamSpecUtil.preloadI8(dut, NpuSections.B, Seq.fill(K)(5))
@@ -52,7 +51,7 @@ class ReduceModeSpec extends AnyFlatSpec {
         s"reduce capture is not the final running-sum column: ${out.toList}")
 
       println(f"[reduce W=$W] bodyUtil=${ph.bodyUtil * 100.0}%.1f%% body=${ph.body} feeds=${ph.bodyFeeds}")
-      assert(ph.bodyUtil >= 0.8, f"bodyUtil ${ph.bodyUtil * 100.0}%.1f%% < 80%%")
+      assert(ph.bodyUtil >= 0.955, f"bodyUtil ${ph.bodyUtil * 100.0}%.1f%% < 95.5%%")
     }
   }
 

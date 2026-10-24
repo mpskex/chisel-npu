@@ -21,7 +21,6 @@
 //    0x14  PROG_LEN     instruction count (words after the entry)
 //    0x40  CYCLES       session cycle count, latched at done (RO)
 //    0x44  MACS         useful K² MACs, excluding mma.last, latched at done (RO)
-//    0x48  REDUCE_MODE  bit0 = store-sparse reduce mode (opt-in, default 0)
 // -----------------------------------------------------------------------------
 
 package engine
@@ -148,21 +147,15 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
   // values (the core's cycleCnt free-runs until the next session_reset).
   val perfCycles  = RegInit(0.U(32.W))
   val perfMacs    = RegInit(0.U(32.W))
-  // Store-sparse reduce mode (ctrl 0x48 bit0): opt-in, default OFF.  A
-  // persistent config bit (like FRAMES/PROG_LEN), not cleared on start.
-  val reduceModeReg = RegInit(false.B)
-
   val startPrev = RegNext(startReg, init = false.B)
   val startEdge = startReg && !startPrev
 
   // clear the core's streaming state at every session start
   core.io.session_reset := startEdge
-  core.io.reduce_mode   := reduceModeReg
 
   when (io.ctrl_we && io.ctrl_addr === 0x0.U)  { startReg := io.ctrl_wdata(0) }
   when (io.ctrl_we && io.ctrl_addr === 0x4.U)  { framesReg := io.ctrl_wdata(15, 0) }
   when (io.ctrl_we && io.ctrl_addr === 0x14.U) { progLenReg := io.ctrl_wdata(15, 0) }
-  when (io.ctrl_we && io.ctrl_addr === 0x48.U) { reduceModeReg := io.ctrl_wdata(0) }
   when (startEdge) { doneReg := false.B; perfCycles := 0.U; perfMacs := 0.U }
 
   // ==========================================================================
@@ -430,7 +423,5 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
     // latched at session completion.
     0x40.U -> perfCycles,
     0x44.U -> perfMacs,
-    // Store-sparse reduce mode config (bit0); default 0.
-    0x48.U -> Cat(0.U(31.W), reduceModeReg),
   ))
 }

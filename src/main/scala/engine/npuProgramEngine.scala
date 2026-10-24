@@ -10,18 +10,15 @@
 //  The program is a stream:
 //    vle8 a → VX[a];  vle8 b → VX[b];  mma vd, a, b, c; ...
 //    mma.last;  vse32 ...
-//  Each mma's clct captures the running partial sum of the settled feeds to
-//  VR[vd] and pushes the value into the capture-data queue; the chained vse
-//  (a capture consumer) pops that queue at its issue and the store drains via
-//  the DMA — the value is read right after the mma's final (clct) tick.
+//  A round is K accumulate feeds + mma.last.  Only the mma.last captures: its
+//  clct writes the settled running-sum column to VR[vd]; a trailing vse reads
+//  VR[vd] directly and stores it (there is no capture queue).
 //  Register reuse (vd rings, operand slots) is entirely the software's job;
-//  the scoreboard only enforces the RAW/WAR hazards.
+//  the scoreboard enforces the hazards.
 //
-//  Consecutive matmul rounds PIPELINE (no 6K-1 boundary stall): in reduce
-//  mode the mma.last feed carries the keep=0 PE reset for the next round, and
-//  the collector snapshots each round's running-sum column on that reset wave.
-//  In the default per-feed-capture mode the accumulator is kept intact across
-//  the mma.last so the last feed's delayed capture is not destroyed.
+//  Consecutive matmul rounds PIPELINE (no 6K-1 boundary stall): the mma.last
+//  feed carries the keep=0 PE reset for the next round, and the collector
+//  snapshots each round's running-sum column on that reset wave.
 // -----------------------------------------------------------------------------
 
 package engine
@@ -79,7 +76,6 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   // deep enough to hold the whole tag ring or feed issue stalls below peak
   // (the vd FIFO also carries the K×32-bit `accum` column — decision (a)).
   val FIFO_DEPTH = T          // in-flight feeds (vd FIFO, carries accum)
-  val CAPQ_DEPTH = 16         // capture queue (chained vse drains promptly)
   val DMAQ_DEPTH = 8
   val SLOT_IDX = log2Ceil(W)
 
@@ -96,13 +92,6 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     // streaming state (window, scoreboard, queues) so a wedged or aborted
     // session cannot contaminate the next run.
     val session_reset = Input(Bool())
-
-    // Store-sparse reduce mode (opt-in, default OFF).  In a reduction round,
-    // the regular mmas accumulate in the array (the MMALU holds keep=1) and
-    // push no capture; only the round's FINAL (mma.last) feed pushes the
-    // accumulated capture, which a single trailing vse stores.  This removes
-    // the 128 B-per-feed store roofline from the array-pipeline body.
-    val reduce_mode = Input(Bool())
 
     // ---- Debug: RF VX read (testbench only) ----
     val dbg_vx_addr = Input(UInt(5.W))
@@ -197,7 +186,6 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     val isStore    = Bool()
     val isMmaLast  = Bool()
     val illegal    = Bool()
-    val useCapData = Bool()         // vse: source produced by an mma capture
     val issued     = Bool()
     val done       = Bool()
     // ---- L1 tag ring (P1a shadow).  `tag` is the allocated ring index. ----
@@ -223,7 +211,6 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   class DmaEntry extends Bundle {
     val valid      = Bool()
     val inFlight   = Bool()         // accepted by the DMA, awaiting done
-    val waitCap    = Bool()         // capture store: waiting for capQ data
     val tag        = UInt(TAG_IDX.W) // L1 ring tag
     val dir        = UInt(2.W)      // 0 = vle, 1 = vse, 3 = fetch fill
     val dmaWidth   = UInt(2.W)
@@ -233,13 +220,6 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     // issue (P2), so the completion can no longer read it back off the slot to
     // clear the reader tag bits.  (Unused for vle/fetch fills.)
     val rdMask     = UInt(L.W)
-    val storeDataValid = Bool()
-    val storeData = Vec(K, UInt((4 * N).W))
-  }
-
-  class CapEntry extends Bundle {
-    val valid = Bool()
-    val data  = Vec(K, UInt((4 * N).W))
   }
 
   // ==========================================================================
@@ -249,17 +229,13 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   // without tying in-flight capacity to the W-slot issue window.
   // VE[i] → VX[2i..2i+1]; VR[i] → VX[4i..4i+3] (alias-aware, uniform).
   //   tagValid(t) : ring entry t holds a live (allocated, not completed) tag
-  //   tagIsMma(t) : the allocation is an MMA (capture producer)
-  //   tagIsLast(t): the allocation is an mma.last
-  //   lastWrTag(i): the newest writer tag for VX[i]
   // Operand hazards are tracked by the L2 counters below, not per-tag masks.
   // ==========================================================================
   val tagTail = RegInit(0.U(TAG_IDX.W))
   val tagCount = RegInit(0.U((TAG_IDX + 1).W))
   val tagValid = RegInit(VecInit(Seq.fill(T)(false.B)))
   // P2 retire-at-feed: `tagFed` marks an MMA allocation whose operands have
-  // been read at MMA feed.  It is NOT set for DMA ops (the §13 ordering gate
-  // tests `tagIsMma` first, so a DMA entry never reaches the `tagFed` test).
+  // been read at MMA feed.  It is NOT set for DMA ops.
   // The mma.last ordering gate (§13) must
   // block only on *prior MMAs that have not yet fed* — waiting for their
   // completion would serialize the whole reduce round's tail behind the
@@ -267,9 +243,6 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   // because it drives the RAW/WAR hazard snapshot and must stay live until the
   // write is visible.
   val tagFed   = RegInit(VecInit(Seq.fill(T)(false.B)))
-  val tagIsMma = RegInit(VecInit(Seq.fill(T)(false.B)))
-  val tagIsLast = RegInit(VecInit(Seq.fill(T)(false.B)))
-  val lastWrTag = RegInit(VecInit(Seq.fill(L)(0.U(TAG_IDX.W))))
   // ---- L2 count-based scoreboard state (replaces tagWrMask/tagRdMask and
   //      the per-slot T-bit priorSnap).  For each VX[i]: writes issued/done
   //      and reads issued/done.  A reader waits until wrDone reaches the
@@ -286,12 +259,6 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   // mma.last (in-order issue), so this is exactly the prior-pending set.
   val mmaIssCnt = RegInit(0.U(WC.W))
   val mmaFedCnt = RegInit(0.U(WC.W))
-  // Per-register "last writer was an MMA capture" flag.  Persists like the old
-  // `vxWrCap`: set when a writer registers (false for vle, true for mma) and
-  // cleared when the register's pending-write tag mask empties on a vle
-  // completion.  Using this instead of `tagIsMma(lastWrTag(i))` removes the
-  // dependence on a freed tag's kind surviving in the reused ring entry.
-  val wrCap = RegInit(VecInit(Seq.fill(L)(false.B)))
   // Entry stalls once the ring is full.  The second term guards the
   // out-of-order-free alias: with completion out of order the net `tagCount`
   // can undercount the reachable span, so also refuse to allocate when the
@@ -303,14 +270,14 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
                  vs3: UInt = 0.U, isMmaLast: Bool = false.B): UInt = {
     val m = WireDefault(0.U(L.W))
     when (family === OpFamily.MMA.asUInt) {
-      // The mma.last is a session terminator: the engine ZERO-FORCES its
-      // operands (it must not read stale VX[0]), so its true read set is
-      // empty.  Counting its encoded vs1/vs2 as reads makes it RAW-wait on
-      // every prior mma's destination (VX[0]) completion, which serialises the
-      // reduce round's whole tail behind the capture latency.
-      m := Mux(isMmaLast, 0.U(L.W),
-        (1.U << rs1) | (1.U << rs2) |
-          Mux(vs3 === 0.U, 0.U(L.W), (0xF.U << (vs3 << 2))(L - 1, 0)))
+      // The mma.last is the round-capture marker: the engine ZERO-FORCES its
+      // A/B operands (it must not read stale VX[0]), so only its C (vs3) can
+      // be a real read.  Counting the encoded vs1/vs2 as reads makes it
+      // RAW-wait on every prior mma's destination (VX[0]) completion, which
+      // serialises the reduce round's whole tail behind the capture latency.
+      val vs3Mask = Mux(vs3 === 0.U, 0.U(L.W), (0xF.U << (vs3 << 2))(L - 1, 0))
+      m := Mux(isMmaLast, vs3Mask,
+        (1.U << rs1) | (1.U << rs2) | vs3Mask)
     } .elsewhen (family === OpFamily.ST.asUInt) {
       when (memWidth === 0.U) {
         m := 1.U << rd
@@ -324,7 +291,12 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     m
   }
 
-  def writeSlotsL(family: UInt, rd: UInt, memWidth: UInt = 0.U): UInt = {
+  // Only the round's mma.last writes its destination VR in reduce-only mode;
+  // the accumulate feeds leave the array result in the PEs and must NOT
+  // register a WR obligation (wrIss would otherwise run ahead of wrDone and a
+  // trailing vse could never observe its capture write).
+  def writeSlotsL(family: UInt, rd: UInt, memWidth: UInt = 0.U,
+                  isMmaLast: Bool = false.B): UInt = {
     val m = WireDefault(0.U(L.W))
     when (family === OpFamily.LD.asUInt) {
       when (memWidth === 0.U) {
@@ -335,7 +307,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
         m := (0xF.U << (rd << 2))(L - 1, 0)
       }
     } .elsewhen (family === OpFamily.MMA.asUInt) {
-      m := (0xF.U << (rd << 2))(L - 1, 0)
+      when (isMmaLast) { m := (0xF.U << (rd << 2))(L - 1, 0) }
     }
     m
   }
@@ -343,9 +315,11 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   // Canonical per-operand VX indices for the count scoreboard.  The same
   // expansion as `readSlotsL`/`writeSlotsL`, but positional so a target can be
   // stored per operand without storing an index.  Reads: MMA reads rs1, rs2
-  // and vs3's four VX aliases (none for mma.last); ST reads its width-expanded
-  // rd.  Writes: MMA writes rd's four VX aliases; LD writes its width-expanded
-  // rd.  Unused ordinals are masked by the returned valid vector.
+  // and vs3's four VX aliases (mma.last zero-forces A/B, but still reads its
+  // C = vs3, if any); ST reads its width-expanded rd.  Writes: only the
+  // round-capturing mma.last writes rd's four VX aliases; LD writes its
+  // width-expanded rd.  Unused ordinals are masked by the returned valid
+  // vector.
   def readOperands(family: UInt, rd: UInt, rs1: UInt, rs2: UInt, memWidth: UInt,
                    vs3: UInt, isMmaLast: Bool): (Vec[UInt], Vec[Bool]) = {
     val regs   = Wire(Vec(6, UInt(5.W)))
@@ -359,7 +333,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
       valids(1) := live
       for (j <- 0 until 4) {
         regs(2 + j)   := (vs3 << 2) + j.U
-        valids(2 + j) := live && vs3 =/= 0.U
+        valids(2 + j) := vs3 =/= 0.U
       }
     } .elsewhen (family === OpFamily.ST.asUInt) {
       regs(0) := rd
@@ -378,7 +352,8 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     (regs, valids)
   }
 
-  def writeOperands(family: UInt, rd: UInt, memWidth: UInt): (Vec[UInt], Vec[Bool]) = {
+  def writeOperands(family: UInt, rd: UInt, memWidth: UInt,
+                    isMmaLast: Bool = false.B): (Vec[UInt], Vec[Bool]) = {
     val regs   = Wire(Vec(4, UInt(5.W)))
     val valids = Wire(Vec(4, Bool()))
     for (j <- 0 until 4) { regs(j) := 0.U; valids(j) := false.B }
@@ -396,9 +371,11 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
         }
       }
     } .elsewhen (family === OpFamily.MMA.asUInt) {
-      for (j <- 0 until 4) {
-        regs(j) := (rd << 2) + j.U
-        valids(j) := true.B
+      when (isMmaLast) {
+        for (j <- 0 until 4) {
+          regs(j) := (rd << 2) + j.U
+          valids(j) := true.B
+        }
       }
     }
     (regs, valids)
@@ -441,15 +418,6 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   // ==========================================================================
   val rf = Module(new MultiWidthRegisterBlock(L = K, K = K, N = N,
     vx_rd = 3, vx_wr = 1, ve_rd = 1, ve_wr = 1, vr_rd = 2, vr_wr = 2))
-
-  // ==========================================================================
-  // Capture-data queue: the clct pushes the capture value; the chained vse
-  // (capture consumer) pops it at its issue.
-  // ==========================================================================
-  val capQ     = RegInit(VecInit(Seq.fill(CAPQ_DEPTH)(0.U.asTypeOf(new CapEntry))))
-  val capQHead = RegInit(0.U(log2Ceil(CAPQ_DEPTH).W))
-  val capQTail = RegInit(0.U(log2Ceil(CAPQ_DEPTH).W))
-  val capQCount = RegInit(0.U((log2Ceil(CAPQ_DEPTH) + 1).W))
 
   // ==========================================================================
   // vd FIFO: {tag, vd} per issued mma, popped by each clct.
@@ -537,9 +505,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   val feedMmaLast  = RegNext(issueMmaLast, false.B)
 
   // Has any MMA fed in this session?  Idle keep=0 is only used to clear the
-  // PEs before a session's first feed; once the session is running, an
-  // mma.last in NON-reduce mode must NOT reset the array (the last non-last
-  // feed's per-feed capture is still in flight for another ~2n+16 cycles).
+  // PEs before a session's first feed.
   val feedSeen = RegInit(false.B)
   when (io.session_reset) {
     feedSeen := false.B
@@ -551,19 +517,18 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   // one cycle deeper than the DataFeeder/operand path (reg(0) shift stage in
   // ControlUnit + pipe_ctrl vs pipe_a/pipe_b).  A keep=0 driven on feed F is
   // therefore applied to the operands of feed F+1.  Hence:
-  //   * the trailing mma.last of a reduce-mode round drives keep=0, which
-  //     resets the PEs exactly on the NEXT round's first feed (all K feeds
-  //     accumulate, and the previous round's snapshot is taken on the reset
-  //     wave before the reset is visible);
+  //   * the trailing mma.last of a round drives keep=0, which resets the PEs
+  //     exactly on the NEXT round's first feed (all K feeds accumulate, and
+  //     the previous round's snapshot is taken on the reset wave before the
+  //     reset is visible);
   //   * the idle before a session's first feed drives keep=0, which resets on
   //     that first feed (clean start, no cross-session residue);
-  //   * every other feed keeps accumulating (keep=1), including mma.last in
-  //     default mode so its capture is not destroyed.
+  //   * every other feed keeps accumulating (keep=1).
   // Driving keep=0 on the literal round-first feed instead would apply the
   // reset on the SECOND feed and drop the first contribution (and the capture
   // would carry the previous round's residue), so the reset is attached to
   // the preceding mma.last as above.
-  val feedReset = (feedValid && feedMmaLast && io.reduce_mode) ||
+  val feedReset = (feedValid && feedMmaLast) ||
                   (!feedValid && !feedSeen)
 
   // (No inter-round boundary gate: consecutive rounds pipeline.  The mma.last
@@ -574,13 +539,12 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     val sl = slots(s)
     val (rdRegs, rdValidRaw) = readOperands(sl.family, sl.rd, sl.rs1, sl.rs2,
       sl.memWidth, sl.vs3, sl.isMmaLast)
-    // A capture-consuming store reads capQ, not the RF, so it has no RF read
-    // dependency.  Keeping the RAW wait on the producer's RF write would pin
-    // the window head for the whole capture latency (~2n+16) and serialize the
-    // next round behind it.  Capture ORDER is still guaranteed by the capQ
-    // FIFO (the DMA head pops the next capture when it is available).
-    val rdValid = (0 until 6).map(j => rdValidRaw(j) && !sl.useCapData)
-    val (wrRegs, wrValid) = writeOperands(sl.family, sl.rd, sl.memWidth)
+    // A capture store reads VR[vd] directly from the RF, so it must wait for
+    // the mma.last capture write (RAW through wrDone).  This is the ordering
+    // that guarantees the vse never samples a stale VR.
+    val rdValid = (0 until 6).map(j => rdValidRaw(j))
+    val (wrRegs, wrValid) = writeOperands(sl.family, sl.rd, sl.memWidth,
+      sl.isMmaLast)
     val rawOk = WireDefault(true.B)
     val warOk = WireDefault(true.B)
     for (j <- 0 until 6) {
@@ -622,15 +586,11 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     }
     val unitOk = WireDefault(false.B)
     when (sl.unit === DispatchUnit.DMA) {
-      // Capture-consuming stores issue without waiting for the capture; the
-      // DMA queue head stalls for capQ data instead (off the window critical
-      // path), so the window keeps accepting the next round's MMAs.
       unitOk := !dmaQFull
     } .elsewhen (sl.unit === DispatchUnit.MMALU) {
       // Reserve the pending (stage-2) feed slot so the 1-stage feed pipeline
       // can never overflow the FIFO.
-      unitOk := ((fifoCount + Mux(feedValid, 1.U, 0.U)) < FIFO_DEPTH.U) &&
-        capQCount < CAPQ_DEPTH.U
+      unitOk := (fifoCount + Mux(feedValid, 1.U, 0.U)) < FIFO_DEPTH.U
     } .otherwise {
       unitOk := true.B
     }
@@ -725,13 +685,8 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
         issueMmaTag  := slots(s).tag
       } .elsewhen (slots(s).unit === DispatchUnit.DMA) {
         val isStore = slots(s).isStore
-        val waitCap = isStore && slots(s).useCapData
         dmaQ(dmaQTail).valid := true.B
         dmaQ(dmaQTail).inFlight := false.B
-        // A capture store does not have its data yet: the DMA head waits for
-        // capQ and pops the next capture there.  The window slot retires now,
-        // so a stalled store no longer blocks the next round's MMA entry.
-        dmaQ(dmaQTail).waitCap := waitCap
         dmaQ(dmaQTail).tag := slots(s).tag
         dmaQ(dmaQTail).dir := Mux(isStore, 1.U, 0.U)
         dmaQ(dmaQTail).dmaWidth := slots(s).memWidth
@@ -745,8 +700,6 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
         // Snapshot the vse's VX read mask for the tag-reader clear at done.
         dmaQ(dmaQTail).rdMask := readSlotsL(slots(s).family, slots(s).rd,
           slots(s).rs1, slots(s).rs2, slots(s).memWidth, slots(s).vs3)
-        dmaQ(dmaQTail).storeDataValid := waitCap
-        for (lane <- 0 until K) dmaQ(dmaQTail).storeData(lane) := 0.U
         // P2: the DMA slot retires at dmaQ enqueue; its tag carries the
         // completion obligation (freed at dmaDoneHead).
         slots(s).done := true.B
@@ -813,14 +766,12 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     // the same zero-forcing the vs3==0 accum path already does.
     mmaluInA(lane)     := Mux(feedValid && !feedMmaLast, rf.io.vx_r_data(0)(lane).asSInt, 0.S(N.W))
     mmaluInB(lane)     := Mux(feedValid && !feedMmaLast, rf.io.vx_r_data(1)(lane).asSInt, 0.S(N.W))
-    // accum: mma.last must also zero-force the vs3 VR read.  The mma.last
-    // read-set mask is emptied (nothing ordered this read), so letting it read
-    // `vr_r_data(1)` would be a RAW/WAR hole — a concurrently-writing producer
-    // could still be in flight.  mma.last only starts the boundary countdown;
-    // the VR value is discarded (see the capture/accum-carry path), so force 0.
-    mmaluInAccum(lane) := Mux(feedValid && !feedMmaLast,
-      Mux(feedVs3 === 0.U, 0.S((4 * N).W), rf.io.vr_r_data(1)(lane).asSInt),
-      0.S((4 * N).W))
+    // accum: read VR[vs3] whenever vs3 != 0, including on mma.last (the last
+    // carries the round's C into the final capture).  vs3 == 0 is the
+    // "no accumulator" encoding and is zero-forced.  mma.last's C is in its
+    // read set (see readSlotsL/readOperands), so the read is ordered.
+    mmaluInAccum(lane) := Mux(feedValid && feedVs3 =/= 0.U,
+      rf.io.vr_r_data(1)(lane).asSInt, 0.S((4 * N).W))
   }
   mmalu.io.in_a     := mmaluInA
   mmalu.io.in_b     := mmaluInB
@@ -835,8 +786,8 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   // sampled `CAPTURE_DELAY` ticks after the clct — the collector output has
   // settled by then and equals a clean running-sum column (the column index
   // walks with cnt, so any settled column is fine — the tests search).
-  // The completion (FIFO pop, slot done, wrMask clear, capQ push, VR write)
-  // all move to the delayed tick so the chained vse pops the right value.
+  // The completion (FIFO pop, slot done, tag free, capture/VR write) all move
+  // to the delayed tick so the chained vse reads the settled column.
   // The collector adds the in_accum (the C operand) during its own aligned
   // window (at the clct), which the delayed sample has passed; the engine
   // re-adds the feed's accum (carried in the vd FIFO) so the capture =
@@ -848,13 +799,9 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   // the FIFO empty the old code still marked a STALE fifo(fifoTail) entry
   // done — spuriously retiring the mma slot, so the mma never fed and the
   // capture read a zero array (the intermittent [0,0,0,0] wrong captures).
-  // Capture-push policy.  Default (reduce_mode=0): per-feed capture — every
-  // non-mma.last clct pushes (the chained vse stores each running sum);
-  // mma.last is a session terminator and does not push.  Reduce mode
-  // (opt-in): the regular mmas accumulate in the array and push nothing; only
-  // the FINAL mma.last clct pushes the round's accumulated sum.  The SAME
-  // expression must drive both the push below and the capQCount net term (or
-  // the count desyncs and `drain` wedges).
+  // Capture policy (reduce-only): the regular mmas accumulate in the array and
+  // write NOTHING to the RF; only the round's FINAL mma.last clct commits the
+  // accumulated column to VR[capVd].  A trailing vse then reads that VR.
   val clctHasEntry  = clctD && fifoCount =/= 0.U
 
   // ---- Delayed completion stage.  The C (accum) copy now lives in a BRAM
@@ -879,35 +826,24 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   }
   compValid := clctHasEntry
 
-  val capturePush = compValid &&
-    Mux(io.reduce_mode, compLast, !compLast)
+  // ONLY the round's mma.last commits a capture.  The non-last feeds' clcts
+  // still pop the vd FIFO / free tags (completion below), but they leave the
+  // output register untouched.
+  val capturePush = compValid && compLast
 
-  when (compValid) {
+  when (capturePush) {
     capVd := compVd
     val capValue = Wire(Vec(K, SInt((4 * N).W)))
     for (lane <- 0 until K) {
       capValue(lane) := compOut(lane) + accumRd(lane)
       outBuf(lane)   := capValue(lane)
     }
-    when (capturePush) {
-      capQ(capQTail).valid := true.B
-      for (lane <- 0 until K) capQ(capQTail).data(lane) := capValue(lane).asUInt
-      capQTail  := capQTail + 1.U
-    }
   }
 
-  // Net capture-queue occupancy: a push and a vse pop can collide every cycle
-  // in the pipelined steady state; compute the net so the count cannot drift
-  // (a phantom entry would block `drain`).
-  val capPush = capturePush
-  // The capture pop happens at DMA request acceptance (the queue head waits
-  // for capQ data for a capture store), not at window issue.
-  val capPop  = WireDefault(false.B)
-  when (capPush && capPop) { capQCount := capQCount }
-  .elsewhen (capPush)      { capQCount := capQCount + 1.U }
-  .elsewhen (capPop)       { capQCount := capQCount - 1.U }
-
-  clctPrev := compValid
+  // The RF write lands one tick after the delayed capture; wrDone is advanced
+  // on THAT tick (not on compValid) so a waiting vse observes the write only
+  // after the edge that stores outBuf into VR[capVd].
+  clctPrev := capturePush
 
   // the VR collect write one tick after the delayed capture
   rf.io.vr_w_en(1)   := clctPrev
@@ -936,30 +872,20 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
 
   // ---- Entry reader/writer slot sets (hoisted to top level so the tag
   //      mask net update can share them; purely combinational). ----
-  // vse capture-consumer detection: the source register's last writer was
-  // an mma capture (`tagIsMma(lastWrTag(i))`).  NOTE: this must NOT require
-  // the producer to still be a pending prior slot AND must NOT require its
-  // tag to still be live (`tagValid`).  On silicon the mma's clctD can retire
-  // the producer (freeing its tag) before the store word streams into the
-  // window (the MIG's variable latency vs. the frontend's fetch cadence), so
-  // the store would silently miss the capture: it would read the RF instead
-  // of popping the capQ, the mma's capture entry would sit in capQ forever,
-  // and `drain` would never assert (the intermittent pc=4 wedge).
-  // `tagIsMma` is never cleared when a tag is freed (only on flush), so the
-  // freed producer tag still records that an mma produced VX[i] — exactly the
-  // persistent semantics the old `vxWrCap(i)` flag provided.
+  val entIsMmaLast = dec.family === OpFamily.MMA && dec.mma_last
   val entSrmask = readSlotsL(dec.family.asUInt, dec.rd, dec.rs1, dec.rs2,
-    dec.mem_width(1, 0), dec.rs3, dec.family === OpFamily.MMA && dec.mma_last)
-  val entIsCapSource = WireDefault(false.B)
-  for (i <- 0 until L) {
-    when (entSrmask(i) && wrCap(i)) { entIsCapSource := true.B }
-  }
-  val entIsCapStore = dec.family === OpFamily.ST && entIsCapSource
-  val entSwmask = writeSlotsL(dec.family.asUInt, dec.rd, dec.mem_width(1, 0))
+    dec.mem_width(1, 0), dec.rs3, entIsMmaLast)
+  // A VR store (vse32) reads the mma capture directly.  It registers a RAW
+  // target but NOT a reader obligation: gating the next round's capture write
+  // on this store's whole DMA would serialize the body at the capture latency.
+  // Non-VR stores keep the normal reader registration (vle WAR).
+  val entIsVrStore = dec.family === OpFamily.ST && dec.mem_width(1, 0) === 2.U
+  val entSwmask = writeSlotsL(dec.family.asUInt, dec.rd, dec.mem_width(1, 0),
+    entIsMmaLast)
   val (entRdRegs, entRdValid) = readOperands(dec.family.asUInt, dec.rd, dec.rs1,
-    dec.rs2, dec.mem_width(1, 0), dec.rs3, dec.family === OpFamily.MMA && dec.mma_last)
+    dec.rs2, dec.mem_width(1, 0), dec.rs3, entIsMmaLast)
   val (entWrRegs, entWrValid) = writeOperands(dec.family.asUInt, dec.rd,
-    dec.mem_width(1, 0))
+    dec.mem_width(1, 0), entIsMmaLast)
 
   io.instr_ready := !wFull && !illegalAny && tagNotFull
 
@@ -989,18 +915,9 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     //      entry forever.  `tagValid(tg)` is set by the net tag update below
     //      (collision-safe with a same-cycle completion clear). ----
     when (dec.family =/= OpFamily.NOP) {
-      tagIsMma(tg)      := dec.family === OpFamily.MMA
-      tagIsLast(tg)     := dec.family === OpFamily.MMA && dec.mma_last
       tagFed(tg)        := false.B   // fresh allocation: not yet fed
       slots(t).tag       := tg
       tagTail := tagTail + 1.U
-      // newest writer tag + writer kind per register
-      for (i <- 0 until L) {
-        when (entSwmask(i)) {
-          lastWrTag(i) := tg
-          wrCap(i)     := dec.family === OpFamily.MMA
-        }
-      }
     }
 
     // ---- L2c count-scoreboard entry.  Snapshot each operand's target from
@@ -1022,17 +939,11 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     slots(t).lastTgt := mmaIssCnt
     slots(t).lastSat := reached(mmaFedCnt, mmaIssCnt)
 
-    slots(t).useCapData := entIsCapStore
-
-    // Scoreboard registration (counters, not slot masks).  A capture-consumer
-    // store does NOT read the RF — its store data is the capture latched out
-    // of the capQ at its issue (the DMA R2L `Mux(storeDataValid,
-    // reqStoreData, rf_r_vr_data)`) — so it registers no reader (`rdIss`).
-    // Registering one made the next mma that reuses the destination vd wait
-    // for the store's entire DMA to retire, serializing the body to one feed
-    // per capture latency (~80 cycles).  The store still carries a read
-    // target/sat and therefore waits on the producer's write (RAW), so capture
-    // order is unchanged.
+    // Scoreboard registration (counters, not slot masks).  A VR capture store
+    // registers the RAW read target above but no reader obligation
+    // (`rdIss`): waiting for the next capture write on the store's whole DMA
+    // would serialize the body at the capture latency.  The store's RF read
+    // still starts only after the producer's VR write (RAW).
     wTail  := wTail + 1.U
   }
 
@@ -1068,32 +979,25 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     for (s <- 0 until W) slots(s).valid := false.B
     // L1 tag ring flush
     for (q <- 0 until T) {
-      tagValid(q)  := false.B
-      tagIsMma(q)  := false.B
-      tagIsLast(q) := false.B
-      tagFed(q)    := false.B
+      tagValid(q) := false.B
+      tagFed(q)   := false.B
     }
     for (i <- 0 until L) {
       wrIss(i)  := 0.U
       wrDone(i) := 0.U
       rdIss(i)  := 0.U
       rdDone(i) := 0.U
-      lastWrTag(i) := 0.U
-      wrCap(i)     := false.B
     }
     mmaIssCnt := 0.U
     mmaFedCnt := 0.U
     tagCount := 0.U
     compValid := false.B
     for (q <- 0 until DMAQ_DEPTH) { dmaQ(q).valid := false.B; dmaQ(q).inFlight := false.B }
-    for (q <- 0 until CAPQ_DEPTH) capQ(q).valid := false.B
     for (q <- 0 until FIFO_DEPTH) { fifo(q).isMmaLast := false.B }
     wCount    := 0.U
     wHead     := wTail
     dmaQHead  := dmaQTail
     dmaQCount := 0.U
-    capQHead  := capQTail
-    capQCount := 0.U
     fifoHead  := fifoTail
     fifoCount := 0.U
   }
@@ -1121,7 +1025,6 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
       slots(s).off        := 0.U
       slots(s).isStore    := false.B
       slots(s).illegal    := false.B
-      slots(s).useCapData := false.B
       slots(s).initPending := false.B
       for (j <- 0 until 6) {
         slots(s).rdTgt(j) := 0.U
@@ -1136,32 +1039,25 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     }
     // L1 tag ring flush
     for (q <- 0 until T) {
-      tagValid(q)  := false.B
-      tagIsMma(q)  := false.B
-      tagIsLast(q) := false.B
-      tagFed(q)    := false.B
+      tagValid(q) := false.B
+      tagFed(q)   := false.B
     }
     for (i <- 0 until L) {
       wrIss(i)  := 0.U
       wrDone(i) := 0.U
       rdIss(i)  := 0.U
       rdDone(i) := 0.U
-      lastWrTag(i) := 0.U
-      wrCap(i)     := false.B
     }
     mmaIssCnt := 0.U
     mmaFedCnt := 0.U
     tagCount := 0.U
     compValid := false.B
     for (q <- 0 until DMAQ_DEPTH) { dmaQ(q).valid := false.B; dmaQ(q).inFlight := false.B }
-    for (q <- 0 until CAPQ_DEPTH) capQ(q).valid := false.B
     for (q <- 0 until FIFO_DEPTH) { fifo(q).isMmaLast := false.B }
     wCount      := 0.U
     wHead       := wTail
     dmaQHead    := dmaQTail
     dmaQCount   := 0.U
-    capQHead    := capQTail
-    capQCount   := 0.U
     fifoHead    := fifoTail
     fifoCount   := 0.U
     // No inter-round boundary countdown is armed (rounds pipeline).  The
@@ -1173,32 +1069,18 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   // DMA unit: the queue head drives the DMA; the done completes the slot.
   // ==========================================================================
   val dmaHead = dmaQ(dmaQHead)
-  // A capture-store entry is enqueued as soon as it issues (freeing the
-  // window), but its data comes from capQ.  The DMA head waits here until the
-  // producer mma pushes the capture, then presents/pops it.  This keeps the
-  // ~2n+16 capture latency off the window critical path so consecutive
-  // matmul rounds can keep feeding.
-  val dmaCapReady = !dmaHead.waitCap || capQCount =/= 0.U
-  dma.io.req_valid  := dmaHead.valid && !dmaHead.inFlight && dmaCapReady
+  dma.io.req_valid  := dmaHead.valid && !dmaHead.inFlight
   dma.io.req_dir    := dmaHead.dir
   dma.io.req_width  := dmaHead.dmaWidth
   dma.io.req_rf_addr := dmaHead.rfAddr
   dma.io.req_l3_addr := dmaHead.l3Addr
-  dma.io.req_store_data_valid := dmaHead.storeDataValid && dmaCapReady
-  for (lane <- 0 until K) dma.io.req_store_data(lane) :=
-    Mux(dmaHead.waitCap, capQ(capQHead).data(lane), dmaHead.storeData(lane))
+  // R2L stores read the RF directly (VR[vd] for a capture vse); the legacy
+  // side-band store-data path is gone.
+  dma.io.req_store_data_valid := false.B
+  for (lane <- 0 until K) dma.io.req_store_data(lane) := 0.U
 
-  val dmaAccept = dma.io.req_ready && dmaHead.valid && !dmaHead.inFlight && dmaCapReady
-  when (dmaAccept) {
-    dmaHead.inFlight := true.B
-    when (dmaHead.waitCap) { dmaHead.waitCap := false.B }
-  }
-  // Pop the capture exactly once, when the request (with the capQ data) is
-  // accepted by the DMA.
-  when (dmaAccept && dmaHead.waitCap && capQCount =/= 0.U) {
-    capQHead := capQHead + 1.U
-    capPop   := true.B
-  }
+  val dmaAccept = dma.io.req_ready && dmaHead.valid && !dmaHead.inFlight
+  when (dmaAccept) { dmaHead.inFlight := true.B }
 
   io.fetch_fill_done := dma.io.instr_valid && dmaHead.valid && dmaHead.inFlight && dmaHead.dir === 3.U
   io.fetch_fill_data := dma.io.instr_out
@@ -1225,14 +1107,12 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   when (fillPush) {
     dmaQ(dmaQTail).valid := true.B
     dmaQ(dmaQTail).inFlight := false.B
-    dmaQ(dmaQTail).waitCap := false.B
     dmaQ(dmaQTail).tag := 0.U
     dmaQ(dmaQTail).dir := 3.U
     dmaQ(dmaQTail).dmaWidth := 0.U
     dmaQ(dmaQTail).rfAddr := 0.U
     dmaQ(dmaQTail).l3Addr := io.fetch_fill_addr
     dmaQ(dmaQTail).rdMask := 0.U
-    dmaQ(dmaQTail).storeDataValid := false.B
     dmaQTail  := dmaQTail + 1.U
     fillPending := true.B
   }
@@ -1275,12 +1155,12 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   }
 
   // ---- L2 count-scoreboard updates.  Entry increments the issue counters
-  //      (after the targets were captured); MMA completion / vle-done increment
-  //      wrDone, MMA feed / vse-RF-source-done increment rdDone.  The DMA
-  //      dir=3/fetch exclusion and the cap-store reader exclusion are
-  //      preserved.  All sources are folded into one update per counter so a
-  //      same-cycle entry + completion net correctly (up to 2 increments).
-  val mmaDoneWmask = (0xF.U << (compVd << 2))(L - 1, 0)
+  //      (after the targets were captured); the mma capture VR write (on the
+  //      clctPrev tick) / vle-done increment wrDone, MMA feed / vse-read-done
+  //      increment rdDone.  The DMA dir=3/fetch exclusion is preserved.  All
+  //      sources are folded into one update per counter so a same-cycle entry
+  //      + completion net correctly (up to 2 increments).
+  val mmaDoneWmask = (0xF.U << (capVd << 2))(L - 1, 0)
   val mmaFeedRmask = readSlotsL(OpFamily.MMA.asUInt, feedRd, feedRs1, feedRs2, 0.U,
     feedVs3, feedMmaLast)
   // A vle of VE/VR writes SEVERAL VX slots (writeSlotsL expands by the load
@@ -1292,27 +1172,25 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   val dmaVseSrmask = dmaHead.rdMask
   when (!illegalAny && !io.session_reset) {
     for (i <- 0 until L) {
-      val wrSet    = windowEntry && entSwmask(i)
-      val wrIncMma = compValid && mmaDoneWmask(i)
+      // The mma capture write is visible on the RF write tick (clctPrev),
+      // NOT on the delayed completion (compValid) one cycle earlier.
+      val wrIncMma = clctPrev && mmaDoneWmask(i)
       val wrIncDma = dmaDoneHead && dmaHead.dir === 0.U && dmaVleWmask(i)
       val wrInc    = wrIncMma.asUInt +& wrIncDma.asUInt
       when (wrInc =/= 0.U) { wrDone(i) := wrDone(i) + wrInc }
-      // Mirror the old `vxWrCap` clear: once a vle's write fully retires (no
-      // pending writes remain) and no new writer registers this cycle, the
-      // register no longer holds a live capture.  Set at entry wins via the
-      // `!wrSet` guard.
-      when (wrIncDma && !wrSet && (wrDone(i) + wrInc) === wrIss(i)) {
-        wrCap(i) := false.B
-      }
 
       val rdIncFeed = feedValid && mmaFeedRmask(i)
+      // Only stores that registered a reader (non-VR) advance rdDone; a VR
+      // capture store is deliberately not in the WAR reader set, so counting
+      // its completion here would let rdDone run ahead of rdIss and starve a
+      // later capture writer's `reached` test.
       val rdIncDma  = dmaDoneHead && dmaHead.dir === 1.U &&
-        !dmaHead.storeDataValid && dmaVseSrmask(i)
+        dmaHead.dmaWidth =/= 2.U && dmaVseSrmask(i)
       val rdInc     = rdIncFeed.asUInt +& rdIncDma.asUInt
       when (rdInc =/= 0.U) { rdDone(i) := rdDone(i) + rdInc }
 
       when (windowEntry && entSwmask(i)) { wrIss(i) := wrIss(i) + 1.U }
-      when (windowEntry && entSrmask(i) && !entIsCapStore) {
+      when (windowEntry && entSrmask(i) && !entIsVrStore) {
         rdIss(i) := rdIss(i) + 1.U
       }
     }
@@ -1431,7 +1309,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   io.dbg_wcount   := wCount
   io.dbg_bnd      := 0.U
   io.dbg_dmaq     := dmaQCount
-  io.dbg_capq     := capQCount
+  io.dbg_capq     := 0.U          // capture queue removed (reduce-only VR path)
   io.dbg_mma_out0 := mmalu.io.out(0).asUInt
   io.dbg_mma_out1 := mmalu.io.out(1).asUInt
   io.dbg_cnt      := mmalu.io.dbg_cnt
@@ -1446,8 +1324,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   io.dbg_s2_last  := slots(2).isMmaLast
   val slotsAny = (0 until W).map(i => slots(i).valid).reduce(_ || _)
   io.drain := !slotsAny && !dma.io.busy && dmaQCount === 0.U &&
-    fifoCount === 0.U && capQCount === 0.U &&
-    tagCount === 0.U
+    fifoCount === 0.U && tagCount === 0.U
   io.dbg_traj    := trajSnap
   io.dbg_cycles  := cycleCnt
   io.dbg_mac     := macCnt
