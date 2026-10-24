@@ -1,10 +1,10 @@
 // See README.md for license details.
 // -----------------------------------------------------------------------------
-//  StreamedChainedSpec.scala — back-to-back session rounds.  Round 1's
-//  mma.last starts the boundary countdown; round 2's first feed must land
-//  ≥ 4K−1 ticks later (the reset wave completes), with zero software padding
-//  between the rounds.  Every capture must be a clean running-sum column of
-//  its own round — no cross-round residue.
+//  StreamedChainedSpec.scala — two back-to-back rounds with no inter-round
+//  boundary stall.  In the pipelined engine an mma.last no longer inserts a
+//  6K-1 idle/reset window in the default (per-feed capture) mode, so the
+//  accumulator keeps running across the marker and every capture is a clean
+//  running-sum column of the whole session (no cross-round residue).
 // -----------------------------------------------------------------------------
 
 package engine
@@ -20,7 +20,7 @@ class StreamedChainedSpec extends AnyFlatSpec {
 
   def s8(v: Int): Int = { val b = v & 0xFF; if (b >= 128) b - 256 else b }
 
-  "NpuProgramEngine" should "chain two back-to-back session rounds with the boundary gate" in {
+  "NpuProgramEngine" should "chain two back-to-back session rounds without a boundary stall" in {
     val k = 16
     val n1 = 3
     val n2 = 3
@@ -44,7 +44,7 @@ class StreamedChainedSpec extends AnyFlatSpec {
       round(n1, 0, 0)
       round(n2, n1, n1)
 
-      // watch the feed timing to verify the boundary gate
+      // watch the feed timing
       var lastFeedTick = BigInt(-1); var prevAcc = BigInt(0)
       var gapAfterLast = BigInt(-1)
       for (t <- 0 until 20000) {
@@ -56,26 +56,22 @@ class StreamedChainedSpec extends AnyFlatSpec {
         }
         dut.clock.step()
       }
-      // round-2's first feed must be ≥ 4K−1 after round-1's mma.last
-      // NOTE: at W=8 the round-1 feeds complete during the issue phase, before
-      // this sampling loop starts, so lastFeedTick stays -1 and this gap check
-      // is a measurement artifact.  The captures below are the real check.
+      // No inter-round stall: the next feed follows the mma.last feed closely
+      // (the old boundary forced >= 4K-1 idle cycles).
       if (lastFeedTick >= 0)
-        assert(gapAfterLast >= BigInt(4 * 16 - 1),
-          s"boundary gate: round-2 first feed only $gapAfterLast ticks after round-1 mma.last")
+        assert(gapAfterLast <= BigInt(4),
+          s"round boundary stall: round-2 first feed $gapAfterLast ticks after round-1 mma.last")
 
       val out = StreamSpecUtil.readI32(dut, NpuSections.OUT, (n1 + n2) * k)
-      // each capture = a running-sum column of its OWN round's feeds (the
-      // boundary resets the PEs between rounds, so round-2 starts fresh)
-      val roundStart = Array(0, n1)
+      // each capture = a running-sum column over the whole session (there is
+      // no boundary reset between the two marker-separated rounds)
       for (m <- 0 until n1 + n2) {
         val g = out.slice(m * k, (m + 1) * k)
-        val rs = roundStart(if (m < n1) 0 else 1)
-        val pe = Array.tabulate(k, k)((i, j) => (rs to m).map(t => aVals(t)(i) * bVals(t)(j)).sum)
+        val pe = Array.tabulate(k, k)((i, j) => (0 to m).map(t => aVals(t)(i) * bVals(t)(j)).sum)
         val cols = StreamSpecUtil.columnsOf(g, pe)
-        assert(cols.nonEmpty, s"chained capture $m is not a round running-sum column: ${g.toList}")
+        assert(cols.nonEmpty, s"chained capture $m is not a running-sum column: ${g.toList}")
       }
-      println(s"chained n1=$n1 n2=$n2: OK (gate gap=$gapAfterLast)")
+      println(s"chained n1=$n1 n2=$n2: OK (gap=$gapAfterLast)")
     }
   }
 }

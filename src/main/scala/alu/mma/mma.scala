@@ -20,7 +20,8 @@ import chisel3._
  *   This adds 1 cycle to the MMALU latency (3n-1 instead of 3n-2)
  *   but breaks the long combinatorial path into two 6-7 level segments.
  */
- class MMALU[T <: BasePE](pe_gen: => BasePE, val n: Int = 8, val nbits: Int = 8, val accum_nbits: Int = 32) extends Module {
+ class MMALU[T <: BasePE](pe_gen: => BasePE, val n: Int = 8, val nbits: Int = 8, val accum_nbits: Int = 32,
+                          val captureDelay: Int = 16) extends Module {
     val io = IO(new Bundle {
         val in_a        = Input(Vec(n, SInt(nbits.W)))
         val in_b        = Input(Vec(n, SInt(nbits.W)))
@@ -35,7 +36,7 @@ import chisel3._
     // Create n x n pe blocks
     val pe_io = VecInit(Seq.fill(n * n) {Module(pe_gen).io})
     val dfeed = Module(new sa.DataFeeder(n, nbits, accum_nbits))
-    val dclct = Module(new sa.DataCollector(n, accum_nbits))
+    val dclct = Module(new sa.DataCollector(n, accum_nbits, captureDelay))
     dfeed.io.reg_a_in <> io.in_a
     dfeed.io.reg_b_in <> io.in_b
     dfeed.io.reg_accum_in <> io.in_accum
@@ -69,6 +70,10 @@ import chisel3._
     }
     dclct.io.dat_clct  := pipe_dat_clct
     dclct.io.use_accum := pipe_use_accum
+    // PE(0,0)-aligned keep: the 1->0 edge is the diagonal reset wave that ends
+    // a round.  The collector uses it to snapshot the round's running-sum
+    // column before the next round's first feed clears the PEs.
+    dclct.io.keep_d    := pipe_ctrl(0).keep
     io.clct            := pipe_clct
 
     val sarray = Module(new sa.SystolicArray2D(n, nbits))

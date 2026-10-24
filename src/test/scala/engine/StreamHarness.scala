@@ -136,7 +136,7 @@ class StreamHarness(val K: Int = 16, val readLatency: Int = 1, val W: Int = 8) e
     val dbg_dma_done = Output(UInt(16.W))
     val dbg_wcount   = Output(UInt(5.W))
     val dbg_capq     = Output(UInt(6.W))
-    val dbg_dmaq     = Output(UInt(3.W))
+    val dbg_dmaq     = Output(UInt(4.W))
     val dbg_bnd      = Output(UInt(9.W))
     val dbg_drain    = Output(Bool())
     val dbg_cycles   = Output(UInt(32.W))

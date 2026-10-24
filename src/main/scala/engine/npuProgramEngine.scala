@@ -17,10 +17,11 @@
 //  Register reuse (vd rings, operand slots) is entirely the software's job;
 //  the scoreboard only enforces the RAW/WAR hazards.
 //
-//  mma.last also starts the boundary countdown (4K−1 ticks; the keep=0 PE
-//  reset pulse at the 2K offset).  mma-family issue is gated on the
-//  countdown, so the next round's first mma waits until every PE has reset —
-//  rounds chain back-to-back with zero software padding.
+//  Consecutive matmul rounds PIPELINE (no 6K-1 boundary stall): in reduce
+//  mode the mma.last feed carries the keep=0 PE reset for the next round, and
+//  the collector snapshots each round's running-sum column on that reset wave.
+//  In the default per-feed-capture mode the accumulator is kept intact across
+//  the mma.last so the last feed's delayed capture is not destroyed.
 // -----------------------------------------------------------------------------
 
 package engine
@@ -79,7 +80,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   // (the vd FIFO also carries the K×32-bit `accum` column — decision (a)).
   val FIFO_DEPTH = T          // in-flight feeds (vd FIFO, carries accum)
   val CAPQ_DEPTH = 16         // capture queue (chained vse drains promptly)
-  val DMAQ_DEPTH = 4
+  val DMAQ_DEPTH = 8
   val SLOT_IDX = log2Ceil(W)
 
   val io = IO(new Bundle {
@@ -114,7 +115,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     val dbg_dma_done = Output(UInt(16.W))  // DMA requests completed
     val dbg_wcount   = Output(UInt(5.W))   // dispatch window occupancy
     val dbg_bnd      = Output(UInt(9.W))   // boundary countdown (0 when idle)
-    val dbg_dmaq     = Output(UInt(3.W))   // dma queue occupancy
+    val dbg_dmaq     = Output(UInt(4.W))   // dma queue occupancy
     val dbg_capq     = Output(UInt(5.W))   // capture queue occupancy
     val dbg_mma_out0 = Output(UInt((4 * N).W))  // mmalu out lane 0
     val dbg_mma_out1 = Output(UInt((4 * N).W))  // mmalu out lane 1
@@ -222,6 +223,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   class DmaEntry extends Bundle {
     val valid      = Bool()
     val inFlight   = Bool()         // accepted by the DMA, awaiting done
+    val waitCap    = Bool()         // capture store: waiting for capQ data
     val tag        = UInt(TAG_IDX.W) // L1 ring tag
     val dir        = UInt(2.W)      // 0 = vle, 1 = vse, 3 = fetch fill
     val dmaWidth   = UInt(2.W)
@@ -474,24 +476,23 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   val clctPrev = RegNext(false.B)   // one-tick delay between the clct and the VR write
 
   // ==========================================================================
-  // Boundary gate: 6K−1 countdown after the mma.last feed (or session start).
-  // The array capture settles ~2K−2 + CAPTURE_DELAY after the last feed, so
-  // the keep=0 PE-reset pulse is scheduled at boundaryCnt==2K (4K−1 cycles in,
-  // safely after the drain) and mma-family issue stays gated for the full
-  // 6K−1 (the extra 2K lets the reset propagate before the next feed).
+  // Round control.  Consecutive matmul rounds PIPELINE: there is no inter-round
+  // 6K-1 idle countdown.  A round is reset by the `mma.last` feed itself (its
+  // data is zero-forced, so it contributes nothing) and the next round's first
+  // feed immediately reopens the accumulator with `keep=0`.  Note that the
+  // control path to the PEs is one cycle deeper than the operand path: a
+  // `keep=0` driven on feed F resets the PE with the operands of feed F+1.
+  // Resetting on `mma.last` therefore clears the PEs exactly on the next
+  // round's first feed (all K feeds accumulate).  A leading first-feed reset
+  // would instead reset on the *second* feed and silently drop the first.
   // ==========================================================================
-  // 6*K-1 is the boundary countdown (191 at K=32, 383 at K=64): it must be
-  // wide enough for that, not 7 bits (7 bits truncated 191->63 so the keep=0
-  // array-reset pulse at 2K never fired at K=32 and the PE accumulators leaked
-  // across sessions).
-  val boundaryCnt   = RegInit(0.U(log2Ceil(6 * K + 1).W))
-  val boundaryPulse = boundaryCnt === (2 * K).U
-  when (boundaryCnt =/= 0.U) { boundaryCnt := boundaryCnt - 1.U }
+  // Kept for the debug/drain plumbing only; it is no longer armed.
+  val boundaryCnt = RegInit(0.U(log2Ceil(6 * K + 1).W))
 
   // ==========================================================================
   // MMALU
   // ==========================================================================
-  val mmalu = Module(new MMALU(new MMPE(N), K, N, 4 * N))
+  val mmalu = Module(new MMALU(new MMPE(N), K, N, 4 * N, CAPTURE_DELAY))
   // The clct delayed by the capture-settle margin (CAPTURE_DELAY, defined with
   // `T` above — see the completion block).
   val clctD = ShiftRegister(mmalu.io.clct, CAPTURE_DELAY, false.B, true.B)
@@ -535,17 +536,46 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   val feedVs3      = RegNext(issueMmaVs3,  0.U)
   val feedMmaLast  = RegNext(issueMmaLast, false.B)
 
-  // An mma.last that has issued but not yet fed.  boundaryCnt is armed at the
-  // feed (1 cycle after issue), so this closes the 1-cycle gap in which a
-  // following MMA could issue before the countdown starts (W=8 exposes it).
-  val mmaLastInFlight = (0 until W).map(i =>
-    slots(i).valid && slots(i).isMmaLast && slots(i).issued && !slots(i).done
-  ).reduce(_ || _)
+  // roundOpen: false at session start and after an mma.last feed; true after
+  // any non-last MMA feed.
+  val roundOpen = RegInit(false.B)
+  // Has any MMA fed in this session?  Idle keep=0 is only used to clear the
+  // PEs before a session's first feed; once the session is running, an
+  // mma.last in NON-reduce mode must NOT reset the array (the last non-last
+  // feed's per-feed capture is still in flight for another ~2n+16 cycles).
+  val feedSeen = RegInit(false.B)
+  when (io.session_reset) {
+    roundOpen := false.B
+    feedSeen  := false.B
+  } .elsewhen (feedValid) {
+    feedSeen  := true.B
+    when (feedMmaLast) { roundOpen := false.B }
+    .otherwise         { roundOpen := true.B }
+  }
+  val feedFirst = feedValid && !feedMmaLast && !roundOpen
+  // keep=0 only for:
+  //   * the trailing mma.last reset in REDUCE mode (the next round's first
+  //     feed is reopened with keep=0 through the control pipeline), and
+  //   * the pre-first-feed idle of a session (clean start).
+  // Non-reduce mode must keep the PEs across the final mma.last until the
+  // pending per-feed capture has been sampled; the next session's idle reset
+  // clears them.
+  val keepReset = (feedValid && feedMmaLast && io.reduce_mode) ||
+                  (!feedValid && !feedSeen)
+
+  // (No inter-round boundary gate: consecutive rounds pipeline.  The mma.last
+  // ordering gate below only waits for prior non-last MMAs to have fed.)
 
   for (s <- 0 until W) {
     val sl = slots(s)
-    val (rdRegs, rdValid) = readOperands(sl.family, sl.rd, sl.rs1, sl.rs2,
+    val (rdRegs, rdValidRaw) = readOperands(sl.family, sl.rd, sl.rs1, sl.rs2,
       sl.memWidth, sl.vs3, sl.isMmaLast)
+    // A capture-consuming store reads capQ, not the RF, so it has no RF read
+    // dependency.  Keeping the RAW wait on the producer's RF write would pin
+    // the window head for the whole capture latency (~2n+16) and serialize the
+    // next round behind it.  Capture ORDER is still guaranteed by the capQ
+    // FIFO (the DMA head pops the next capture when it is available).
+    val rdValid = (0 until 6).map(j => rdValidRaw(j) && !sl.useCapData)
     val (wrRegs, wrValid) = writeOperands(sl.family, sl.rd, sl.memWidth)
     val rawOk = WireDefault(true.B)
     val warOk = WireDefault(true.B)
@@ -588,12 +618,10 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     }
     val unitOk = WireDefault(false.B)
     when (sl.unit === DispatchUnit.DMA) {
-      // A capture-consuming store must not issue before its capture has been
-      // pushed into capQ: vsePopCap is gated on a non-empty queue but the
-      // store still latched the stale head and stored it.  The scoreboard
-      // alone lets the 2nd chained store slip ahead of the 2nd push at K=32
-      // (array latency), yielding an all-zero capture.
-      unitOk := !dmaQFull && (!sl.useCapData || capQCount =/= 0.U)
+      // Capture-consuming stores issue without waiting for the capture; the
+      // DMA queue head stalls for capQ data instead (off the window critical
+      // path), so the window keeps accepting the next round's MMAs.
+      unitOk := !dmaQFull
     } .elsewhen (sl.unit === DispatchUnit.MMALU) {
       // Reserve the pending (stage-2) feed slot so the 1-stage feed pipeline
       // can never overflow the FIFO.
@@ -602,19 +630,12 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     } .otherwise {
       unitOk := true.B
     }
-    // §13: a mma.last must wait for every prior non-last MMA to have fed so it
-    // cannot overtake one, start the boundary countdown, and gate the mma out.
-    // Later MMAs cannot feed before it (in-order issue), so the snapshot of
-    // the non-last issue count is exactly the prior-pending set.
-    //
-    // The boundary countdown is armed at the mma.last FEED (one cycle after
-    // its issue).  With a small window (W=8) a following MMA can become the
-    // head and issue in that one-cycle gap -- before boundaryCnt != 0 -- then
-    // feed immediately after the mma.last and corrupt the next round.  Block
-    // MMAs while an mma.last is issued-but-not-yet-fed too, independent of W.
-    val gateOk = !(sl.family === OpFamily.MMA.asUInt &&
-                    (boundaryCnt =/= 0.U || mmaLastInFlight)) &&
-      !(sl.isMmaLast && !sl.lastSat)
+    // Ordering: MMAs issue/feed strictly in program order (firstForUnit), and
+    // the feed is a 1-cycle register after the issue with no backpressure, so
+    // an mma.last can never overtake a prior non-last feed.  The explicit
+    // lastSat ordering wait is therefore no longer needed; dropping it removes
+    // ~3 idle cycles at every round boundary.
+    val gateOk = true.B
     slotUnitOk(s) := unitOk
     slotsReady(s) := sl.valid && !sl.issued && !sl.done &&
       rawOk && warOk && gateOk && !illegalAny
@@ -644,23 +665,16 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   }
   val issueSel = Wire(Vec(W, Bool()))
   for (s <- 0 until W) {
-    // Re-check the boundary gate at the issue (same cycle): slotsReadyR is
-    // registered, so the slotsReady gate above is one cycle stale and cannot
-    // see the mma.last that issued in the previous cycle.
+    // Re-check readiness at the issue (same cycle): slotsReadyR is registered,
+    // so the slotsReady gate above is one cycle stale.  Strict program-order
+    // firstForUnit covers the mma.last ordering; no boundary gate.
     issueSel(s) := slotsReadyR(s) && slotUnitOk(s) &&
-      !slots(s).issued && !slots(s).done && firstForUnit(s) &&
-      !(slots(s).family === OpFamily.MMA.asUInt &&
-        (boundaryCnt =/= 0.U || mmaLastInFlight))
+      !slots(s).issued && !slots(s).done && firstForUnit(s)
   }
 
   // ==========================================================================
   // Issue actions
   // ==========================================================================
-  // The vse capture-queue pop at its issue.
-  val vsePopCap = WireDefault(false.B)
-  val vsePopData = Wire(Vec(K, UInt((4 * N).W)))
-  for (lane <- 0 until K) vsePopData(lane) := capQ(capQHead).data(lane)
-
   for (s <- 0 until W) {
     when (issueSel(s)) {
       slots(s).issued := true.B
@@ -675,11 +689,13 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
         issueMmaTag  := slots(s).tag
       } .elsewhen (slots(s).unit === DispatchUnit.DMA) {
         val isStore = slots(s).isStore
-        when (isStore && slots(s).useCapData && capQCount =/= 0.U) {
-          vsePopCap := true.B
-        }
+        val waitCap = isStore && slots(s).useCapData
         dmaQ(dmaQTail).valid := true.B
         dmaQ(dmaQTail).inFlight := false.B
+        // A capture store does not have its data yet: the DMA head waits for
+        // capQ and pops the next capture there.  The window slot retires now,
+        // so a stalled store no longer blocks the next round's MMA entry.
+        dmaQ(dmaQTail).waitCap := waitCap
         dmaQ(dmaQTail).tag := slots(s).tag
         dmaQ(dmaQTail).dir := Mux(isStore, 1.U, 0.U)
         dmaQ(dmaQTail).dmaWidth := slots(s).memWidth
@@ -693,19 +709,14 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
         // Snapshot the vse's VX read mask for the tag-reader clear at done.
         dmaQ(dmaQTail).rdMask := readSlotsL(slots(s).family, slots(s).rd,
           slots(s).rs1, slots(s).rs2, slots(s).memWidth, slots(s).vs3)
-        dmaQ(dmaQTail).storeDataValid := isStore && slots(s).useCapData
-        for (lane <- 0 until K) dmaQ(dmaQTail).storeData(lane) :=
-          Mux(isStore && slots(s).useCapData, vsePopData(lane), 0.U)
+        dmaQ(dmaQTail).storeDataValid := waitCap
+        for (lane <- 0 until K) dmaQ(dmaQTail).storeData(lane) := 0.U
         // P2: the DMA slot retires at dmaQ enqueue; its tag carries the
         // completion obligation (freed at dmaDoneHead).
         slots(s).done := true.B
         dmaQTail := dmaQTail + 1.U
       } .otherwise { slots(s).done := true.B }   // DispatchUnit.NONE: retire defensively
     }
-  }
-
-  when (vsePopCap) {
-    capQHead  := capQHead + 1.U
   }
 
   // ---- The MMALU feed + the vd FIFO enq at the feed ----
@@ -732,7 +743,6 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   .elsewhen (fifoPop)         { fifoCount := fifoCount - 1.U }
 
   when (feedValid) {
-    when (feedMmaLast) { boundaryCnt := (6 * K - 1).U }
     // P2: the MMA slot retires at feed — the operands are read here and the
     // write obligation now lives in the carried tag (freed at clctD).  The
     // window slot is then free to be refilled, so in-flight capacity is the
@@ -751,10 +761,12 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   rf.io.vx_r_addr(1) := Mux(feedValid, feedRs2, 0.U)
   rf.io.vr_r_addr(1) := Mux(feedValid, feedVs3, 0.U)
 
-  // The program engine drives MMALU `keep` from the boundary gate
-  // (`keep := !boundaryPulse`); the decoded `mma_keep` (funct7[4]) is retained
-  // for `NCoreBackend` but is ignored at the engine top.
-  mmalu.io.ctrl.keep      := !boundaryPulse
+  // Round reset (see the round-control block above).  `mma.last` carries the
+  // trailing keep=0 reset for the next round; the first feed of a round keeps
+  // accumulating (keep=1) because the control pipeline applies that reset to
+  // exactly this feed's operands.  The decoded `mma_keep` (funct7[4]) is
+  // retained for `NCoreBackend` but is ignored at the engine top.
+  mmalu.io.ctrl.keep      := !keepReset
   mmalu.io.ctrl.busy      := feedValid
   mmalu.io.ctrl.use_accum := feedValid
 
@@ -853,7 +865,9 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   // in the pipelined steady state; compute the net so the count cannot drift
   // (a phantom entry would block `drain`).
   val capPush = capturePush
-  val capPop  = vsePopCap
+  // The capture pop happens at DMA request acceptance (the queue head waits
+  // for capQ data for a capture store), not at window issue.
+  val capPop  = WireDefault(false.B)
   when (capPush && capPop) { capQCount := capQCount }
   .elsewhen (capPush)      { capQCount := capQCount + 1.U }
   .elsewhen (capPop)       { capQCount := capQCount - 1.U }
@@ -1115,27 +1129,41 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     capQCount   := 0.U
     fifoHead    := fifoTail
     fifoCount   := 0.U
-    // Start the boundary countdown (6K-1): this gates the first mma feed for
-    // the full countdown and fires the keep=0 PE-reset pulse at the 2K offset
-    // while the array is idle, so a leftover accumulator from a previous
-    // session cannot contaminate this one (the doubled-capture silicon bug).
-    boundaryCnt := (6 * K - 1).U
+    // No inter-round boundary countdown is armed (rounds pipeline).  The
+    // session-start PE reset is the idle keep=0 driven before the session's
+    // first feed; it lands on that first feed through the control pipeline.
+    boundaryCnt := 0.U
   }
 
   // ==========================================================================
   // DMA unit: the queue head drives the DMA; the done completes the slot.
   // ==========================================================================
   val dmaHead = dmaQ(dmaQHead)
-  dma.io.req_valid  := dmaHead.valid && !dmaHead.inFlight
+  // A capture-store entry is enqueued as soon as it issues (freeing the
+  // window), but its data comes from capQ.  The DMA head waits here until the
+  // producer mma pushes the capture, then presents/pops it.  This keeps the
+  // ~2n+16 capture latency off the window critical path so consecutive
+  // matmul rounds can keep feeding.
+  val dmaCapReady = !dmaHead.waitCap || capQCount =/= 0.U
+  dma.io.req_valid  := dmaHead.valid && !dmaHead.inFlight && dmaCapReady
   dma.io.req_dir    := dmaHead.dir
   dma.io.req_width  := dmaHead.dmaWidth
   dma.io.req_rf_addr := dmaHead.rfAddr
   dma.io.req_l3_addr := dmaHead.l3Addr
-  dma.io.req_store_data_valid := dmaHead.storeDataValid
-  for (lane <- 0 until K) dma.io.req_store_data(lane) := dmaHead.storeData(lane)
+  dma.io.req_store_data_valid := dmaHead.storeDataValid && dmaCapReady
+  for (lane <- 0 until K) dma.io.req_store_data(lane) :=
+    Mux(dmaHead.waitCap, capQ(capQHead).data(lane), dmaHead.storeData(lane))
 
-  when (dma.io.req_ready && dmaHead.valid && !dmaHead.inFlight) {
+  val dmaAccept = dma.io.req_ready && dmaHead.valid && !dmaHead.inFlight && dmaCapReady
+  when (dmaAccept) {
     dmaHead.inFlight := true.B
+    when (dmaHead.waitCap) { dmaHead.waitCap := false.B }
+  }
+  // Pop the capture exactly once, when the request (with the capQ data) is
+  // accepted by the DMA.
+  when (dmaAccept && dmaHead.waitCap && capQCount =/= 0.U) {
+    capQHead := capQHead + 1.U
+    capPop   := true.B
   }
 
   io.fetch_fill_done := dma.io.instr_valid && dmaHead.valid && dmaHead.inFlight && dmaHead.dir === 3.U
@@ -1163,6 +1191,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   when (fillPush) {
     dmaQ(dmaQTail).valid := true.B
     dmaQ(dmaQTail).inFlight := false.B
+    dmaQ(dmaQTail).waitCap := false.B
     dmaQ(dmaQTail).tag := 0.U
     dmaQ(dmaQTail).dir := 3.U
     dmaQ(dmaQTail).dmaWidth := 0.U
@@ -1348,7 +1377,11 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   when (dmaDoneHead)                              { dmaDoneCnt := dmaDoneCnt + 1.U }
   for (i <- 0 until 15) traj(i) := traj(i + 1)
   traj(15) := Cat(mmalu.io.ctrl.keep, mmalu.io.dbg_dat_clct, mmalu.io.dbg_cnt)
-  when (boundaryPulse) { trajSnap := traj }
+  // Freeze the 16-cycle collector trajectory at the most recent capture.  The
+  // window just before a clct is inside the live collect/feed window, so it
+  // shows keep=1 / dat_clct=H / a full cnt rotation (the old boundary-based
+  // snapshot no longer exists).
+  when (mmalu.io.clct) { trajSnap := traj }
   when (io.session_reset) {
     cycleCnt := 0.U
     macCnt   := 0.U
