@@ -30,6 +30,7 @@ class StreamedVX0Spec extends AnyFlatSpec {
       val aBytes = aVals.flatten.map(_ & 0xFF) ++ Array.tabulate(16)(i => (i + 1))
       StreamSpecUtil.preloadI8(dut, NpuSections.A, aBytes)
       StreamSpecUtil.preloadI8(dut, NpuSections.B, bVals.flatten.map(_ & 0xFF))
+      StreamSpecUtil.resetSession(dut)
       // load VX[0] with a garbage ramp (the would-be stale mma_last operand)
       StreamSpecUtil.issue(dut, vle8(0, NpuSections.SECT_A, n * k))   // VX[0] <- ramp 1..16
       for (m <- 0 until n) {

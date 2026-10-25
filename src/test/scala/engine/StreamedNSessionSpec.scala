@@ -29,6 +29,7 @@ class StreamedNSessionSpec extends AnyFlatSpec {
     simulate(new StreamHarness(K = 16, readLatency = latency)) { dut =>
       StreamSpecUtil.preloadI8(dut, NpuSections.A, aVals.flatten.map(_ & 0xFF))
       StreamSpecUtil.preloadI8(dut, NpuSections.B, bVals.flatten.map(_ & 0xFF))
+      StreamSpecUtil.resetSession(dut)
       for (m <- 0 until n) {
         StreamSpecUtil.issue(dut, vle8(4, NpuSections.SECT_A, m * k))
         StreamSpecUtil.issue(dut, vle8(8, NpuSections.SECT_B, m * k))
@@ -57,6 +58,7 @@ class StreamedNSessionSpec extends AnyFlatSpec {
   "NpuProgramEngine" should "read back a vle-loaded VX register" in {
     simulate(new StreamHarness(K = 16, readLatency = 100)) { dut =>
       StreamSpecUtil.preloadI8(dut, NpuSections.A, Array.tabulate(16)(i => 100 + i))
+      StreamSpecUtil.resetSession(dut)
       StreamSpecUtil.issue(dut, vle8(4, NpuSections.SECT_A, 0))
       for (t <- 0 until 500) { dut.clock.step() }
       dut.io.dbg_vx_addr.poke(4.U)
@@ -80,6 +82,7 @@ class StreamedNSessionSpec extends AnyFlatSpec {
       StreamSpecUtil.preloadI8(dut, NpuSections.A, a.map(_ & 0xFF))
       StreamSpecUtil.preloadI8(dut, NpuSections.B, b.map(_ & 0xFF))
       StreamSpecUtil.preloadI32(dut, NpuSections.ACCUM, c)
+      StreamSpecUtil.resetSession(dut)
       StreamSpecUtil.issue(dut, vle8(4, NpuSections.SECT_A, 0))
       StreamSpecUtil.issue(dut, vle8(8, NpuSections.SECT_B, 0))
       StreamSpecUtil.issue(dut, vle32(3, NpuSections.SECT_ACCUM, 0))

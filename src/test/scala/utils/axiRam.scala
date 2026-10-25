@@ -25,7 +25,8 @@ class AxiRamModel(val dropReadRequests: Int = 0, val DW: Int = 512,
                   // pseudo-random extra) and W-last->B latency.  Defaults keep
                   // the old 1-cycle / immediate behaviour.
                   val readLatency: Int = 1, val readJitter: Int = 0, val longRead: Boolean = false,
-                  val bDelay: Int = 0) extends Module {
+                  val bDelay: Int = 0, val wDelay: Int = 0) extends Module {
+  require(wDelay >= 0)
   require(DW % 128 == 0, s"AxiRamModel: DW=$DW must be a multiple of 128")
   val WORDS = DW / 128
   val STRB = DW / 8
@@ -124,9 +125,11 @@ class AxiRamModel(val dropReadRequests: Int = 0, val DW: Int = 512,
   val bValid  = RegInit(false.B)
   val bPend   = RegInit(false.B)
   val bWait   = RegInit(0.U(16.W))
+  // Optional W-channel backpressure (delay wready after AW acceptance).
+  val wReadyWait = RegInit(0.U(16.W))
 
   io.s_axi_awready := !wActive
-  io.s_axi_wready  := wActive
+  io.s_axi_wready  := wActive && wReadyWait === 0.U
   io.s_axi_bvalid  := bValid
 
   when (io.s_axi_awvalid && io.s_axi_awready) {
@@ -134,7 +137,9 @@ class AxiRamModel(val dropReadRequests: Int = 0, val DW: Int = 512,
     awAddr  := io.s_axi_awaddr
     awLen   := io.s_axi_awlen
     wCnt    := 0.U
+    wReadyWait := wDelay.U
   }
+  when (wActive && wReadyWait =/= 0.U) { wReadyWait := wReadyWait - 1.U }
 
   when (io.s_axi_wvalid && io.s_axi_wready) {
     val wBase = (awAddr >> 4.U) + (WORDS.U * wCnt)

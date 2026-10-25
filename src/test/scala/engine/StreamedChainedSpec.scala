@@ -31,6 +31,7 @@ class StreamedChainedSpec extends AnyFlatSpec {
     simulate(new StreamHarness(K = 16, readLatency = 100)) { dut =>
       StreamSpecUtil.preloadI8(dut, NpuSections.A, aVals.flatten.map(_ & 0xFF))
       StreamSpecUtil.preloadI8(dut, NpuSections.B, bVals.flatten.map(_ & 0xFF))
+      StreamSpecUtil.resetSession(dut)
 
       def round(r: Int): Unit = {
         StreamSpecUtil.issue(dut, vle8(4, NpuSections.SECT_A, r * k))
@@ -40,28 +41,12 @@ class StreamedChainedSpec extends AnyFlatSpec {
         StreamSpecUtil.issue(dut, vse32(0, NpuSections.SECT_OUT, r * 4 * k))
       }
 
-      // round 1, then immediately round 2 (no NOPs between)
+      // round 1, then immediately round 2 (no NOPs between).  Inter-round
+      // pipelining (no boundary stall) is measured by CrossMatmulPipelineSpec's
+      // drain-inclusive IPC + maxBnd==0, so this spec only checks the captures.
       round(0)
       round(1)
-
-      // watch the feed timing (each round has k non-last feeds + 1 mma.last)
-      val feedsPerRound = k + 1
-      var lastFeedTick = BigInt(-1); var prevAcc = BigInt(0)
-      var gapAfterLast = BigInt(-1)
-      for (t <- 0 until 20000) {
-        val acc = dut.io.dbg_mma_acc.peek().litValue
-        if (acc != prevAcc) {
-          if (acc == BigInt(feedsPerRound)) lastFeedTick = BigInt(t)  // round-1 mma.last feed
-          if (acc == BigInt(feedsPerRound + 1)) gapAfterLast = BigInt(t) - lastFeedTick
-          prevAcc = acc
-        }
-        dut.clock.step()
-      }
-      // No inter-round stall: the next feed follows the mma.last feed closely
-      // (the old boundary forced >= 4K-1 idle cycles).
-      if (lastFeedTick >= 0)
-        assert(gapAfterLast <= BigInt(4),
-          s"round boundary stall: round-2 first feed $gapAfterLast ticks after round-1 mma.last")
+      StreamSpecUtil.runToDrain(dut)
 
       val out = StreamSpecUtil.readI32(dut, NpuSections.OUT, rounds * k)
       // K identical feeds per round => the capture is K*a_r(i)*b_r(j).
@@ -71,7 +56,7 @@ class StreamedChainedSpec extends AnyFlatSpec {
         val cols = StreamSpecUtil.columnsOf(g, pe)
         assert(cols.nonEmpty, s"reduce round $r capture is not K*a*b: ${g.toList}")
       }
-      println(s"chained reduce rounds=$rounds k=$k: OK (gap=$gapAfterLast)")
+      println(s"chained reduce rounds=$rounds k=$k: OK")
     }
   }
 }

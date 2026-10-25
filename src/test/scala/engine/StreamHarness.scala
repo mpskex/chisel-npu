@@ -15,8 +15,9 @@ import isa._
 import isa.NpuAssembler._
 
 /** Axi RAM with a configurable read latency (DDR-like). */
-class LatencyRamModel(val readLatency: Int = 1) extends Module {
+class LatencyRamModel(val readLatency: Int = 1, val wDelay: Int = 0) extends Module {
   require(readLatency >= 1)
+  require(wDelay >= 0)
   val io = IO(new Bundle {
     val s_axi_awaddr  = Input(UInt(32.W))
     val s_axi_awlen   = Input(UInt(8.W))
@@ -89,15 +90,21 @@ class LatencyRamModel(val readLatency: Int = 1) extends Module {
   val awLen     = RegInit(0.U(8.W))
   val wCnt      = RegInit(0.U(8.W))
   val bValid    = RegInit(false.B)
+  // Optional W-channel backpressure: hold wready low for `wDelay` cycles after
+  // a write burst's AW is accepted.  Exercises a store that is still draining
+  // when the next round's capture overwrites the source register.
+  val wReadyWait = RegInit(0.U(16.W))
   io.s_axi_awready := !wActive
-  io.s_axi_wready  := wActive
+  io.s_axi_wready  := wActive && wReadyWait === 0.U
   io.s_axi_bvalid  := bValid
   when (io.s_axi_awvalid && io.s_axi_awready) {
     wActive   := true.B
     awAddr    := io.s_axi_awaddr
     awLen     := io.s_axi_awlen
     wCnt      := 0.U
+    wReadyWait := wDelay.U
   }
+  when (wActive && wReadyWait =/= 0.U) { wReadyWait := wReadyWait - 1.U }
   when (io.s_axi_wvalid && io.s_axi_wready) {
     val wBase = (awAddr >> 4.U) + (WORDS.U * wCnt)
     for (w <- 0 until WORDS) {
@@ -113,7 +120,8 @@ class LatencyRamModel(val readLatency: Int = 1) extends Module {
   }
 }
 
-class StreamHarness(val K: Int = 16, val readLatency: Int = 1, val W: Int = 8) extends Module {
+class StreamHarness(val K: Int = 16, val readLatency: Int = 1, val W: Int = 8,
+                    val wDelay: Int = 0) extends Module {
   val io = IO(new Bundle {
     val instr       = Input(UInt(32.W))
     val instr_valid = Input(Bool())
@@ -143,7 +151,7 @@ class StreamHarness(val K: Int = 16, val readLatency: Int = 1, val W: Int = 8) e
   })
 
   val eng = Module(new NpuProgramEngine(K, 8, W))
-  val ram = Module(new LatencyRamModel(readLatency))
+  val ram = Module(new LatencyRamModel(readLatency, wDelay))
 
   eng.io.instr       := io.instr
   eng.io.instr_valid := io.instr_valid

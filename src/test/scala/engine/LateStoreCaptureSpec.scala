@@ -33,6 +33,7 @@ class LateStoreCaptureSpec extends AnyFlatSpec {
     simulate(new StreamHarness(K = 16, readLatency = 50)) { dut =>
       StreamSpecUtil.preloadI8(dut, NpuSections.A, aVals.map(_ & 0xFF))
       StreamSpecUtil.preloadI8(dut, NpuSections.B, bVals.map(_ & 0xFF))
+      StreamSpecUtil.resetSession(dut)
 
       // feed the mma and let it fully retire (clct fires, slot done)
       StreamSpecUtil.issue(dut, vle8(4, NpuSections.SECT_A, 0))
