@@ -227,6 +227,9 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     // before the DMA samples it.  No WAR reader/counter is needed.
     val storeDataValid = Bool()
     val storeData = Vec(K, UInt((4 * N).W))
+    // Cleared while a pipelined VR-store snapshot is still being written into
+    // storeData (next cycle); the DMA head waits for it before issuing.
+    val dataReady = Bool()
   }
 
   // ==========================================================================
@@ -506,6 +509,22 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   val issueMmaVs3  = WireDefault(0.U(5.W))
   val issueMmaLast = WireDefault(false.B)
   val issueMmaTag  = WireDefault(0.U(TAG_IDX.W))
+  // VR-store snapshot pipelined one cycle: the dmaQ store-data mux is fed by
+  // this flop, not by the RF VR read port (the 200 MHz critical path).  The
+  // issue-cycle value is frozen here, so the WAR window stays closed.
+  val vrStoreSnap      = Reg(Vec(K, UInt((4 * N).W)))
+  val vrStoreSnapTail  = Reg(UInt(log2Ceil(DMAQ_DEPTH).W))
+  val vrStoreSnapValid = RegInit(false.B)
+  vrStoreSnapValid := false.B
+  when (vrStoreSnapValid) {
+    for (lane <- 0 until K) dmaQ(vrStoreSnapTail).storeData(lane) := vrStoreSnap(lane)
+    dmaQ(vrStoreSnapTail).dataReady := true.B
+  }
+  when (issueVrStore) {
+    for (lane <- 0 until K) vrStoreSnap(lane) := rf.io.vr_r_data(0)(lane)
+    vrStoreSnapTail := dmaQTail
+    vrStoreSnapValid := true.B
+  }
   val feedValid    = RegNext(issueMmaV,    false.B)
   val feedSlot     = RegNext(issueMmaSlot, 0.U)
   val feedTag      = RegNext(issueMmaTag,  0.U)
@@ -714,13 +733,14 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
         // Snapshot the vse's VX read mask for the tag-reader clear at done.
         dmaQ(dmaQTail).rdMask := readSlotsL(slots(s).family, slots(s).rd,
           slots(s).rs1, slots(s).rs2, slots(s).memWidth, slots(s).vs3)
-        // Freeze VR[vd] now (the store is RAW-satisfied; the RF read port 0 is
-        // muxed to this store's address this cycle).  VX/VE stores keep the
-        // normal DMA RF read path.
+        // VR[vd] is frozen into vrStoreSnap this cycle (the RF read port 0 is
+        // muxed to this store's address) and written into the queue entry next
+        // cycle, so the store-data mux is register-fed.  The entry is marked
+        // not-ready until then.  VX/VE stores keep the normal DMA RF read path.
         dmaQ(dmaQTail).storeDataValid := isVrStore
+        dmaQ(dmaQTail).dataReady := !isVrStore
         for (lane <- 0 until K) {
-          dmaQ(dmaQTail).storeData(lane) :=
-            Mux(isVrStore, rf.io.vr_r_data(0)(lane), 0.U)
+          dmaQ(dmaQTail).storeData(lane) := 0.U
         }
         // P2: the DMA slot retires at dmaQ enqueue; its tag carries the
         // completion obligation (freed at dmaDoneHead).
@@ -1095,7 +1115,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   // DMA unit: the queue head drives the DMA; the done completes the slot.
   // ==========================================================================
   val dmaHead = dmaQ(dmaQHead)
-  dma.io.req_valid  := dmaHead.valid && !dmaHead.inFlight
+  dma.io.req_valid  := dmaHead.valid && !dmaHead.inFlight && dmaHead.dataReady
   dma.io.req_dir    := dmaHead.dir
   dma.io.req_width  := dmaHead.dmaWidth
   dma.io.req_rf_addr := dmaHead.rfAddr
@@ -1140,6 +1160,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     dmaQ(dmaQTail).l3Addr := io.fetch_fill_addr
     dmaQ(dmaQTail).rdMask := 0.U
     dmaQ(dmaQTail).storeDataValid := false.B
+    dmaQ(dmaQTail).dataReady := true.B
     for (lane <- 0 until K) dmaQ(dmaQTail).storeData(lane) := 0.U
     dmaQTail  := dmaQTail + 1.U
     fillPending := true.B
