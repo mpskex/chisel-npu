@@ -36,7 +36,7 @@ if {[llength [get_runs -quiet synth_1]] > 0} {
 }
 reset_run synth_1
 reset_run impl_1
-launch_runs impl_1 -to_step opt_design -jobs 4
+launch_runs impl_1 -to_step opt_design -jobs 1
 wait_on_run impl_1
 set prog [get_property PROGRESS [get_runs impl_1]]
 puts "OPT_PROGRESS=$prog STATUS=[get_property STATUS [get_runs impl_1]]"

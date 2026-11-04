@@ -20,6 +20,7 @@ set SCRIPT_DIR [file normalize [file dirname [info script]]]
 set XCVU9P     [file normalize [file join $SCRIPT_DIR ..]]
 set RUN_DIR    [file join $XCVU9P prj prj.runs impl_1]
 set BIT_DST    [file join $XCVU9P top_npu_vu9p.bit]
+set_param general.maxThreads 8
 
 # Prefer the post-opt (pre-place) checkpoint; fall back to placed.
 set CTX [file join $RUN_DIR hw_platform_opt.dcp]
@@ -61,6 +62,22 @@ if {$cc ne ""} {
 }
 puts "INFO: pblock_engine grid = [get_property GRID_RANGES [get_pblocks pblock_engine]]"
 
+# Floorplan the MMALU (systolic array + data feeder/collector) into a compact
+# contiguous rectangle inside SLR0.  Under auto-placement the wide per-lane
+# accumulator feeder pipes scatter across the SLR and the critical path becomes
+# pure route (e.g. dfeed/buffer_a_29 -> buffer_a_18, 7.6 ns / 0 logic levels).
+# This is the same MMALU-pblock remedy used in the xc7k480t flow.
+set mmalu_cells [get_cells -quiet -hier -filter {NAME =~ *core/mmalu* && IS_PRIMITIVE == 1}]
+if {[llength $mmalu_cells] > 0} {
+    create_pblock pblock_mmalu
+    add_cells_to_pblock [get_pblocks pblock_mmalu] $mmalu_cells
+    resize_pblock [get_pblocks pblock_mmalu] -add {CLOCKREGION_X0Y0:CLOCKREGION_X4Y3}
+    set_property IS_SOFT FALSE [get_pblocks pblock_mmalu]
+    puts "INFO: MMALU cells=[llength $mmalu_cells] pblock_mmalu=[get_property GRID_RANGES [get_pblocks pblock_mmalu]]"
+} else {
+    puts "WARNING: no MMALU cells matched; skipping pblock_mmalu"
+}
+
 # NOTE: a nested accumulator-BRAM pblock (X2Y3:X3Y4) was tried to pull the
 # accumMem write path closer to feedMmaLast_reg, but a hard box that small made
 # the router congest (30,910 overlaps, Explore failed).  Do not re-add it
@@ -72,14 +89,17 @@ puts "INFO: pblock_engine grid = [get_property GRID_RANGES [get_pblocks pblock_e
 # high-fanout nets.  ExtraNetDelay_high raises those estimates so the placer
 # minimises route length up front.
 puts "INFO: place_design -directive ExtraTimingOpt ..."
+set_param general.maxThreads 1
+set_param place.disableMlde 1
 place_design -directive ExtraTimingOpt
-puts "INFO: phys_opt_design -directive AggressiveExplore ..."
-phys_opt_design -directive AggressiveExplore
+# puts "INFO: phys_opt_design -directive Explore ..."
+# phys_opt_design -directive Explore
 
 # ── Route: UG904 order Explore -> AggressiveExplore -> NoTimingRelaxation ────
 # Explore reports signoff-based timing; AlternateCLBRouting is a congestion
 # directive (not a timing fallback) and is only used if a route fails to
 # legalize because of congestion.
+set_param general.maxThreads 8
 set ok 0
 foreach d [list Explore AggressiveExplore NoTimingRelaxation] {
     puts "=== route_design -directive $d ==="
@@ -116,8 +136,8 @@ write_checkpoint -force [file join $RUN_DIR hw_platform_routed.dcp]
 puts "INFO: post-route phys_opt_design -directive Explore ..."
 phys_opt_design -directive Explore
 report_timing_summary -max_paths 10 -file [file join $RUN_DIR vu9p_timing_postroute.rpt]
-puts "INFO: post-route phys_opt_design -directive AggressiveExplore (2nd pass) ..."
-phys_opt_design -directive AggressiveExplore
+# puts "INFO: post-route phys_opt_design -directive AggressiveExplore (2nd pass) ..."
+# phys_opt_design -directive AggressiveExplore
 report_timing_summary -max_paths 10 -file [file join $RUN_DIR vu9p_timing_postroute.rpt]
 puts "INFO: post-route timing -> [file join $RUN_DIR vu9p_timing_postroute.rpt]"
 

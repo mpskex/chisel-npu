@@ -88,7 +88,7 @@ set jobs 4
 if {[info exists ::env(VIVADO_JOBS)]} { set jobs $::env(VIVADO_JOBS) }
 
 # ── Synthesis (all runs, incl. OOC IP) ──────────────────────────────────────
-set_param general.maxThreads 2
+set_param general.maxThreads 8
 # Disable auto-incremental synthesis: the stale reference checkpoint
 # (prj.srcs/utils_1/imports/synth_1/hw_platform.dcp) otherwise reuses ~100% of
 # a previous engine netlist, so a regenerated top.sv is silently ignored.
