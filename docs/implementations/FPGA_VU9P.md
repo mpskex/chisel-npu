@@ -329,5 +329,5 @@ longer depends on program size; the ~0.013 cycles/instruction residual above
 
 Run-to-run variance: on the final bitstream the 36-instruction perf test
 measured 242 cycles on two back-to-back runs, identical, with `feeds=33` on
-both (idempotent). The previous bitstream varied 604–634 cycles on the same
+both (idempotent). The previous bitstream varied 624–634 cycles on the same
 program; the **631** before-figure is representative of that range.
