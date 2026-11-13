@@ -22,6 +22,9 @@ module npu_engine_subsys #(
 ) (
     input  wire                        aclk,
     input  wire                        aresetn,
+    // 250 MHz AXI-Lite control domain (ctrl_lite); the engine stays on `aclk`.
+    input  wire                        aclk_ctrl,
+    input  wire                        aresetn_ctrl,
 
     // ── AXI4-Lite slave (from XDMA M_AXI_BYPASS) ────────────────────────────
     input  wire [AXIL_ADDR_WIDTH-1:0]  s_axil_awaddr,
@@ -91,13 +94,22 @@ module npu_engine_subsys #(
     wire [31:0] ctrl_wdata;
     wire [31:0] ctrl_rdata;
 
-    // ── AXI4-Lite adapter (6-register map) ───────────────────────────────────
+    // ctrl_lite (250 MHz) request wires
+    wire [6:0]  cl_wr_addr;
+    wire        cl_wr_en;
+    wire [31:0] cl_wr_data;
+    wire [6:0]  cl_rd_addr;
+    wire        cl_rd_en;
+    wire [31:0] cl_rd_data;
+    wire        cl_rd_valid;
+
+    // ── AXI4-Lite adapter (250 MHz domain) ───────────────────────────────────
     npu_engine_ctrl_lite #(
         .ADDR_WIDTH(AXIL_ADDR_WIDTH),
         .DATA_WIDTH(AXIL_DATA_WIDTH)
     ) u_ctrl_lite (
-        .axi_aclk      (aclk),
-        .axi_aresetn   (aresetn),
+        .axi_aclk      (aclk_ctrl),
+        .axi_aresetn   (aresetn_ctrl),
         .s_axil_awaddr (s_axil_awaddr),
         .s_axil_awprot (s_axil_awprot),
         .s_axil_awvalid(s_axil_awvalid),
@@ -117,10 +129,35 @@ module npu_engine_subsys #(
         .s_axil_rresp  (s_axil_rresp),
         .s_axil_rvalid (s_axil_rvalid),
         .s_axil_rready (s_axil_rready),
-        .ctrl_addr (ctrl_addr),
-        .ctrl_we   (ctrl_we),
-        .ctrl_wdata(ctrl_wdata),
-        .ctrl_rdata(ctrl_rdata)
+        .wr_addr (cl_wr_addr),
+        .wr_en   (cl_wr_en),
+        .wr_data (cl_wr_data),
+        .rd_addr (cl_rd_addr),
+        .rd_en   (cl_rd_en),
+        .rd_data (cl_rd_data),
+        .rd_valid(cl_rd_valid)
+    );
+
+    // ── ctrl request CDC: 250 MHz ctrl_lite <-> 100 MHz engine ───────────────
+    npu_ctrl_cdc #(
+        .ADDR_W(7),
+        .DATA_W(32)
+    ) u_ctrl_cdc (
+        .clk_c    (aclk_ctrl),
+        .rst_c_n  (aresetn_ctrl),
+        .wr_addr_c(cl_wr_addr),
+        .wr_en_c  (cl_wr_en),
+        .wr_data_c(cl_wr_data),
+        .rd_addr_c(cl_rd_addr),
+        .rd_en_c  (cl_rd_en),
+        .rd_data_c(cl_rd_data),
+        .rd_valid_c(cl_rd_valid),
+        .clk_e    (aclk),
+        .rst_e_n  (aresetn),
+        .ctrl_addr_e (ctrl_addr),
+        .ctrl_we_e   (ctrl_we),
+        .ctrl_wdata_e(ctrl_wdata),
+        .ctrl_rdata_e(ctrl_rdata)
     );
 
     // ── Chisel program engine (top.sv) ───────────────────────────────────────

@@ -389,7 +389,7 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
     0xC.U -> errInstr,
     0x10.U -> Cat(prefetchCnt, missCnt),
     0x14.U -> progLenReg,
-    // Debug: 0x18 = clct[15:0]; 0x1C = mma_acc[15:0];
+    // Debug: 0x18 = clct[15:0]; 0x1C = mma_acc[15:0] (per-session feeds);
     // 0x20/0x24/0x28 = collector {keep, dat_clct, cnt} trajectory (last 16
     // ticks, 6 bits each, oldest in the low bits of 0x20), frozen at the
     // session's last capture; 0x2C carries entry[15] at [31:26].

@@ -85,6 +85,9 @@ FIFO.
 * `session_reset` input on the engine, pulsed at the frontend start edge.
 * `dbg_*` status/debug outputs (mma out, feed rs1, slot state, collector
   cnt) wired through the frontend for bring-up.
+* Perf counters in ctrl_lite: `0x40` cycles and `0x44` useful K² MACs
+  (latched at done), `0x1C` accepted MMA feeds (cleared at `session_reset`,
+  so it is per-session).
 * `CAPTURE_DELAY = 16` (was 4).
 * Boundary countdown `6K−1` (was `4K−1`).
 

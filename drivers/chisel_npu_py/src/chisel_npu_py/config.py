@@ -35,6 +35,8 @@ FETCH_STATS = "FETCH_STATS"  # prefetches[31:16] | misses[15:0]
 PROG_LEN = "PROG_LEN"        # instruction count (words)
 DBG = "DBG"                  # winState[1:0] | clct captured[15:0]
 DBG_MMA = "DBG_MMA"          # mma instructions accepted
+CYCLES = "CYCLES"            # perf: session cycles, latched at done (RO)
+MACS = "MACS"                # perf: useful K^2 MACs, latched at done (RO)
 
 # ctrl_lite CTRL word bit positions
 CTRL_START_BIT = 0
@@ -110,6 +112,8 @@ def default_config() -> NPUConfig:
             PROG_LEN: 0x14,
             DBG: 0x18,
             DBG_MMA: 0x1C,
+            CYCLES: 0x40,
+            MACS: 0x44,
         },
         nop_wait=2 * k + 8,
     )

@@ -27,11 +27,16 @@ if {![file exists [file join $REPO_ROOT top.sv]]} { puts "ERROR: top.sv missing 
 open_project $PROJ
 
 # ── Add NPU RTL + Chisel top ────────────────────────────────────────────────
-foreach f [list npu_engine_ctrl_lite.v npu_engine_subsys.v hw_platform.v] {
+foreach f [list npu_engine_ctrl_lite.v npu_ctrl_cdc.v npu_engine_subsys.v hw_platform.v] {
     set path [file join $SRC_DIR $f]
     if {[get_files -quiet -of_objects [get_filesets sources_1] $path] eq ""} {
         add_files -norecurse $path
     }
+}
+# Async clock groups for the hand-written 250 MHz <-> 100 MHz ctrl CDC.
+set cdc_xdc [file join $SRC_DIR cdc.xdc]
+if {[get_files -quiet -of_objects [get_filesets constrs_1] $cdc_xdc] eq ""} {
+    add_files -fileset constrs_1 -norecurse $cdc_xdc
 }
 set top_sv [file join $REPO_ROOT top.sv]
 # Force a re-read of a regenerated top.sv: remove then re-add so Vivado does

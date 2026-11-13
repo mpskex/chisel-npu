@@ -33,15 +33,29 @@ class EnginePerfCounterSpec extends AnyFlatSpec {
   it should "reset counters at session_reset" in {
     simulate(new StreamHarness(K = 32)) { dut =>
       StreamSpecUtil.resetSession(dut)
-      StreamSpecUtil.issue(dut, nop)
+      // One useful feed plus the mma.last zero feed, then a vse so the
+      // session drains.  The feed counter (0x1C DBG_MMA) must be per-session
+      // like the cycle/MAC counters, otherwise the driver's perf readback
+      // accumulates across runs.
+      val prog = Seq(
+        vle8(4, NpuSections.SECT_A, 0),
+        vle8(8, NpuSections.SECT_B, 0),
+        mma(0, 4, 8, 0),
+        mmaLast(0, 0, 0, 0),
+        vse32(0, NpuSections.SECT_OUT, 0))
+      prog.foreach(StreamSpecUtil.issue(dut, _))
       StreamSpecUtil.runToDrain(dut)
       val c1 = dut.io.dbg_cycles.peek().litValue
       val m1 = dut.io.dbg_mac.peek().litValue
+      val f1 = dut.io.dbg_mma_acc.peek().litValue
       StreamSpecUtil.resetSession(dut)
       val c2 = dut.io.dbg_cycles.peek().litValue
       val m2 = dut.io.dbg_mac.peek().litValue
+      val f2 = dut.io.dbg_mma_acc.peek().litValue
       assert(c1 > 0 && c2 == 0, s"cycle counter must reset on session_reset (c1=$c1 c2=$c2)")
       assert(m2 == 0, s"MAC counter must reset on session_reset (c1=$c1 m1=$m1 m2=$m2)")
+      assert(f1 == BigInt(2), s"expected 2 feeds (mma + mma.last), got $f1")
+      assert(f2 == 0, s"feed counter must reset on session_reset (f1=$f1 f2=$f2)")
     }
   }
 }

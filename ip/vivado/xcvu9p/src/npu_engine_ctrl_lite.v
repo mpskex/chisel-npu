@@ -1,24 +1,10 @@
-// npu_engine_ctrl_lite.v
-// AXI4-Lite slave exposing the program engine's ctrl register map to the
-// host (replaces the single-register npu_ctrl_lite.v).
+// npu_engine_ctrl_lite.v — AXI4-Lite slave exposing the program engine ctrl
+// register map.  Runs in the 250 MHz axi_aclk domain; the engine-side ctrl
+// requests cross to the 100 MHz fabric via npu_ctrl_cdc.
 //
 // Register map (byte offsets, 32-bit words; word index = addr[ADDR_WIDTH-1:2]):
-//   0x00  CTRL          [0] start (W, edge) [1] done (RO) [2] busy (RO)
-//   0x04  FRAMES        W  (reserved config)
-//   0x08  STATUS        [31] illegal | [30:16] frames_done | [15:0] pc
-//   0x0C  ERR_INFO      W of the faulting instruction (RO)
-//   0x10  FETCH_STATS   [31:16] prefetches | [15:0] misses
-//   0x14  PROG_LEN      W  instruction count
-//   0x18  DBG_CLCT      [15:0] clct pulses captured (RO)
-//   0x1C  DBG_MMA_ACC   [15:0] mma instructions accepted (RO)
-//   0x20..0x2C  collector {keep, dat_clct, cnt} trajectory snapshot (RO):
-//           6-bit entries, 5 per register at [31:26]..[7:2]; 0x2C carries
-//           entry[15] at [31:26]
-//
-// User-side: ctrl_addr[6:0] / ctrl_we / ctrl_wdata / ctrl_rdata drive the
-// Chisel NpuProgramEngineFrontend directly.  The address bus is 7 bits so
-// the 0x20..0x2C debug registers are reachable (a 5-bit bus would let
-// firtool prove `ctrl_addr === 0x20` false and DCE the debug map).
+//   0x00 CTRL · 0x04 FRAMES · 0x08 STATUS · 0x0C ERR_INFO · 0x10 FETCH_STATS
+//   0x14 PROG_LEN · 0x18 DBG_CLCT · 0x1C DBG_MMA_ACC · 0x20..0x2C trajectory
 `timescale 1ns/1ps
 
 module npu_engine_ctrl_lite #(
@@ -49,45 +35,28 @@ module npu_engine_ctrl_lite #(
     output reg                   s_axil_rvalid,
     input  wire                  s_axil_rready,
 
-    // User-side: Chisel engine ctrl interface
-    output       [6:0]            ctrl_addr,
-    output                        ctrl_we,
-    output       [31:0]           ctrl_wdata,
-    input  wire [31:0]            ctrl_rdata
+    // Engine-side requests (cross to the 100 MHz domain in npu_ctrl_cdc)
+    output reg  [6:0]            wr_addr,
+    output reg                   wr_en,
+    output reg  [31:0]           wr_data,
+    output reg  [6:0]            rd_addr,
+    output reg                   rd_en,
+    input  wire [31:0]           rd_data,
+    input  wire                  rd_valid
 );
 
     localparam WR_IDLE = 2'd0, WR_DATA = 2'd1, WR_RESP = 2'd2;
-    localparam RD_IDLE = 2'd0, RD_DATA = 2'd1;
+    localparam RD_IDLE = 2'd0, RD_WAIT = 2'd1, RD_DATA = 2'd2;
 
     reg [1:0]  wr_state;
     reg [ADDR_WIDTH-1:0] aw_addr_r;
     reg [1:0]  rd_state;
-    reg [ADDR_WIDTH-1:0] ar_addr_r;
 
-    // User-side registers (single driver each; see the assigns below).
-    reg [6:0]  w_ctrl_addr;
-    reg        w_ctrl_we;
-    reg [31:0] w_ctrl_wdata;
-    reg [6:0]  r_ctrl_addr;
-
-    // ctrl_addr carries BYTE offsets (matches the Chisel frontend's decode:
-    // 0x00 CTRL, 0x04 FRAMES, 0x08 STATUS, 0x0C ERR_INFO, 0x10 FETCH_STATS,
-    // 0x14 PROG_LEN, 0x18/0x1C debug counters, 0x20..0x2C trajectory).
-    // During the AR-acceptance cycle the address is taken combinationally
-    // from araddr so the rdata latch captures the CURRENT transaction (a
-    // one-cycle lag would return the previous register).
-    wire [6:0] ar_addr_comb = {s_axil_araddr[6:2], 2'b00};
-    wire       ar_sel       = (rd_state == RD_IDLE) &&
-                              s_axil_arvalid && s_axil_arready;
-
-    assign ctrl_addr  = w_ctrl_we ? w_ctrl_addr
-                      : ar_sel    ? ar_addr_comb
-                      :             r_ctrl_addr;
-    assign ctrl_we    = w_ctrl_we;
-    assign ctrl_wdata = w_ctrl_wdata;
+    wire [6:0] aw_word = {s_axil_awaddr[6:2], 2'b00};
+    wire [6:0] ar_word = {s_axil_araddr[6:2], 2'b00};
 
     // -----------------------------------------------------------------------
-    // Write path
+    // Write path: capture the AXI-Lite write into a one-cycle engine request.
     // -----------------------------------------------------------------------
     always @(posedge axi_aclk) begin
         if (!axi_aresetn) begin
@@ -96,11 +65,11 @@ module npu_engine_ctrl_lite #(
             s_axil_wready  <= 1'b0;
             s_axil_bvalid  <= 1'b0;
             s_axil_bresp   <= 2'b00;
-            w_ctrl_addr    <= 7'd0;
-            w_ctrl_we      <= 1'b0;
-            w_ctrl_wdata   <= 32'd0;
+            wr_addr        <= 7'd0;
+            wr_en          <= 1'b0;
+            wr_data        <= 32'd0;
         end else begin
-            w_ctrl_we <= 1'b0;  // default: no write pulse
+            wr_en <= 1'b0;  // default: no write pulse
 
             case (wr_state)
                 WR_IDLE: begin
@@ -114,9 +83,9 @@ module npu_engine_ctrl_lite #(
                             s_axil_wready <= 1'b0;
                             s_axil_bvalid <= 1'b1;
                             s_axil_bresp  <= 2'b00;
-                            w_ctrl_addr   <= {s_axil_awaddr[6:2], 2'b00};
-                            w_ctrl_we     <= 1'b1;
-                            w_ctrl_wdata  <= s_axil_wdata;
+                            wr_addr       <= aw_word;
+                            wr_en         <= 1'b1;
+                            wr_data       <= s_axil_wdata;
                         end else begin
                             wr_state <= WR_DATA;
                         end
@@ -129,9 +98,9 @@ module npu_engine_ctrl_lite #(
                         s_axil_wready <= 1'b0;
                         s_axil_bvalid <= 1'b1;
                         s_axil_bresp  <= 2'b00;
-                        w_ctrl_addr   <= {aw_addr_r[6:2], 2'b00};
-                        w_ctrl_we     <= 1'b1;
-                        w_ctrl_wdata  <= s_axil_wdata;
+                        wr_addr       <= {aw_addr_r[6:2], 2'b00};
+                        wr_en         <= 1'b1;
+                        wr_data       <= s_axil_wdata;
                     end
                 end
 
@@ -150,7 +119,7 @@ module npu_engine_ctrl_lite #(
     end
 
     // -----------------------------------------------------------------------
-    // Read path
+    // Read path: issue the request, wait for the CDC ack, then return data.
     // -----------------------------------------------------------------------
     always @(posedge axi_aclk) begin
         if (!axi_aresetn) begin
@@ -159,21 +128,28 @@ module npu_engine_ctrl_lite #(
             s_axil_rvalid  <= 1'b0;
             s_axil_rdata   <= {DATA_WIDTH{1'b0}};
             s_axil_rresp   <= 2'b00;
+            rd_addr        <= 7'd0;
+            rd_en          <= 1'b0;
         end else begin
+            rd_en <= 1'b0;  // default: no read request pulse
+
             case (rd_state)
                 RD_IDLE: begin
                     s_axil_arready <= 1'b1;
                     if (s_axil_arvalid && s_axil_arready) begin
-                        ar_addr_r      <= s_axil_araddr;
                         s_axil_arready <= 1'b0;
-                        rd_state       <= RD_DATA;
-                        s_axil_rvalid  <= 1'b1;
-                        s_axil_rresp   <= 2'b00;
-                        r_ctrl_addr    <= {s_axil_araddr[6:2], 2'b00};
-                        // Latch the engine read in the SAME cycle: ctrl_addr
-                        // is driven combinationally from araddr here (ar_sel),
-                        // so the captured value is the CURRENT register.
-                        s_axil_rdata   <= ctrl_rdata;
+                        rd_addr        <= ar_word;
+                        rd_en          <= 1'b1;
+                        rd_state       <= RD_WAIT;
+                    end
+                end
+
+                RD_WAIT: begin
+                    if (rd_valid) begin
+                        s_axil_rdata  <= rd_data;
+                        s_axil_rvalid <= 1'b1;
+                        s_axil_rresp  <= 2'b00;
+                        rd_state      <= RD_DATA;
                     end
                 end
 

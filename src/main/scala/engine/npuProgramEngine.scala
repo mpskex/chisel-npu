@@ -509,22 +509,16 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   val issueMmaVs3  = WireDefault(0.U(5.W))
   val issueMmaLast = WireDefault(false.B)
   val issueMmaTag  = WireDefault(0.U(TAG_IDX.W))
-  // VR-store snapshot pipelined one cycle: the dmaQ store-data mux is fed by
-  // this flop, not by the RF VR read port (the 200 MHz critical path).  The
-  // issue-cycle value is frozen here, so the WAR window stays closed.
-  val vrStoreSnap      = Reg(Vec(K, UInt((4 * N).W)))
-  val vrStoreSnapTail  = Reg(UInt(log2Ceil(DMAQ_DEPTH).W))
-  val vrStoreSnapValid = RegInit(false.B)
-  vrStoreSnapValid := false.B
-  when (vrStoreSnapValid) {
-    for (lane <- 0 until K) dmaQ(vrStoreSnapTail).storeData(lane) := vrStoreSnap(lane)
-    dmaQ(vrStoreSnapTail).dataReady := true.B
-  }
-  when (issueVrStore) {
-    for (lane <- 0 until K) vrStoreSnap(lane) := rf.io.vr_r_data(0)(lane)
-    vrStoreSnapTail := dmaQTail
-    vrStoreSnapValid := true.B
-  }
+  // VR-store enqueue deferred one cycle: the issue-cycle RF VR read is
+  // captured into `vrPending` (register-fed, closing the same 200 MHz RF-read
+  // critical path as the earlier vrStoreSnap flop), and the whole queue entry
+  // is written through the NORMAL dmaQTail enqueue port next cycle.  This
+  // keeps a single dynamic-index write port on dmaQ: a second port (the old
+  // vrStoreSnapTail write) reproducibly segfaulted the Vivado 2025.2 legacy
+  // router in HARTExpander::join2Comp.
+  val vrPending      = Reg(new DmaEntry)
+  val vrPendingValid = RegInit(false.B)
+  vrPendingValid := false.B
   val feedValid    = RegNext(issueMmaV,    false.B)
   val feedSlot     = RegNext(issueMmaSlot, 0.U)
   val feedTag      = RegNext(issueMmaTag,  0.U)
@@ -662,7 +656,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     // Re-check readiness at the issue (same cycle): slotsReadyR is registered,
     // so the slotsReady gate above is one cycle stale.  Strict program-order
     // firstForUnit covers the mma.last ordering; no boundary gate.
-    issueSel(s) := slotsReadyR(s) && slotUnitOk(s) &&
+    issueSel(s) := slotsReadyR(s) && slotUnitOk(s) && !vrPendingValid &&
       !slots(s).issued && !slots(s).done && firstForUnit(s)
   }
 
@@ -718,36 +712,60 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
         val isVrStore = isStore && slots(s).memWidth === 2.U
         issueVrStore   := isVrStore
         issueVrStoreVd := slots(s).rd
-        dmaQ(dmaQTail).valid := true.B
-        dmaQ(dmaQTail).inFlight := false.B
-        dmaQ(dmaQTail).tag := slots(s).tag
-        dmaQ(dmaQTail).dir := Mux(isStore, 1.U, 0.U)
-        dmaQ(dmaQTail).dmaWidth := slots(s).memWidth
-        dmaQ(dmaQTail).rfAddr := slots(s).rd
-        dmaQ(dmaQTail).l3Addr := MuxLookup(slots(s).sect, 0.U(32.W))(Seq(
+        val dmaL3 = MuxLookup(slots(s).sect, 0.U(32.W))(Seq(
           NpuSections.SECT_A.U(2.W)     -> NpuSections.A.U(32.W),
           NpuSections.SECT_B.U(2.W)     -> NpuSections.B.U(32.W),
           NpuSections.SECT_ACCUM.U(2.W) -> NpuSections.ACCUM.U(32.W),
           NpuSections.SECT_OUT.U(2.W)   -> NpuSections.OUT.U(32.W),
         )) + slots(s).off
         // Snapshot the vse's VX read mask for the tag-reader clear at done.
-        dmaQ(dmaQTail).rdMask := readSlotsL(slots(s).family, slots(s).rd,
+        val dmaMask = readSlotsL(slots(s).family, slots(s).rd,
           slots(s).rs1, slots(s).rs2, slots(s).memWidth, slots(s).vs3)
-        // VR[vd] is frozen into vrStoreSnap this cycle (the RF read port 0 is
-        // muxed to this store's address) and written into the queue entry next
-        // cycle, so the store-data mux is register-fed.  The entry is marked
-        // not-ready until then.  VX/VE stores keep the normal DMA RF read path.
-        dmaQ(dmaQTail).storeDataValid := isVrStore
-        dmaQ(dmaQTail).dataReady := !isVrStore
-        for (lane <- 0 until K) {
-          dmaQ(dmaQTail).storeData(lane) := 0.U
+        when (isVrStore) {
+          // Capture the full entry plus the issue-cycle RF VR read.  The entry
+          // is enqueued through the normal tail port next cycle (issue is
+          // stalled while vrPendingValid), so storeData is register-fed.
+          vrPending.valid := true.B
+          vrPending.inFlight := false.B
+          vrPending.tag := slots(s).tag
+          vrPending.dir := 1.U
+          vrPending.dmaWidth := slots(s).memWidth
+          vrPending.rfAddr := slots(s).rd
+          vrPending.l3Addr := dmaL3
+          vrPending.rdMask := dmaMask
+          vrPending.storeDataValid := true.B
+          vrPending.dataReady := true.B
+          for (lane <- 0 until K) vrPending.storeData(lane) := rf.io.vr_r_data(0)(lane)
+          vrPendingValid := true.B
+        } .otherwise {
+          dmaQ(dmaQTail).valid := true.B
+          dmaQ(dmaQTail).inFlight := false.B
+          dmaQ(dmaQTail).tag := slots(s).tag
+          dmaQ(dmaQTail).dir := Mux(isStore, 1.U, 0.U)
+          dmaQ(dmaQTail).dmaWidth := slots(s).memWidth
+          dmaQ(dmaQTail).rfAddr := slots(s).rd
+          dmaQ(dmaQTail).l3Addr := dmaL3
+          dmaQ(dmaQTail).rdMask := dmaMask
+          dmaQ(dmaQTail).storeDataValid := false.B
+          dmaQ(dmaQTail).dataReady := true.B
+          for (lane <- 0 until K) dmaQ(dmaQTail).storeData(lane) := 0.U
+          dmaQTail := dmaQTail + 1.U
         }
-        // P2: the DMA slot retires at dmaQ enqueue; its tag carries the
-        // completion obligation (freed at dmaDoneHead).
+        // P2: the DMA slot retires at issue; its tag carries the completion
+        // obligation (freed at dmaDoneHead), including for the deferred VR
+        // entry.
         slots(s).done := true.B
-        dmaQTail := dmaQTail + 1.U
       } .otherwise { slots(s).done := true.B }   // DispatchUnit.NONE: retire defensively
     }
+  }
+
+  // Deferred VR-store enqueue (one cycle after issue).  issueSel is gated by
+  // !vrPendingValid and fillPush likewise, so this is the only writer of
+  // dmaQ(dmaQTail) in this cycle.
+  when (vrPendingValid) {
+    dmaQ(dmaQTail) := vrPending
+    dmaQTail := dmaQTail + 1.U
+    vrPendingValid := false.B
   }
 
   // ---- The MMALU feed + the vd FIFO enq at the feed ----
@@ -1042,6 +1060,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     // Hold the tail so an enqueue that races the flush cannot advance it past
     // the head (that desyncs the occupancy count permanently).
     dmaQTail  := dmaQTail
+    vrPendingValid := false.B
     dmaQCount := 0.U
     fifoHead  := fifoTail
     fifoCount := 0.U
@@ -1103,6 +1122,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     wHead       := wTail
     dmaQHead    := dmaQTail
     dmaQTail    := dmaQTail
+    vrPendingValid := false.B
     dmaQCount   := 0.U
     fifoHead    := fifoTail
     fifoCount   := 0.U
@@ -1149,7 +1169,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   val dmaIssueAny = (0 until W).map(s => issueSel(s) && slots(s).unit === DispatchUnit.DMA)
     .reduce(_ || _)
   val fillPending = RegInit(false.B)
-  val fillPush = io.fetch_fill_req && !fillPending && !dmaQFull && !dmaIssueAny
+  val fillPush = io.fetch_fill_req && !fillPending && !dmaQFull && !dmaIssueAny && !vrPendingValid
   when (fillPush) {
     dmaQ(dmaQTail).valid := true.B
     dmaQ(dmaQTail).inFlight := false.B
@@ -1347,6 +1367,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   // snapshot no longer exists).
   when (mmalu.io.clct) { trajSnap := traj }
   when (io.session_reset) {
+    mmaAccCnt := 0.U
     cycleCnt := 0.U
     macCnt   := 0.U
   }.otherwise {

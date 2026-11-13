@@ -18,8 +18,11 @@ from .config import (
     CTRL,
     CTRL_DONE_BIT,
     CTRL_START_BIT,
+    CYCLES,
+    DBG_MMA,
     ERR_INFO,
     FETCH_STATS,
+    MACS,
     PROG_LEN,
     STATUS,
     NPUConfig,
@@ -61,6 +64,7 @@ class ChiselNPU:
         self.cfg.validate()
         self.dev = _dev if _dev is not None else XDMADevice(cfg=self.cfg)
         self.timeout_s = timeout_s
+        self.last_perf: dict = {}
 
     # ── the whole driver ────────────────────────────────────────────────────
 
@@ -114,12 +118,34 @@ class ChiselNPU:
             raise NPUError(
                 f"engine finished at pc={status & 0xFFFF}, expected {len(words) - 1}")
 
+        # ── instruction-per-cycle performance ──────────────────────────────
+        # 0x40 CYCLES / 0x44 MACS are latched at done; 0x1C DBG_MMA counts
+        # accepted MMA feeds (incl. mma.last) for the session (cleared at
+        # session start).  `ipc` is literal
+        # instructions/cycle; `feeds_per_cycle` is the repo's drain-inclusive
+        # metric (CrossMatmulPipelineSpec).
+        cycles = dev.ctrl_read_reg(cfg.ctrl[CYCLES])
+        macs = dev.ctrl_read_reg(cfg.ctrl[MACS])
+        mma_feeds = dev.ctrl_read_reg(cfg.ctrl[DBG_MMA]) & 0xFFFF
+        n_instr = len(words)
+        perf = {
+            "instructions": n_instr,
+            "cycles": cycles,
+            "macs": macs,
+            "mma_feeds": mma_feeds,
+            "ipc": (n_instr / cycles) if cycles else 0.0,
+            "feeds_per_cycle": (mma_feeds / cycles) if cycles else 0.0,
+            "macs_per_cycle": (macs / cycles) if cycles else 0.0,
+        }
+        self.last_perf = perf
+
         # read everything back (same type as the inputs) + OUT
         result: dict = {}
         for name, buf in memories.items():
             result[name] = self._read_section(name, buf)
         result["OUT"] = self._read_section(
             "OUT", np.empty(cfg.sections["OUT"].window // 4, dtype=np.int32))
+        result["perf"] = perf
         return result
 
     # ── internals ───────────────────────────────────────────────────────────
