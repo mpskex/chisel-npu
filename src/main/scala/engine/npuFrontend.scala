@@ -150,12 +150,25 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
   val startPrev = RegNext(startReg, init = false.B)
   val startEdge = startReg && !startPrev
 
+  // First-burst pre-warm (Phase P): writing PROG_LEN (0x14) arms a warm fetch
+  // of the first burst during the host's PROG_LEN→START gap, so the first
+  // demand fetch after START hits the warm cache (zero demand misses).
+  // Best-effort: a START that races the warm aborts it (startEdge clears
+  // warmValid) and the session demand-fills as usual.
+  val warmValid = RegInit(false.B)
+  val warmLine  = RegInit(0.U(12.W))
+  val progLenWrite = io.ctrl_we && io.ctrl_addr === 0x14.U
+
   // clear the core's streaming state at every session start
   core.io.session_reset := startEdge
 
   when (io.ctrl_we && io.ctrl_addr === 0x0.U)  { startReg := io.ctrl_wdata(0) }
   when (io.ctrl_we && io.ctrl_addr === 0x4.U)  { framesReg := io.ctrl_wdata(15, 0) }
-  when (io.ctrl_we && io.ctrl_addr === 0x14.U) { progLenReg := io.ctrl_wdata(15, 0) }
+  when (progLenWrite) {
+    progLenReg := io.ctrl_wdata(15, 0)
+    warmValid  := true.B
+    warmLine   := 0.U
+  }
   when (startEdge) { doneReg := false.B; perfCycles := 0.U; perfMacs := 0.U }
 
   // ==========================================================================
@@ -233,6 +246,14 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
   // Burst length: 4 lines unless the tail would read past lastLine.
   val fillBeats = Mux((fillLine +& 4.U) <= lastLine, 4.U(3.W), 1.U(3.W))
 
+  // Warm burst length: the first burst is min(4, lastLine) lines — 0 for an
+  // empty program (the warm must never issue a 0-beat DMA request, which would
+  // underflow the burst count in the DMA engine and loop forever).
+  val warmBeats = Mux(lastLine >= 4.U, 4.U(3.W), lastLine(2, 0))
+  // The beats actually issued this burst: warm fills use warmBeats, the
+  // demand/prefetch path uses fillBeats (both are 1..4, never 0).
+  val curBeats = Mux(warmValid, warmBeats, fillBeats)
+
   // Prefetch target is `fillNext` (the line after the last committed burst).
   val prefetchValid = fillNext < lastLine && !(
     (lineValid(fillNext(2, 0) ## 0.U(1.W)) && lineTag(fillNext(2, 0) ## 0.U(1.W)) === fillNext(11, 3)) ||
@@ -246,27 +267,42 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
   val doPrefetch = fillState === FillState.IDLE && running && !demandFill &&
                    !ifqFull && prefetchValid && leadOk
 
-  val startFill = (fillState === FillState.IDLE) && (demandFill || doPrefetch)
+  // A warm is armed (warmValid) and has at least one line to fetch.
+  val warmReady = warmValid && warmBeats =/= 0.U
+  // Target line: demand fills use the fetch line, warm fills use warmLine,
+  // prefetches use the post-burst fillNext.
+  val fillTarget = Mux(demandFill, fL, Mux(warmReady, warmLine, fillNext(11, 0)))
 
-  // Config/start writes invalidate the cache.  NOTE: keep this in a single
-  // conditional chain with the line commit — an isolated `when (...) := false`
-  // next to the commit's `:= true` was merged by firtool into a set-only OR,
-  // silently dropping the invalidation from top.sv (stale-line execution on
-  // silicon).
+  val startFill = (fillState === FillState.IDLE) &&
+    (demandFill || doPrefetch || warmReady)
+
+  // Config writes invalidate the cache.  A CTRL (0x0) START write must NOT
+  // invalidate: the cache survives the start edge so a warmed first burst is
+  // demand-hittable.  NOTE: keep this in a single conditional chain with the
+  // line commit — an isolated `when (...) := false` next to the commit's
+  // `:= true` was merged by firtool into a set-only OR, silently dropping the
+  // invalidation from top.sv (stale-line execution on silicon).
   val cacheInvalidate = io.ctrl_we &&
-    (io.ctrl_addr === 0x0.U || io.ctrl_addr === 0x4.U || io.ctrl_addr === 0x14.U)
+    (io.ctrl_addr === 0x4.U || io.ctrl_addr === 0x14.U)
+
+  // Abort any in-flight fill when the host re-programs PROG_LEN.
+  when (progLenWrite) {
+    fillState := FillState.IDLE
+    fillBeat  := 0.U
+  }
 
   when (startFill) {
     fillState := FillState.REQ
-    fillLine  := Mux(demandFill, fL, fillNext(11, 0))
+    fillLine  := fillTarget
     fillBeat  := 0.U
-    when (demandFill) { missCnt := missCnt + 1.U }
-    .otherwise        { prefetchCnt := prefetchCnt + 1.U }
+    when (demandFill)      { missCnt := missCnt + 1.U }
+    .elsewhen (warmReady)  { /* counted on the warm's last beat */ }
+    .otherwise             { prefetchCnt := prefetchCnt + 1.U }
   }
 
   core.io.fetch_fill_req   := fillState === FillState.REQ
   core.io.fetch_fill_addr  := NpuSections.CODE_BASE.U(32.W) + (fillLine << 6.U)
-  core.io.fetch_fill_beats := fillBeats
+  core.io.fetch_fill_beats := curBeats
 
   // Each beat commits into line `fillLine + fillBeat` (a burst writes
   // `fillBeats` different sets, so tag/set/victim/mru come from that absolute
@@ -294,7 +330,9 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
   }
   when (lastBeat) {
     fillState := FillState.DRAIN
-    fillNext  := fillLine +& fillBeats
+    fillNext  := fillLine +& curBeats
+    when (warmValid) { prefetchCnt := prefetchCnt + 1.U }
+    warmValid := false.B
   }
 
   when (fillState === FillState.DRAIN && !core.io.fetch_busy) {
@@ -347,7 +385,7 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
         ifqCount      := 0.U
         fillState     := FillState.IDLE
         fillBeat      := 0.U
-        fillNext      := 0.U
+        warmValid     := false.B
         runState      := RunState.RUN_RUN
       }
     }

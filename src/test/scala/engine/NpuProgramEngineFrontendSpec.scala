@@ -331,7 +331,7 @@ class NpuProgramEngineFrontendSpec extends AnyFlatSpec {
     }
   }
 
-  "NpuProgramEngineFrontend" should "re-fill after start invalidation with stable misses" in {
+  "NpuProgramEngineFrontend" should "PROG_LEN invalidates and re-warms; a second start reuses the cache" in {
     simulate(new FrontendSpecHarness(K = 16)) { dut =>
       val k = 16
       val a = Array.tabulate(k)(j => j + 1)
@@ -351,13 +351,17 @@ class NpuProgramEngineFrontendSpec extends AnyFlatSpec {
       waitDone(dut)
       val stats1 = ctrlRead(dut, 0x10)
 
-      start(dut)   // start invalidates the cache (program may have changed)
+      // Re-writing PROG_LEN invalidates the cache and re-warms the first burst;
+      // a second start must hit the warm cache (zero new demand misses).
+      ctrlWrite(dut, 0x14, prog.length)
+      dut.clock.step(200)   // host gap: let the warm complete
+      start(dut)
       waitDone(dut)
       val stats2 = ctrlRead(dut, 0x10)
       val misses1 = stats1 & 0xFFFF
       val misses2 = stats2 & 0xFFFF
-      assert(misses2 > misses1,
-        s"each run should re-demand-fill the program lines: run1=$misses1 run2=$misses2")
+      assert(misses2 == misses1,
+        s"second run should hit the warm cache: run1=$misses1 run2=$misses2")
     }
   }
 
@@ -461,6 +465,62 @@ class NpuProgramEngineFrontendSpec extends AnyFlatSpec {
       waitDone(dut, maxCycles = 20000)
       val st = ctrlRead(dut, 0x8)
       assert(((st >> 31) & 1) == 1 && (st & 0xFFFF) == 64, s"illegal at pc 64, got $st")
+    }
+  }
+
+  "NpuProgramEngineFrontend" should "pre-warm the first burst on PROG_LEN" in {
+    simulate(new FrontendSpecHarness(K = 16, readLatency = 40)) { dut =>
+      val prog = Seq.fill(256)(nop)
+      preloadInstrs(dut, prog)
+      val s0 = ctrlRead(dut, 0x10)
+      ctrlWrite(dut, 0x14, prog.length)
+      dut.clock.step(200)                    // host gap before START
+      val s1 = ctrlRead(dut, 0x10)
+      val fills = (((s1 >> 16) & 0xFFFF) - ((s0 >> 16) & 0xFFFF) & 0xFFFF) +
+                  ((s1 & 0xFFFF) - (s0 & 0xFFFF) & 0xFFFF)
+      assert(fills == 1, s"PROG_LEN should issue one warm burst, got $fills")
+      assert(dut.io.dbg_run.peek().litValue == 0, "warm must not start the session")
+      assert(dut.io.dbg_pc.peek().litValue == 0, "warm must not issue instructions")
+
+      val s2 = ctrlRead(dut, 0x10)
+      start(dut)
+      val cycles = waitDone(dut, maxCycles = 20000)
+      val s3 = ctrlRead(dut, 0x10)
+      val missDelta = ((s3 & 0xFFFF) - (s2 & 0xFFFF)) & 0xFFFF
+      assert(missDelta == 0, s"line 0 should hit the warm cache, got $missDelta misses")
+      assert(cycles < 20000, "session did not complete")
+    }
+  }
+
+  "NpuProgramEngineFrontend" should "warm the new CODE after a program change" in {
+    simulate(new FrontendSpecHarness(K = 16, readLatency = 40)) { dut =>
+      val badA = 0x03 | (0 << 7) | (2 << 12) | (1 << 15) | (2 << 20)
+      val progA = Seq.fill(32)(nop) :+ badA
+      preloadInstrs(dut, progA)
+      ctrlWrite(dut, 0x14, progA.length)
+      start(dut)
+      waitDone(dut, maxCycles = 20000)
+
+      val badB = 0x03 | (0 << 7) | (2 << 12) | (2 << 15) | (2 << 20)   // mma.reset, rs1=2 (illegal, distinguishable)
+      val progB = Seq.fill(8)(nop) :+ badB   // line 0 of B differs
+      preloadInstrs(dut, progB)
+      ctrlWrite(dut, 0x14, progB.length)
+      start(dut)
+      waitDone(dut, maxCycles = 20000)
+      val err = ctrlRead(dut, 0xC)
+      assert(err == (badB.toLong & 0xFFFFFFFFL), s"warm read stale CODE: $err")
+    }
+  }
+
+  "NpuProgramEngineFrontend" should "start immediately after PROG_LEN without a warm" in {
+    simulate(new FrontendSpecHarness(K = 16, readLatency = 40)) { dut =>
+      val prog = Seq.fill(64)(nop)
+      preloadInstrs(dut, prog)
+      ctrlWrite(dut, 0x14, prog.length)   // no extra gap
+      start(dut)
+      waitDone(dut, maxCycles = 20000)
+      val st = ctrlRead(dut, 0x8)
+      assert(((st >> 31) & 1) == 0 && (st & 0xFFFF) == prog.length - 1, s"race start, got $st")
     }
   }
 }
