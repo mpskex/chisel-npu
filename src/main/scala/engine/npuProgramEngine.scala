@@ -126,11 +126,13 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     val dbg_mac    = Output(UInt(32.W))  // useful K² MACs (excl. mma.last)
 
     // ---- Instruction-line fetch (shared DMA; frontend issues fills) ----
-    val fetch_fill_req  = Input(Bool())
-    val fetch_fill_addr = Input(UInt(32.W))
-    val fetch_fill_done = Output(Bool())     // line valid pulse (DMA INSTRW)
-    val fetch_fill_data = Output(UInt(512.W))
-    val fetch_busy      = Output(Bool())     // DMA busy (core + fill)
+    val fetch_fill_req   = Input(Bool())
+    val fetch_fill_addr  = Input(UInt(32.W))
+    val fetch_fill_beats = Input(UInt(3.W))   // burst length (1..4)
+    val fetch_fill_valid = Output(Bool())     // beat valid pulse (DMA INSTRW)
+    val fetch_fill_last  = Output(Bool())     // last beat of the burst
+    val fetch_fill_data  = Output(UInt(512.W))
+    val fetch_busy       = Output(Bool())     // DMA busy (core + fill)
 
     // ---- AXI4 master (128-bit, same shape as NpuDmaEngine) ----
     val m_axi_awaddr  = Output(UInt(32.W))
@@ -216,6 +218,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     val dmaWidth   = UInt(2.W)
     val rfAddr     = UInt(5.W)
     val l3Addr     = UInt(32.W)
+    val beats      = UInt(3.W)      // fetch-fill burst length (dir=3 only)
     // The vse's VX read mask captured at issue: the window slot retires at
     // issue (P2), so the completion can no longer read it back off the slot to
     // clear the reader tag bits.  (Unused for vle/fetch fills.)
@@ -1147,6 +1150,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   dma.io.req_width  := dmaHead.dmaWidth
   dma.io.req_rf_addr := dmaHead.rfAddr
   dma.io.req_l3_addr := dmaHead.l3Addr
+  dma.io.req_beats  := dmaHead.beats
   // A VR store carries the snapshot latched at its issue (WAR-safe); VX/VE
   // stores keep the normal combinational RF read path.
   dma.io.req_store_data_valid := dmaHead.storeDataValid
@@ -1155,9 +1159,10 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   val dmaAccept = dma.io.req_ready && dmaHead.valid && !dmaHead.inFlight
   when (dmaAccept) { dmaHead.inFlight := true.B }
 
-  io.fetch_fill_done := dma.io.instr_valid && dmaHead.valid && dmaHead.inFlight && dmaHead.dir === 3.U
-  io.fetch_fill_data := dma.io.instr_out
-  io.fetch_busy      := dma.io.busy
+  io.fetch_fill_valid := dma.io.instr_valid && dmaHead.valid && dmaHead.inFlight && dmaHead.dir === 3.U
+  io.fetch_fill_last  := io.fetch_fill_valid && dma.io.instr_last
+  io.fetch_fill_data  := dma.io.instr_out
+  io.fetch_busy       := dma.io.busy
 
   val dmaDoneHead = dma.io.done && dmaHead.valid && dmaHead.inFlight
   when (dmaDoneHead) {
@@ -1185,6 +1190,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     dmaQ(dmaQTail).dmaWidth := 0.U
     dmaQ(dmaQTail).rfAddr := 0.U
     dmaQ(dmaQTail).l3Addr := io.fetch_fill_addr
+    dmaQ(dmaQTail).beats := io.fetch_fill_beats
     dmaQ(dmaQTail).rdMask := 0.U
     dmaQ(dmaQTail).storeDataValid := false.B
     dmaQ(dmaQTail).dataReady := true.B
@@ -1192,7 +1198,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     dmaQTail  := dmaQTail + 1.U
     fillPending := true.B
   }
-  when (io.fetch_fill_done) { fillPending := false.B }
+  when (io.fetch_fill_last) { fillPending := false.B }
 
   // Net DMA-queue occupancy: a DMA issue (or a fetch fill) and a head
   // completion can collide, and both advance their pointers.  Two independent

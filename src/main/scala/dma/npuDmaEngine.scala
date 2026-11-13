@@ -40,7 +40,7 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
   val BEATS_VX = ceilDiv(VX_BYTES, DBYTES)   // 1
   val BEATS_VE = ceilDiv(VE_BYTES, DBYTES)   // 1
   val BEATS_VR = ceilDiv(VR_BYTES, DBYTES)   // 2
-  val MAX_BEATS = math.max(BEATS_VR, math.max(BEATS_VE, BEATS_VX))
+  val MAX_BEATS = math.max(4, math.max(BEATS_VR, math.max(BEATS_VE, BEATS_VX)))
   val SZ = log2Ceil(DW / 8)         // 6 (awsize)
 
   val VX_ADDR = log2Ceil(K)         // 5 bits (L = K = 32)
@@ -57,6 +57,7 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
     val req_width = Input(UInt(2.W))    // 0 = VX, 1 = VE, 2 = VR (ACCUM/fetch: VR)
     val req_rf_addr = Input(UInt(5.W))  // VX/VE/VR register index
     val req_l3_addr = Input(UInt(32.W)) // absolute DDR address (aligned)
+    val req_beats   = Input(UInt(3.W))  // beats per request (1..4; dir=3 only)
     val req_store_data_valid = Input(Bool())
     val req_store_data = Input(Vec(K, UInt((4 * N).W)))
     val busy      = Output(Bool())
@@ -66,9 +67,10 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
     val acc_valid = Output(Bool())
     val acc_out   = Output(Vec(K, UInt((4 * N).W)))
 
-    // ---- Instruction line buffer (dir=3; valid one cycle before done) ----
+    // ---- Instruction line buffer (dir=3; beats stream back, one per cycle) ----
     val instr_valid = Output(Bool())
     val instr_out   = Output(UInt(DW.W))
+    val instr_last  = Output(Bool())     // asserted on the last beat of the burst
 
     // ---- RF write ports (L2R; one pulses per request) ----
     val rf_w_vx_en   = Output(Bool())
@@ -125,10 +127,12 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
   val reqWidth = RegInit(0.U(2.W))
   val reqRfAddr = RegInit(0.U(5.W))
   val reqL3Addr = RegInit(0.U(32.W))
+  val reqBeats  = RegInit(1.U(3.W))     // latched burst length (dir=3)
   val reqStoreDataValid = RegInit(false.B)
   val reqStoreData = RegInit(VecInit(Seq.fill(K)(0.U((4 * N).W))))
 
   val beatCnt  = RegInit(0.U(log2Ceil(MAX_BEATS + 1).W))
+  val instrBeat = RegInit(0.U(3.W))     // dir=3 INSTRW beat index 0..reqBeats-1
   val buf      = RegInit(VecInit(Seq.fill(MAX_BEATS)(0.U(DW.W))))
   val timeoutCnt = RegInit(0.U(16.W))
   val awDone   = RegInit(false.B)
@@ -141,11 +145,12 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
   val bufWidth  = RegInit(0.U(2.W))
   val bufRfAddr = RegInit(0.U(5.W))
   val bufL3Addr = RegInit(0.U(32.W))
+  val bufBeats  = RegInit(1.U(3.W))     // buffered burst length (dir=3)
   val bufStoreDataValid = RegInit(false.B)
   val bufStoreData = RegInit(VecInit(Seq.fill(K)(0.U((4 * N).W))))
 
   def beatsOf(w: UInt): UInt =
-    Mux(reqDir === 3.U, 1.U,
+    Mux(reqDir === 3.U, reqBeats,
       MuxLookup(w, BEATS_VX.U)(Seq(
         0.U -> BEATS_VX.U, 1.U -> BEATS_VE.U, 2.U -> BEATS_VR.U)))
 
@@ -158,6 +163,7 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
   io.done       := false.B
   io.acc_valid  := false.B
   io.instr_valid := false.B
+  io.instr_last  := false.B
   io.rf_w_vx_en := false.B
   io.rf_w_ve_en := false.B
   io.rf_w_vr_en := false.B
@@ -285,10 +291,12 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
         reqWidth  := bufWidth
         reqRfAddr := bufRfAddr
         reqL3Addr := bufL3Addr
+        reqBeats  := bufBeats
         reqStoreDataValid := bufStoreDataValid
         for (lane <- 0 until K) reqStoreData(lane) := bufStoreData(lane)
         bufValid  := false.B
         beatCnt   := 0.U
+        instrBeat := 0.U
         timeoutCnt := 0.U
         awDone    := false.B
         wtoCnt    := 0.U
@@ -299,9 +307,11 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
         reqWidth  := Mux(io.req_dir === 2.U, 2.U, io.req_width)
         reqRfAddr := io.req_rf_addr
         reqL3Addr := io.req_l3_addr
+        reqBeats  := io.req_beats
         reqStoreDataValid := io.req_store_data_valid
         for (lane <- 0 until K) reqStoreData(lane) := io.req_store_data(lane)
         beatCnt   := 0.U
+        instrBeat := 0.U
         timeoutCnt := 0.U
         awDone    := false.B
         wtoCnt    := 0.U
@@ -361,10 +371,15 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
 
     is (DmaState.INSTRW) {
       io.instr_valid := true.B
-      // The full 64-byte fetch beat (16 instruction words).  The fetch address
-      // is 64-byte aligned, so no rdOff quarter select is needed for dir=3.
-      io.instr_out := buf(0)
-      state := DmaState.DONE
+      // Stream the burst beats back one per cycle.  The fetch address is
+      // 64-byte aligned, so no rdOff quarter select is needed for dir=3.
+      io.instr_out  := buf(instrBeat)
+      io.instr_last := instrBeat === (reqBeats - 1.U)
+      when (instrBeat === (reqBeats - 1.U)) {
+        state := DmaState.DONE
+      } .otherwise {
+        instrBeat := instrBeat + 1.U
+      }
     }
 
     is (DmaState.WAW) {
@@ -452,6 +467,7 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
     bufWidth  := Mux(io.req_dir === 2.U, 2.U, io.req_width)
     bufRfAddr := io.req_rf_addr
     bufL3Addr := io.req_l3_addr
+    bufBeats  := io.req_beats
     bufStoreDataValid := io.req_store_data_valid
     for (lane <- 0 until K) bufStoreData(lane) := io.req_store_data(lane)
   }

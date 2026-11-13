@@ -203,14 +203,9 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
     (lineData(Mux(fHit1, fSet ## 1.U(1.W), fSet ## 0.U(1.W))) >> (fpc(3, 0) << 5.U))(31, 0),
     0.U)
 
-  // Prefetch target: the line after the one being fetched (if any word in range)
   // lastLine is the one-past-the-end line index (13 bits, 0..4096); compare the
-  // line index directly so the 16-bit `(nextFL << 4)` can never overflow.
+  // line index directly so the 16-bit line-index arithmetic can never overflow.
   val lastLine = (progLenReg +& 15.U) >> 4
-  val nextFL    = fL + 1.U
-  val prefetchValid = nextFL < lastLine && !(
-    (lineValid(nextFL(2, 0) ## 0.U(1.W)) && lineTag(nextFL(2, 0) ## 0.U(1.W)) === nextFL(11, 3)) ||
-    (lineValid(nextFL(2, 0) ## 1.U(1.W)) && lineTag(nextFL(2, 0) ## 1.U(1.W)) === nextFL(11, 3)))
 
   // ==========================================================================
   // Run state
@@ -223,19 +218,33 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
   val running = runState === RunState.RUN_RUN
 
   // ==========================================================================
-  // Fill FSM (demand fills win; prefetches run while the fetch engine has room)
+  // Fill FSM (demand fills win; prefetches run while the fetch engine has room).
+  // A fill is a burst of `fillBeats` consecutive 64-byte lines committed one
+  // beat at a time into the cache at `fillLine + fillBeat`.
   // ==========================================================================
   object FillState extends ChiselEnum {
     val IDLE, REQ, WAIT, DRAIN = Value
   }
   val fillState = RegInit(FillState.IDLE)
-  val fillLine  = RegInit(0.U(12.W))
-  val fillWay   = RegInit(0.U(1.W))
+  val fillLine  = RegInit(0.U(12.W))   // base line of the in-flight burst
+  val fillBeat  = RegInit(0.U(3.W))    // committed-beat index within the burst
+  val fillNext  = RegInit(0.U(12.W))   // next line to fetch (after the burst)
+
+  // Burst length: 4 lines unless the tail would read past lastLine.
+  val fillBeats = Mux((fillLine +& 4.U) <= lastLine, 4.U(3.W), 1.U(3.W))
+
+  // Prefetch target is `fillNext` (the line after the last committed burst).
+  val prefetchValid = fillNext < lastLine && !(
+    (lineValid(fillNext(2, 0) ## 0.U(1.W)) && lineTag(fillNext(2, 0) ## 0.U(1.W)) === fillNext(11, 3)) ||
+    (lineValid(fillNext(2, 0) ## 1.U(1.W)) && lineTag(fillNext(2, 0) ## 1.U(1.W)) === fillNext(11, 3)))
 
   val fetchActive = running && fpc < progLenReg
   val demandFill  = running && fetchActive && !fLineHit
-  val doPrefetch  = fillState === FillState.IDLE && running && !demandFill &&
-                    !ifqFull && prefetchValid
+  // Bounded sliding window: prefetch only while the fill head stays within
+  // 8 lines of the fetch pc (fL == fpc >> 4).
+  val leadOk  = (fillNext +& fillBeats) <= (fL +& 8.U)
+  val doPrefetch = fillState === FillState.IDLE && running && !demandFill &&
+                   !ifqFull && prefetchValid && leadOk
 
   val startFill = (fillState === FillState.IDLE) && (demandFill || doPrefetch)
 
@@ -246,35 +255,46 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
   // silicon).
   val cacheInvalidate = io.ctrl_we &&
     (io.ctrl_addr === 0x0.U || io.ctrl_addr === 0x4.U || io.ctrl_addr === 0x14.U)
-  val commitFill = fillState === FillState.REQ && core.io.fetch_fill_done
-
-  // Victim: LRU way of the set (mru=way1 → victim way0, and vice versa)
-  val victimWay = Mux(mru(fillLine(2, 0)), 0.U, 1.U)
 
   when (startFill) {
     fillState := FillState.REQ
-    fillLine  := Mux(demandFill, fL, nextFL)
-    fillWay   := victimWay   // demand fills only happen on a miss
+    fillLine  := Mux(demandFill, fL, fillNext)
+    fillBeat  := 0.U
     when (demandFill) { missCnt := missCnt + 1.U }
     .otherwise        { prefetchCnt := prefetchCnt + 1.U }
   }
 
-  core.io.fetch_fill_req  := fillState === FillState.REQ
-  core.io.fetch_fill_addr := NpuSections.CODE_BASE.U(32.W) + (fillLine << 6.U)
+  core.io.fetch_fill_req   := fillState === FillState.REQ
+  core.io.fetch_fill_addr  := NpuSections.CODE_BASE.U(32.W) + (fillLine << 6.U)
+  core.io.fetch_fill_beats := fillBeats
+
+  // Each beat commits into line `fillLine + fillBeat` (a burst writes
+  // `fillBeats` different sets, so tag/set/victim/mru come from that absolute
+  // line index, not a single latched way).
+  val commitLine = fillLine + fillBeat
+  val commitSet  = commitLine(2, 0)
+  val commitWay  = Mux(mru(commitSet), 0.U, 1.U)   // LRU victim of that set
+  val commitIdx  = commitSet ## commitWay
+  val commitBeat = fillState === FillState.REQ && core.io.fetch_fill_valid
+  val lastBeat   = fillState === FillState.REQ && core.io.fetch_fill_last
 
   // lineValid: invalidate clears, commit sets (single chain per entry)
   for (i <- 0 until SETS * WAYS) {
     when (cacheInvalidate) {
       lineValid(i) := false.B
-    } .elsewhen (commitFill && i.U === (fillLine(2, 0) ## fillWay)) {
+    } .elsewhen (commitBeat && i.U === commitIdx) {
       lineValid(i) := true.B
-      lineTag(i)   := fillLine(11, 3)
+      lineTag(i)   := commitLine(11, 3)
       lineData(i)  := core.io.fetch_fill_data
     }
   }
-  when (commitFill) {
-    mru(fillLine(2, 0)) := fillWay === 1.U
-    fillState           := FillState.DRAIN
+  when (commitBeat) {
+    mru(commitSet) := commitWay === 1.U
+    fillBeat := fillBeat + 1.U
+  }
+  when (lastBeat) {
+    fillState := FillState.DRAIN
+    fillNext  := fillLine + fillBeats
   }
 
   when (fillState === FillState.DRAIN && !core.io.fetch_busy) {
@@ -326,6 +346,8 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
         ifqTail       := 0.U
         ifqCount      := 0.U
         fillState     := FillState.IDLE
+        fillBeat      := 0.U
+        fillNext      := 0.U
         runState      := RunState.RUN_RUN
       }
     }

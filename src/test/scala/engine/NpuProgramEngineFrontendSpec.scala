@@ -411,7 +411,7 @@ class NpuProgramEngineFrontendSpec extends AnyFlatSpec {
     }
   }
 
-  "NpuProgramEngineFrontend" should "fetch 1024 NOPs in 64 line fills" in {
+  "NpuProgramEngineFrontend" should "fetch 1024 NOPs in 16 four-beat requests" in {
     simulate(new FrontendSpecHarness(K = 16, readLatency = 40)) { dut =>
       val prog = Seq.fill(1024)(nop)
       preloadInstrs(dut, prog)
@@ -422,9 +422,32 @@ class NpuProgramEngineFrontendSpec extends AnyFlatSpec {
       val s1 = ctrlRead(dut, 0x10)
       val fills = (((s1 >> 16) & 0xFFFF) - ((s0 >> 16) & 0xFFFF) & 0xFFFF) +
                   ((s1 & 0xFFFF) - (s0 & 0xFFFF) & 0xFFFF)
-      println(s"[frontend] 1024 NOPs: $cycles cycles, $fills fills")
-      assert(fills == 64, s"expected 64 line fills, got $fills")
-      assert(cycles < 3500, s"1024 NOPs took $cycles cycles")
+      assert(fills == 16, s"expected 16 requests, got $fills")
+      assert(cycles < 1500, s"1024 NOPs took $cycles cycles")
+    }
+  }
+
+  "NpuProgramEngineFrontend" should "keep a flat slope on a 4096-NOP program" in {
+    simulate(new FrontendSpecHarness(K = 16, readLatency = 40)) { dut =>
+      val prog = Seq.fill(4096)(nop)
+      preloadInstrs(dut, prog)
+      ctrlWrite(dut, 0x14, prog.length)
+      start(dut)
+      val cycles = waitDone(dut, maxCycles = 40000)
+      assert(cycles < 1.5 * 4096, s"4096 NOPs took $cycles cycles (slope > 1.5)")
+    }
+  }
+
+  "NpuProgramEngineFrontend" should "use a 1-beat tail for a 70-word program" in {
+    simulate(new FrontendSpecHarness(K = 16, readLatency = 40)) { dut =>
+      val bad = 0x03 | (0 << 7) | (2 << 12) | (1 << 15) | (2 << 20)
+      val prog = Seq.fill(69)(nop) :+ bad   // 70 words: 4-line burst + 1-line tail + 6 words
+      preloadInstrs(dut, prog)
+      ctrlWrite(dut, 0x14, prog.length)
+      start(dut)
+      waitDone(dut, maxCycles = 20000)
+      val st = ctrlRead(dut, 0x8)
+      assert(((st >> 31) & 1) == 1 && (st & 0xFFFF) == 69, s"illegal at pc 69, got $st")
     }
   }
 
