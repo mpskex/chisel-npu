@@ -174,6 +174,9 @@ class StreamHarness(val K: Int = 16, val readLatency: Int = 1, val W: Int = 8,
 
   eng.io.fetch_fill_req  := false.B
   eng.io.fetch_fill_addr := 0.U
+  // This harness never issues instruction-line fills (straight-line issue
+  // streams instructions in directly); tie the new burst-length port off.
+  eng.io.fetch_fill_beats := 0.U
 
   ram.io.s_axi_awaddr  := eng.io.m_axi_awaddr
   ram.io.s_axi_awlen   := eng.io.m_axi_awlen
