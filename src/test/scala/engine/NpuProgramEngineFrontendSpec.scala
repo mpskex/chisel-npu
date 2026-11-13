@@ -383,4 +383,30 @@ class NpuProgramEngineFrontendSpec extends AnyFlatSpec {
         s"instruction feed is not pipelined: max consecutive pc increments = $maxRun")
     }
   }
+
+  "NpuProgramEngineFrontend" should "abort an in-flight fill and restart cleanly" in {
+    simulate(new FrontendSpecHarness(K = 16, readLatency = 40)) { dut =>
+      // The faulting word is the LAST word of a non-final line (line 50 =
+      // words 200..203; bad at word 203), so the next-line (51) fill is in
+      // flight when the halt is decoded and the engine's flush must abort it.
+      val bad = 0x03 | (0 << 7) | (2 << 12) | (1 << 15) | (2 << 20)
+      val prog = (Seq.fill(203)(nop) :+ bad) ++ Seq.fill(3)(nop)
+      preloadInstrs(dut, prog)
+      ctrlWrite(dut, 0x14, prog.length)
+      start(dut)
+      waitDone(dut, maxCycles = 20000)
+      val st = ctrlRead(dut, 0x8)
+      assert(((st >> 31) & 1) == 1 && (st & 0xFFFF) == 203, s"illegal at pc 203, got $st")
+
+      // Second session on the same simulator/DUT must fetch and complete.
+      val ok = Seq(nop, nop, nop, nop)
+      preloadInstrs(dut, ok)
+      ctrlWrite(dut, 0x14, ok.length)
+      start(dut)
+      waitDone(dut, maxCycles = 5000)
+      val st2 = ctrlRead(dut, 0x8)
+      assert(((st2 >> 31) & 1) == 0, "second session must not inherit the illegal flag")
+      assert((st2 & 0xFFFF) == ok.length - 1, s"second session pc, got $st2")
+    }
+  }
 }

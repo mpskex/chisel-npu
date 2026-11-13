@@ -1030,6 +1030,11 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     wCount := wCount - 1.U
   }
 
+  // In-flight instruction-line fill marker.  Declared here (before the flush
+  // blocks) so the illegal/session-reset flushes can clear it: a fill killed
+  // mid-flight must not wedge the next session's fetch.
+  val fillPending = RegInit(false.B)
+
   // ==========================================================================
   // Illegal: stop issue, pulse, flush (window + scoreboard + queues).  The
   // in-flight DMA/MMALU operations complete harmlessly afterwards.
@@ -1061,6 +1066,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     // the head (that desyncs the occupancy count permanently).
     dmaQTail  := dmaQTail
     vrPendingValid := false.B
+    fillPending := false.B
     dmaQCount := 0.U
     fifoHead  := fifoTail
     fifoCount := 0.U
@@ -1123,6 +1129,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     dmaQHead    := dmaQTail
     dmaQTail    := dmaQTail
     vrPendingValid := false.B
+    fillPending := false.B
     dmaQCount   := 0.U
     fifoHead    := fifoTail
     fifoCount   := 0.U
@@ -1168,8 +1175,8 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   //      tick — single-writer tail) ----
   val dmaIssueAny = (0 until W).map(s => issueSel(s) && slots(s).unit === DispatchUnit.DMA)
     .reduce(_ || _)
-  val fillPending = RegInit(false.B)
-  val fillPush = io.fetch_fill_req && !fillPending && !dmaQFull && !dmaIssueAny && !vrPendingValid
+  val fillPush = io.fetch_fill_req && !fillPending && !dmaQFull && !dmaIssueAny && !vrPendingValid &&
+    !io.session_reset && !illegalAny
   when (fillPush) {
     dmaQ(dmaQTail).valid := true.B
     dmaQ(dmaQTail).inFlight := false.B

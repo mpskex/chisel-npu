@@ -322,6 +322,7 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
         ifqHead       := 0.U
         ifqTail       := 0.U
         ifqCount      := 0.U
+        fillState     := FillState.IDLE
         runState      := RunState.RUN_RUN
       }
     }
@@ -334,6 +335,7 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
         doneReg       := true.B
         perfCycles    := core.io.dbg_cycles
         perfMacs      := core.io.dbg_mac
+        fillState     := FillState.IDLE
         runState      := RunState.RUN_DONE
       } .elsewhen (fpc === progLenReg && ifqEmpty && core.io.drain) {
         // all words issued and the engine pipeline fully drained
