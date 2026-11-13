@@ -256,7 +256,7 @@ git commit -m "feat(engine): 16-word instruction lines from the full 64-byte fet
 **Interfaces:**
 - `NpuDmaEngine`: `io.req_beats: Input(UInt(3.W))` (1…4); `io.instr_last: Output(Bool())`; `instr_out` stays 512.
 - `NpuProgramEngine`: `io.fetch_fill_beats: Input(UInt(3.W))`; `io.fetch_fill_valid: Output(Bool())`; `io.fetch_fill_last: Output(Bool())`; `fetch_fill_data` stays 512. `DmaEntry.beats: UInt(3.W)`; `dma.io.req_beats := dmaHead.beats`.
-- `NpuProgramEngineFrontend`: internal `fillBeat: UInt(3.W)`, `fillNext: UInt(12.W)`; line commits use `fillLine + fillBeat`; the request uses `fillBeats` = 4 when `fillLine + 4 <= lastLine`, else 1.
+- `NpuProgramEngineFrontend`: internal `fillBeat: UInt(3.W)`, `fillNext: UInt(13.W)`; line commits use `fillLine + fillBeat`; the request uses `fillBeats` = 4 when `fillLine + 4 <= lastLine`, else 1.
 
 - [ ] **Step 1: Write the failing DMA burst test**
 
@@ -375,7 +375,7 @@ Expected: the 16-request/flat-slope/tail tests FAIL (still 64 requests; the tail
 
 - `fillBeat` 0…beats−1; **at `startFill`**, latch `fillLine := targetLine` and clear `fillBeat := 0`; the commit line is `fillLine + fillBeat`.
 - On `startEdge`, reset `fillBeat := 0` and `fillNext := 0` (Task 1 already resets `fillState`); the first running cycle demand-fills line 0.
-- On `fetch_fill_valid`, commit `core.io.fetch_fill_data` into line `fillLine + fillBeat`, set/update tag, `lineValid`, `mru`; increment `fillBeat`; on `fetch_fill_last`, `fillState := DRAIN`, `fillNext := fillLine + fillBeats`.
+- On `fetch_fill_valid`, commit `core.io.fetch_fill_data` into line `fillLine + fillBeat`, set/update tag, `lineValid`, `mru`; increment `fillBeat`; on `fetch_fill_last`, `fillState := DRAIN`, `fillNext := fillLine +& fillBeats`.
 - Request beats: `fillBeats = Mux(fillLine + 4.U <= lastLine, 4.U, 1.U)`; clamp to `lastLine` for the tail.
 - Lead gate: `doPrefetch` only when `fillNext + fillBeats <= fpcLine + 8.U`; `fpcLine = fpc >> 4`. Demand fills start at `fL` and bypass the lead gate.
 - `fetch_fill_beats := fillBeats` (for both demand and prefetch).
@@ -483,7 +483,7 @@ Expected: the warm tests FAIL (no fill on PROG_LEN; start still invalidates).
 - `cacheInvalidate := io.ctrl_we && (addr === 0x4 || addr === 0x14)` (remove 0x0).
 - `val progLenWrite = io.ctrl_we && io.ctrl_addr === 0x14.U`; on it: `warmValid := true.B`, `warmLine := 0.U`, `fillState := FillState.IDLE`, `fillBeat := 0.U`.
 - Fill trigger: `startFill = fillState === IDLE && (demandFill || doPrefetch || warmValid)`; target line `Mux(demandFill, fL, Mux(warmValid, warmLine, fillNext))`; at `startFill` latch `fillLine := targetLine` and clear `fillBeat`; beats `Mux(warmValid, Mux(lastLine >= 4.U, 4.U, lastLine), fillBeats)`.
-- On the last beat of the warm, `warmValid := false`; the same completion logic sets `fillNext := fillLine + fillBeats` (so the first post-start prefetch targets line 4, not 0).
+- On the last beat of the warm, `warmValid := false`; the same completion logic sets `fillNext := fillLine +& fillBeats` (so the first post-start prefetch targets line 4, not 0).
 - `commitFill` permits commits while `warmValid` (not only `running`); the IFQ enqueue stays `running && !ifqFull && fLineHit`, so no instruction issues before `start`.
 - On `startEdge`, do **not** invalidate; reset `pc/fpc/IFQ` only, plus `fillState := IDLE` and `warmValid := false` (an in-flight warm is abandoned; committed lines stay valid and are demand-hittable).
 
@@ -522,7 +522,7 @@ Expected: all suites pass (about 1 h 20 m). This is the gate before spending a b
 - `run_nops(npu, n)` → `npu.run([isa.NOP] * n)["perf"]`, plus the `FETCH_STATS` delta around the run (fills = prefetch+miss delta).
 - `run_rounds(npu, r)` → the reduce-round program from `tests/test_perf.py` repeated `r` times with `vse32(0, SECT_OUT, 0)` per round.
 - Print columns: `n, cycles, cycles/instr, fills, ipc, macs/cyc`.
-- Sizes: 1024, 8192, 32768, 60000. Rounds: 1, 4, 16, 64, 256.
+- Sizes: 1024, 8192, 32768, 60000, 65535 (the max). Rounds: 1, 4, 16, 64, 256.
 - No new dependencies; run on the FPGA host with `~/chisel_npu_py/.venv/bin/python`.
 
 - [ ] **Step 2: Build the final A+B+P bitstream**
