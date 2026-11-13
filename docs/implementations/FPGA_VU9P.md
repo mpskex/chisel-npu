@@ -146,20 +146,21 @@ because the margin is sub-0.1 ns.
 ## Instruction-supply streaming (A+B+P)
 
 The engine was **fetch-bound, not execute-bound**: a fill requested one 64-byte
-DMA beat but `INSTRW` returned only one 128-bit quarter of it, at ~45.7 cycles
-per 16-byte line (≈11.4 cycles/instruction). Three quarters of every fetched
-beat were discarded. The front end now streams instructions:
+DMA beat but `INSTRW` returned only one 16-byte **quarter** (4 words) of it, at
+~45.7 cycles per quarter (≈11.4 cycles/instruction). Three quarters of every
+fetched beat were discarded. The front end now streams instructions:
 
 * **Phase A — 16-word I-cache line.** The whole 64-byte DMA beat is stored as a
-  16-word line (tag/set/victim from the absolute line index; 2-way, 4-set,
-  16-line sliding window), so four instructions arrive per beat and the next
-  three lines no longer re-read the same DDR beat.
+  **line** of 16 words (tag/set/victim from the absolute line index;
+  **8 sets × 2 ways = 16 lines**, a sliding window). All 16 instructions of the
+  beat land in the cache, and the next three 16-byte quarters (4 words each)
+  are served from that line instead of re-reading the same DDR beat.
 * **Phase B — 4-beat burst fill.** A fill requests **4 consecutive beats**
   (256 B = 64 instructions) and streams them into consecutive lines. The fill
   head `fillNext` leads the fetch PC by a **bounded** lookahead so the array
   stays a sliding window, not a working set — steady-state
-  cycles/instruction is independent of program size, and only the constant
-  first fill (`≈46 cycles`) and the final-line tail depend on `progLen`.
+  cycles/instruction is independent of program size; only the final-line tail
+  depends on `progLen`.
 * **Phase P — first-line pre-warm.** The first burst is fetched on the
   `PROG_LEN` write (`0x14`), while the host is still issuing `START`; the
   pre-warm is outside the counted session, so a small program's first
@@ -247,9 +248,9 @@ Two board-specific gotchas:
   is back, re-run the bring-up without touching the fabric:
 
   ```bash
-  FPGA_HOST=10.16.0.35 SSH_IDENTITY=~/.ssh/id_vu9p \
-      python3 tool/hw/bringup_ssh.py --host "$FPGA_HOST" \
-      --skip-jtag --skip-flash --skip-pytest
+  python3 tool/hw/bringup_ssh.py --host 10.16.0.35 \
+      --identity ~/.ssh/id_vu9p --skip-flash --skip-jtag --skip-pytest \
+      ip/vivado/xcvu9p/top_npu_vu9p.bit
   ```
 
 ## Validation
@@ -287,11 +288,19 @@ in `test_perf.py` guard this.
 
 Measured on the final A+B+P bitstream (`ip/vivado/xcvu9p/top_npu_vu9p.bit`,
 built 2026-11-13 22:56, `POSTROUTE_WNS` **+0.056 ns**, 0 unrouted nets; `make
-py-test-hw` 8/8 PASS, selftest PASS). NOP program-size sweep at K=32;
-`cycles` is the session counter and `fills` the 4-beat fetch requests counted
-in `FETCH_STATS` (`0x10`):
+py-test-hw` 8/8 PASS, selftest PASS). Scope: both tables below are this final
+A+B+P bitstream; the per-phase A/B/P attribution was **not** separately built
+(that costs a bitstream per commit). The final build needed **0 retries**
+(synthesis attempt 1, implementation attempt 1). At K=32 the array peak is
+K² = **1,024 MACs/cycle**, so the percentile column is relative to 1,024.
 
-| words | cycles | cycles/instr | fills | IPC |
+NOP program-size sweep at K=32, from
+`drivers/chisel_npu_py/tool/fetch_sweep.py`; `cycles` is the session counter
+and `burst requests` the `FETCH_STATS` (`0x10`) delta — fetch burst requests,
+both prefetch and demand. The tail burst is shortened to 1 beat, so not every
+request is 4 beats:
+
+| words | cycles | cycles/instr | burst requests | IPC |
 |---:|---:|---:|---:|---:|
 | 1,024 | 1,026 | 1.002 | 16 | 0.998 |
 | 8,192 | 8,275 | 1.010 | 128 | 0.990 |
@@ -301,7 +310,7 @@ in `FETCH_STATS` (`0x10`):
 
 Reduce-round shape (2 loads + 32 `mma` + `mma.last` + `vse` per round):
 
-| rounds | instructions | cycles | IPC | MACs/cycle | % of 1024 peak |
+| rounds | instructions | cycles | IPC | MACs/cycle | % of 1,024 peak |
 |---:|---:|---:|---:|---:|---:|
 | 1 | 36 | 242 | 0.149 | 135.4 | 13.2% |
 | 4 | 138 | 635 | 0.217 | 206.4 | 20.2% |
@@ -315,6 +324,10 @@ the 36-instruction round and **106,068 cycles / 79.1 MACs/cyc** on the
 (51.9 → 135.4 MACs/cyc) and 256 rounds **106,068 → 29,867 cycles**
 (79.1 → 280.9 MACs/cyc). The NOP slope is flat from 1 k to 65,535 words
 (**1.002–1.013 cycles/instruction**, 0.987–0.998 IPC), so the steady state no
-longer depends on program size; the residual is the constant first fill and
-the final-line tail. The standalone perf test is idempotent on this bitstream:
-242 cycles and `feeds=33` on both of two back-to-back runs.
+longer depends on program size; the ~0.013 cycles/instruction residual above
+1.0 is the amortised per-burst fill cost plus the final-line tail.
+
+Run-to-run variance: on the final bitstream the 36-instruction perf test
+measured 242 cycles on two back-to-back runs, identical, with `feeds=33` on
+both (idempotent). The previous bitstream varied 604–634 cycles on the same
+program; the **631** before-figure is representative of that range.
