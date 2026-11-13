@@ -205,7 +205,7 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
 
   // lastLine is the one-past-the-end line index (13 bits, 0..4096); compare the
   // line index directly so the 16-bit line-index arithmetic can never overflow.
-  val lastLine = (progLenReg +& 15.U) >> 4
+  val lastLine = ((progLenReg +& 15.U) >> 4)(12, 0)
 
   // ==========================================================================
   // Run state
@@ -228,7 +228,7 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
   val fillState = RegInit(FillState.IDLE)
   val fillLine  = RegInit(0.U(12.W))   // base line of the in-flight burst
   val fillBeat  = RegInit(0.U(3.W))    // committed-beat index within the burst
-  val fillNext  = RegInit(0.U(12.W))   // next line to fetch (after the burst)
+  val fillNext  = RegInit(0.U(13.W))   // next line to fetch (after the burst)
 
   // Burst length: 4 lines unless the tail would read past lastLine.
   val fillBeats = Mux((fillLine +& 4.U) <= lastLine, 4.U(3.W), 1.U(3.W))
@@ -258,7 +258,7 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
 
   when (startFill) {
     fillState := FillState.REQ
-    fillLine  := Mux(demandFill, fL, fillNext)
+    fillLine  := Mux(demandFill, fL, fillNext(11, 0))
     fillBeat  := 0.U
     when (demandFill) { missCnt := missCnt + 1.U }
     .otherwise        { prefetchCnt := prefetchCnt + 1.U }
@@ -294,7 +294,7 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
   }
   when (lastBeat) {
     fillState := FillState.DRAIN
-    fillNext  := fillLine + fillBeats
+    fillNext  := fillLine +& fillBeats
   }
 
   when (fillState === FillState.DRAIN && !core.io.fetch_busy) {
