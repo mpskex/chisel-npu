@@ -143,6 +143,37 @@ placement — Vivado 2025.2 still segfaults randomly in
 retries the implementation.  Timing must be re-checked after every RTL change
 because the margin is sub-0.1 ns.
 
+## Instruction-supply streaming (A+B+P)
+
+The engine was **fetch-bound, not execute-bound**: a fill requested one 64-byte
+DMA beat but `INSTRW` returned only one 128-bit quarter of it, at ~45.7 cycles
+per 16-byte line (≈11.4 cycles/instruction). Three quarters of every fetched
+beat were discarded. The front end now streams instructions:
+
+* **Phase A — 16-word I-cache line.** The whole 64-byte DMA beat is stored as a
+  16-word line (tag/set/victim from the absolute line index; 2-way, 4-set,
+  16-line sliding window), so four instructions arrive per beat and the next
+  three lines no longer re-read the same DDR beat.
+* **Phase B — 4-beat burst fill.** A fill requests **4 consecutive beats**
+  (256 B = 64 instructions) and streams them into consecutive lines. The fill
+  head `fillNext` leads the fetch PC by a **bounded** lookahead so the array
+  stays a sliding window, not a working set — steady-state
+  cycles/instruction is independent of program size, and only the constant
+  first fill (`≈46 cycles`) and the final-line tail depend on `progLen`.
+* **Phase P — first-line pre-warm.** The first burst is fetched on the
+  `PROG_LEN` write (`0x14`), while the host is still issuing `START`; the
+  pre-warm is outside the counted session, so a small program's first
+  instruction is already cached. Invalidation moved off `CTRL` (`0x0`) onto
+  `PROG_LEN`/`FRAMES`, so the warm line survives `START`.
+* **Abort/epoch fix.** `fillPending` is cleared on `session_reset` and on
+  `illegalAny`, the frontend resets its fill FSM on the start edge, and
+  `fillPush` is gated by `!session_reset && !illegalAny`. An in-flight fill at
+  a reset or illegal halt can therefore no longer wedge every later session.
+  Stale beats are rejected in the engine (`dmaHead.valid && inFlight &&
+  dir === 3`), and a new fill queues behind a still-busy DMA.
+
+Design note: [`docs/superpowers/specs/2026-11-13-instruction-supply-streaming-design.md`](../superpowers/specs/2026-11-13-instruction-supply-streaming-design.md).
+
 ## Build
 
 ```bash
@@ -195,6 +226,32 @@ The AMD FCH does not enumerate the card after a hot JTAG load:
 4. Install udev/permissions — `make py-deploy` does this. Reload the module
    after every reboot.
 
+### Branch-specific bring-up (`fangrui/refine-dispatch-frontend`)
+
+This branch does **not** carry the `feat/general-fpga-clean-flow` board
+targets (no `make bringup-fpga BOARD=...`), and `.env.sh` defaults
+`FPGA_HOST` to `10.16.0.31`. Address the Alivu9p host explicitly:
+
+```bash
+FPGA_HOST=10.16.0.35 SSH_IDENTITY=~/.ssh/id_vu9p make py-deploy
+FPGA_HOST=10.16.0.35 SSH_IDENTITY=~/.ssh/id_vu9p make py-test-hw
+```
+
+Two board-specific gotchas:
+
+* **JTAG-load from the Ubuntu 22.04 Vivado container.** The host's own Vivado
+  crashes; run the container image and program `top_npu_vu9p.bit` from there.
+* **Warm-reboot the host after a JTAG load.** PCIe only re-enumerates on
+  reboot; otherwise probe fails with `map_bars: Failed to detect XDMA config
+  BAR` (driver probe `-22`) and no `/dev/xdma0_*` nodes appear. Once the host
+  is back, re-run the bring-up without touching the fabric:
+
+  ```bash
+  FPGA_HOST=10.16.0.35 SSH_IDENTITY=~/.ssh/id_vu9p \
+      python3 tool/hw/bringup_ssh.py --host "$FPGA_HOST" \
+      --skip-jtag --skip-flash --skip-pytest
+  ```
+
 ## Validation
 
 ```bash
@@ -228,14 +285,36 @@ counter accumulated +K+1 per run, so a second session on the same bitstream
 reported 264 instead of 33 feeds.  `EnginePerfCounterSpec` and the rerun check
 in `test_perf.py` guard this.
 
-Measured on the final bitstream (K=32, 36-instruction reduce round: 2 loads +
-32 `mma` + `mma.last` + store), three back-to-back sessions:
+Measured on the final A+B+P bitstream (`ip/vivado/xcvu9p/top_npu_vu9p.bit`,
+built 2026-11-13 22:56, `POSTROUTE_WNS` **+0.056 ns**, 0 unrouted nets; `make
+py-test-hw` 8/8 PASS, selftest PASS). NOP program-size sweep at K=32;
+`cycles` is the session counter and `fills` the 4-beat fetch requests counted
+in `FETCH_STATS` (`0x10`):
 
-| run | cycles | feeds | ipc | feeds/cyc | macs/cyc |
-|:---:|:---:|:---:|:---:|:---:|:---:|
-| 1 | 624 | 33 | 0.058 | 0.053 | 52.5 |
-| 2 | 634 | 33 | 0.057 | 0.052 | 51.7 |
-| 3 | 630 | 33 | 0.057 | 0.052 | 52.0 |
+| words | cycles | cycles/instr | fills | IPC |
+|---:|---:|---:|---:|---:|
+| 1,024 | 1,026 | 1.002 | 16 | 0.998 |
+| 8,192 | 8,275 | 1.010 | 128 | 0.990 |
+| 32,768 | 33,204 | 1.013 | 512 | 0.987 |
+| 60,000 | 60,799 | 1.013 | 939 | 0.987 |
+| 65,535 | 66,409 | 1.013 | 1,024 | 0.987 |
 
-The small cycle variation is fetch/drain timing, not counter drift; `feeds`
-is identical on every session.
+Reduce-round shape (2 loads + 32 `mma` + `mma.last` + `vse` per round):
+
+| rounds | instructions | cycles | IPC | MACs/cycle | % of 1024 peak |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 36 | 242 | 0.149 | 135.4 | 13.2% |
+| 4 | 138 | 635 | 0.217 | 206.4 | 20.2% |
+| 16 | 546 | 2,027 | 0.269 | 258.7 | 25.3% |
+| 64 | 2,178 | 7,595 | 0.287 | 276.1 | 27.0% |
+| 256 | 8,706 | 29,867 | 0.291 | 280.9 | 27.4% |
+
+Before this work the previous bitstream took **631 cycles / 51.9 MACs/cyc** on
+the 36-instruction round and **106,068 cycles / 79.1 MACs/cyc** on the
+256-round shape. The final bitstream: 36 instructions **631 → 242 cycles**
+(51.9 → 135.4 MACs/cyc) and 256 rounds **106,068 → 29,867 cycles**
+(79.1 → 280.9 MACs/cyc). The NOP slope is flat from 1 k to 65,535 words
+(**1.002–1.013 cycles/instruction**, 0.987–0.998 IPC), so the steady state no
+longer depends on program size; the residual is the constant first fill and
+the final-line tail. The standalone perf test is idempotent on this bitstream:
+242 cycles and `feeds=33` on both of two back-to-back runs.
