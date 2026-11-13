@@ -374,6 +374,7 @@ Expected: the 16-request/flat-slope/tail tests FAIL (still 64 requests; the tail
 - [ ] **Step 8: Implement the frontend burst/commit/lead**
 
 - `fillBeat` 0…beats−1; **at `startFill`**, latch `fillLine := targetLine` and clear `fillBeat := 0`; the commit line is `fillLine + fillBeat`.
+- On `startEdge`, reset `fillBeat := 0` and `fillNext := 0` (Task 1 already resets `fillState`); the first running cycle demand-fills line 0.
 - On `fetch_fill_valid`, commit `core.io.fetch_fill_data` into line `fillLine + fillBeat`, set/update tag, `lineValid`, `mru`; increment `fillBeat`; on `fetch_fill_last`, `fillState := DRAIN`, `fillNext := fillLine + fillBeats`.
 - Request beats: `fillBeats = Mux(fillLine + 4.U <= lastLine, 4.U, 1.U)`; clamp to `lastLine` for the tail.
 - Lead gate: `doPrefetch` only when `fillNext + fillBeats <= fpcLine + 8.U`; `fpcLine = fpc >> 4`. Demand fills start at `fL` and bypass the lead gate.
