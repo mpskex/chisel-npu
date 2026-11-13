@@ -4,9 +4,9 @@
 //  prefetch cache, program counter, and the ctrl_lite register file.
 //
 //  Program instructions live in the CODE section (entry at the base).  The
-//  frontend fetches 16 B lines (4 words) through the engine's shared DMA
+//  frontend fetches 64 B lines (16 words) through the engine's shared DMA
 //  (fetch_fill_* ports) and caches them in an 8-set × 2-way binary-LRU cache
-//  (64 instructions).  A fetch engine walks the fetch pc and enqueues
+//  (256 instructions).  A fetch engine walks the fetch pc and enqueues
 //  {word, pc} into a small instruction FIFO (IFQ, depth 8); an issue stage
 //  feeds the execution core from the IFQ head at up to one word per cycle
 //  (fetch and issue decoupled).  On io.illegal_out it latches ERR_INFO, sets
@@ -184,30 +184,33 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
   val ifqHeadPc   = ifqPc(ifqHead)
 
   // ==========================================================================
-  // Instruction cache: 8 sets × 2 ways × 4-word lines (fetch-side lookup by fpc)
+  // Instruction cache: 8 sets × 2 ways × 16-word lines (fetch-side lookup by fpc)
   // ==========================================================================
   val lineValid = RegInit(VecInit(Seq.fill(SETS * WAYS)(false.B)))
-  val lineTag   = RegInit(VecInit(Seq.fill(SETS * WAYS)(0.U(11.W))))
-  val lineData  = RegInit(VecInit(Seq.fill(SETS * WAYS)(0.U(128.W))))
+  val lineTag   = RegInit(VecInit(Seq.fill(SETS * WAYS)(0.U(9.W))))
+  val lineData  = RegInit(VecInit(Seq.fill(SETS * WAYS)(0.U(512.W))))
   val mru       = RegInit(VecInit(Seq.fill(SETS)(false.B)))   // true = way1 most recent
 
-  val fL   = fpc >> 2                        // line index of the fetch pc
+  val fL   = fpc >> 4                        // line index of the fetch pc (12 bits)
   val fSet = fL(2, 0)
-  val fTag = fL(13, 3)                       // 11 bits: covers the full 16-bit pc
+  val fTag = fL(11, 3)                       // 9 bits
   val fHit0 = lineValid(fSet ## 0.U(1.W)) && lineTag(fSet ## 0.U(1.W)) === fTag
   val fHit1 = lineValid(fSet ## 1.U(1.W)) && lineTag(fSet ## 1.U(1.W)) === fTag
   val fLineHit = fHit0 || fHit1
   val fHitWay  = Mux(fHit1, 1.U, 0.U)
 
   val fWord = Mux(fLineHit,
-    (lineData(Mux(fHit1, fSet ## 1.U(1.W), fSet ## 0.U(1.W))) >> (fpc(1, 0) << 5.U))(31, 0),
+    (lineData(Mux(fHit1, fSet ## 1.U(1.W), fSet ## 0.U(1.W))) >> (fpc(3, 0) << 5.U))(31, 0),
     0.U)
 
   // Prefetch target: the line after the one being fetched (if any word in range)
+  // lastLine is the one-past-the-end line index (13 bits, 0..4096); compare the
+  // line index directly so the 16-bit `(nextFL << 4)` can never overflow.
+  val lastLine = (progLenReg +& 15.U) >> 4
   val nextFL    = fL + 1.U
-  val prefetchValid = (nextFL << 2.U) < progLenReg && !(
-    (lineValid(nextFL(2, 0) ## 0.U(1.W)) && lineTag(nextFL(2, 0) ## 0.U(1.W)) === nextFL(13, 3)) ||
-    (lineValid(nextFL(2, 0) ## 1.U(1.W)) && lineTag(nextFL(2, 0) ## 1.U(1.W)) === nextFL(13, 3)))
+  val prefetchValid = nextFL < lastLine && !(
+    (lineValid(nextFL(2, 0) ## 0.U(1.W)) && lineTag(nextFL(2, 0) ## 0.U(1.W)) === nextFL(11, 3)) ||
+    (lineValid(nextFL(2, 0) ## 1.U(1.W)) && lineTag(nextFL(2, 0) ## 1.U(1.W)) === nextFL(11, 3)))
 
   // ==========================================================================
   // Run state
@@ -226,7 +229,7 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
     val IDLE, REQ, WAIT, DRAIN = Value
   }
   val fillState = RegInit(FillState.IDLE)
-  val fillLine  = RegInit(0.U(14.W))
+  val fillLine  = RegInit(0.U(12.W))
   val fillWay   = RegInit(0.U(1.W))
 
   val fetchActive = running && fpc < progLenReg
@@ -257,7 +260,7 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
   }
 
   core.io.fetch_fill_req  := fillState === FillState.REQ
-  core.io.fetch_fill_addr := NpuSections.CODE_BASE.U(32.W) + (fillLine << 4.U)
+  core.io.fetch_fill_addr := NpuSections.CODE_BASE.U(32.W) + (fillLine << 6.U)
 
   // lineValid: invalidate clears, commit sets (single chain per entry)
   for (i <- 0 until SETS * WAYS) {
@@ -265,7 +268,7 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
       lineValid(i) := false.B
     } .elsewhen (commitFill && i.U === (fillLine(2, 0) ## fillWay)) {
       lineValid(i) := true.B
-      lineTag(i)   := fillLine(13, 3)
+      lineTag(i)   := fillLine(11, 3)
       lineData(i)  := core.io.fetch_fill_data
     }
   }

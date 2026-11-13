@@ -36,7 +36,7 @@ class DmaSpecHarness(val K: Int = DmaSpecHarness.K,
     val acc_out     = Output(Vec(K, UInt((4 * N).W)))
 
     val instr_valid = Output(Bool())
-    val instr_out   = Output(UInt(128.W))
+    val instr_out   = Output(UInt(512.W))
 
     val rf_w_vx_en   = Output(Bool())
     val rf_w_vx_addr = Output(UInt(log2Ceil(K).W))
@@ -343,17 +343,17 @@ class NpuDmaEngineSpec extends AnyFlatSpec {
     }
   }
 
-  "NpuDmaEngine" should "fetch a 16 B instruction line (dir=3)" in {
+  "NpuDmaEngine" should "fetch a full 64 B instruction beat (dir=3)" in {
     simulate(new DmaSpecHarness(readTimeout = 8)) { dut =>
-      val pat = pattern(0x600, 16)
-      preload(dut, RAM_ADDR, pat)
+      val pat = pattern(0x600, 64)
+      preload(dut, RAM_ADDR, pat)          // RAM_ADDR is 64 B aligned
       issue(dut, dir = 3, width = 0, rfAddr = 0, l3Addr = RAM_ADDR)
       var captured = false
       var n = 0
       while (!dut.io.done.peek().litToBoolean && n < 2000) {
         if (!captured && dut.io.instr_valid.peek().litToBoolean) {
           val got = dut.io.instr_out.peek().litValue
-          for (b <- 0 until 16) {
+          for (b <- 0 until 64) {
             val exp = BigInt(pat(b) & 0xFF)
             val act = (got >> (8 * b)) & 0xFF
             assert(act == exp, s"fetch byte $b: got $act want $exp")
@@ -362,8 +362,7 @@ class NpuDmaEngineSpec extends AnyFlatSpec {
         }
         dut.clock.step(); n += 1
       }
-      assert(dut.io.done.peek().litToBoolean, "fetch did not finish")
-      assert(captured, "instr_valid never pulsed")
+      assert(dut.io.done.peek().litToBoolean && captured, "fetch did not finish")
     }
   }
 

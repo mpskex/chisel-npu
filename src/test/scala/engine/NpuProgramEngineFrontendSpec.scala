@@ -178,7 +178,7 @@ class NpuProgramEngineFrontendSpec extends AnyFlatSpec {
     ctrlWrite(dut, 0x0, 0)
   }
 
-  def waitDone(dut: FrontendSpecHarness, maxCycles: Int = 500000): Unit = {
+  def waitDone(dut: FrontendSpecHarness, maxCycles: Int = 500000): Long = {
     var n = 0
     var lastAcc = BigInt(-1)
     while (((ctrlRead(dut, 0x0) >> 1) & 1) == 0 && n < maxCycles) {
@@ -190,6 +190,7 @@ class NpuProgramEngineFrontendSpec extends AnyFlatSpec {
       dut.clock.step(); n += 1
     }
     assert(((ctrlRead(dut, 0x0) >> 1) & 1) == 1, s"program did not finish within $maxCycles cycles")
+    n
   }
 
   def s8(v: Int): Int = { val b = v & 0xFF; if (b >= 128) b - 256 else b }
@@ -407,6 +408,36 @@ class NpuProgramEngineFrontendSpec extends AnyFlatSpec {
       val st2 = ctrlRead(dut, 0x8)
       assert(((st2 >> 31) & 1) == 0, "second session must not inherit the illegal flag")
       assert((st2 & 0xFFFF) == ok.length - 1, s"second session pc, got $st2")
+    }
+  }
+
+  "NpuProgramEngineFrontend" should "fetch 1024 NOPs in 64 line fills" in {
+    simulate(new FrontendSpecHarness(K = 16, readLatency = 40)) { dut =>
+      val prog = Seq.fill(1024)(nop)
+      preloadInstrs(dut, prog)
+      ctrlWrite(dut, 0x14, prog.length)
+      val s0 = ctrlRead(dut, 0x10)
+      start(dut)
+      val cycles = waitDone(dut, maxCycles = 20000)
+      val s1 = ctrlRead(dut, 0x10)
+      val fills = (((s1 >> 16) & 0xFFFF) - ((s0 >> 16) & 0xFFFF) & 0xFFFF) +
+                  ((s1 & 0xFFFF) - (s0 & 0xFFFF) & 0xFFFF)
+      println(s"[frontend] 1024 NOPs: $cycles cycles, $fills fills")
+      assert(fills == 64, s"expected 64 line fills, got $fills")
+      assert(cycles < 3500, s"1024 NOPs took $cycles cycles")
+    }
+  }
+
+  "NpuProgramEngineFrontend" should "fetch across a 16-word line boundary" in {
+    simulate(new FrontendSpecHarness(K = 16, readLatency = 40)) { dut =>
+      val bad = 0x03 | (0 << 7) | (2 << 12) | (1 << 15) | (2 << 20)
+      val prog = Seq.fill(64)(nop) :+ bad
+      preloadInstrs(dut, prog)
+      ctrlWrite(dut, 0x14, prog.length)
+      start(dut)
+      waitDone(dut, maxCycles = 20000)
+      val st = ctrlRead(dut, 0x8)
+      assert(((st >> 31) & 1) == 1 && (st & 0xFFFF) == 64, s"illegal at pc 64, got $st")
     }
   }
 }

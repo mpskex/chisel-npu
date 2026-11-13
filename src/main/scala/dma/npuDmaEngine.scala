@@ -68,7 +68,7 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
 
     // ---- Instruction line buffer (dir=3; valid one cycle before done) ----
     val instr_valid = Output(Bool())
-    val instr_out   = Output(UInt(128.W))
+    val instr_out   = Output(UInt(DW.W))
 
     // ---- RF write ports (L2R; one pulses per request) ----
     val rf_w_vx_en   = Output(Bool())
@@ -361,13 +361,9 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
 
     is (DmaState.INSTRW) {
       io.instr_valid := true.B
-      // 16-byte instruction line at byte offset rdOff within the 64-B beat.
-      // rdOff is a multiple of 16, so a 4:1 select of the 128-bit quarters.
-      io.instr_out := MuxLookup(rdOff(5, 4), buf(0)(127, 0))(Seq(
-        0.U -> buf(0)(127, 0),
-        1.U -> buf(0)(255, 128),
-        2.U -> buf(0)(383, 256),
-        3.U -> buf(0)(511, 384)))
+      // The full 64-byte fetch beat (16 instruction words).  The fetch address
+      // is 64-byte aligned, so no rdOff quarter select is needed for dir=3.
+      io.instr_out := buf(0)
       state := DmaState.DONE
     }
 

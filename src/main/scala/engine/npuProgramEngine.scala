@@ -129,7 +129,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     val fetch_fill_req  = Input(Bool())
     val fetch_fill_addr = Input(UInt(32.W))
     val fetch_fill_done = Output(Bool())     // line valid pulse (DMA INSTRW)
-    val fetch_fill_data = Output(UInt(128.W))
+    val fetch_fill_data = Output(UInt(512.W))
     val fetch_busy      = Output(Bool())     // DMA busy (core + fill)
 
     // ---- AXI4 master (128-bit, same shape as NpuDmaEngine) ----
