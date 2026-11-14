@@ -461,6 +461,13 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
   // promoted: in IDLE-with-buffer the new request would be silently dropped
   // (the promote wins, and `wantBuffer` excludes IDLE).
   io.req_ready := !bufValid && ((state === DmaState.IDLE) || dataPhaseStarted)
+  // dir=3 fetch bursts must request 1..4 beats: 0 underflows the INSTRW
+  // `reqBeats - 1` compare and any wider value would index past the 4-entry
+  // `buf`.  Guard the raw input before it is latched (and buffered).
+  when (io.req_dir === 3.U && io.req_valid) {
+    assert(io.req_beats >= 1.U && io.req_beats <= 4.U,
+      "NpuDmaEngine: dir=3 req_beats must be in 1..4")
+  }
   when (wantBuffer) {
     bufValid  := true.B
     bufDir    := io.req_dir

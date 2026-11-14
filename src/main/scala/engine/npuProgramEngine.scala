@@ -738,6 +738,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
           vrPending.rdMask := dmaMask
           vrPending.storeDataValid := true.B
           vrPending.dataReady := true.B
+          vrPending.beats := 0.U
           for (lane <- 0 until K) vrPending.storeData(lane) := rf.io.vr_r_data(0)(lane)
           vrPendingValid := true.B
         } .otherwise {
@@ -751,6 +752,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
           dmaQ(dmaQTail).rdMask := dmaMask
           dmaQ(dmaQTail).storeDataValid := false.B
           dmaQ(dmaQTail).dataReady := true.B
+          dmaQ(dmaQTail).beats := 0.U
           for (lane <- 0 until K) dmaQ(dmaQTail).storeData(lane) := 0.U
           dmaQTail := dmaQTail + 1.U
         }
@@ -1181,7 +1183,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   val dmaIssueAny = (0 until W).map(s => issueSel(s) && slots(s).unit === DispatchUnit.DMA)
     .reduce(_ || _)
   val fillPush = io.fetch_fill_req && !fillPending && !dmaQFull && !dmaIssueAny && !vrPendingValid &&
-    !io.session_reset && !illegalAny
+    !io.session_reset && !illegalAny && !dma.io.busy
   when (fillPush) {
     dmaQ(dmaQTail).valid := true.B
     dmaQ(dmaQTail).inFlight := false.B
