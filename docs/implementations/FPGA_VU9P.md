@@ -413,7 +413,8 @@ Steps, in order:
    add a small completion scoreboard so the `dmaQ` can issue the next request
    while the previous response is outstanding.  Hiding the ~51-cycle request
    latency should take `pipe-256` from 20.1 k toward ~9 k cycles:
-   **~900–960 MACs/cycle**.
+   **~900–960 MACs/cycle**.  The detailed design is in
+   [`docs/designs/05.pipelined-dma.md`](../designs/05.pipelined-dma.md).
 3. **Store coalescing** (optional, reduces the request count).  Four adjacent
    128 B `vse` stores can become one 512 B write, cutting 256 stores to 64;
    alone it caps around ~820, combined with (2) it gives margin.
