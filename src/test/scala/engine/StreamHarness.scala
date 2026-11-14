@@ -8,14 +8,16 @@
 package engine
 
 import chisel3._
+import chisel3.util._
 import chisel3.simulator.EphemeralSimulator._
 import testUtil._
 import isa._
 import isa.NpuAssembler._
 
 /** Axi RAM with a configurable read latency (DDR-like). */
-class LatencyRamModel(val readLatency: Int = 1) extends Module {
+class LatencyRamModel(val readLatency: Int = 1, val wDelay: Int = 0) extends Module {
   require(readLatency >= 1)
+  require(wDelay >= 0)
   val io = IO(new Bundle {
     val s_axi_awaddr  = Input(UInt(32.W))
     val s_axi_awlen   = Input(UInt(8.W))
@@ -23,8 +25,8 @@ class LatencyRamModel(val readLatency: Int = 1) extends Module {
     val s_axi_awburst = Input(UInt(2.W))
     val s_axi_awvalid = Input(Bool())
     val s_axi_awready = Output(Bool())
-    val s_axi_wdata   = Input(UInt(128.W))
-    val s_axi_wstrb   = Input(UInt(16.W))
+    val s_axi_wdata   = Input(UInt(512.W))
+    val s_axi_wstrb   = Input(UInt(64.W))
     val s_axi_wlast   = Input(Bool())
     val s_axi_wvalid  = Input(Bool())
     val s_axi_wready  = Output(Bool())
@@ -36,7 +38,7 @@ class LatencyRamModel(val readLatency: Int = 1) extends Module {
     val s_axi_arburst = Input(UInt(2.W))
     val s_axi_arvalid = Input(Bool())
     val s_axi_arready = Output(Bool())
-    val s_axi_rdata   = Output(UInt(128.W))
+    val s_axi_rdata   = Output(UInt(512.W))
     val s_axi_rlast   = Output(Bool())
     val s_axi_rvalid  = Output(Bool())
     val s_axi_rready  = Input(Bool())
@@ -47,6 +49,7 @@ class LatencyRamModel(val readLatency: Int = 1) extends Module {
     val pre_wr_data = Input(UInt(128.W))
   })
 
+  val WORDS = 4    // 128-bit words per 512-bit AXI beat
   val mem = Mem(4096, UInt(128.W))
   io.dbg_rd_data := mem(io.dbg_rd_addr)
   when (io.pre_wr_en) { mem(io.pre_wr_addr) := io.pre_wr_data }
@@ -60,7 +63,7 @@ class LatencyRamModel(val readLatency: Int = 1) extends Module {
 
   io.s_axi_arready := !busy
   io.s_axi_rvalid  := rValid
-  io.s_axi_rdata   := mem((arAddr >> 4.U) + rCnt)
+  io.s_axi_rdata   := Cat((0 until WORDS).reverse.map(w => mem(((arAddr >> 4.U) + (WORDS.U * rCnt)) + w.U)))
   io.s_axi_rlast   := rValid && rCnt === arLen
 
   when (io.s_axi_arvalid && !busy) {
@@ -82,32 +85,43 @@ class LatencyRamModel(val readLatency: Int = 1) extends Module {
     .otherwise            { rCnt := rCnt + 1.U }
   }
 
-  val awPending = RegInit(false.B)
+  val wActive   = RegInit(false.B)
   val awAddr    = RegInit(0.U(32.W))
   val awLen     = RegInit(0.U(8.W))
   val wCnt      = RegInit(0.U(8.W))
   val bValid    = RegInit(false.B)
-  io.s_axi_awready := !awPending
-  io.s_axi_wready  := awPending && !bValid
+  // Optional W-channel backpressure: hold wready low for `wDelay` cycles after
+  // a write burst's AW is accepted.  Exercises a store that is still draining
+  // when the next round's capture overwrites the source register.
+  val wReadyWait = RegInit(0.U(16.W))
+  io.s_axi_awready := !wActive
+  io.s_axi_wready  := wActive && wReadyWait === 0.U
   io.s_axi_bvalid  := bValid
-  when (io.s_axi_awvalid && !awPending) {
-    awPending := true.B
+  when (io.s_axi_awvalid && io.s_axi_awready) {
+    wActive   := true.B
     awAddr    := io.s_axi_awaddr
     awLen     := io.s_axi_awlen
     wCnt      := 0.U
+    wReadyWait := wDelay.U
   }
+  when (wActive && wReadyWait =/= 0.U) { wReadyWait := wReadyWait - 1.U }
   when (io.s_axi_wvalid && io.s_axi_wready) {
-    mem((awAddr >> 4.U) + wCnt) := io.s_axi_wdata
-    when (io.s_axi_wlast) { bValid := true.B }
+    val wBase = (awAddr >> 4.U) + (WORDS.U * wCnt)
+    for (w <- 0 until WORDS) {
+      when (io.s_axi_wstrb(16 * w + 15, 16 * w).orR) {
+        mem(wBase + w.U) := io.s_axi_wdata(128 * w + 127, 128 * w)
+      }
+    }
+    when (io.s_axi_wlast) { wActive := false.B; bValid := true.B }
     .otherwise            { wCnt := wCnt + 1.U }
   }
   when (bValid && io.s_axi_bready) {
-    bValid    := false.B
-    awPending := false.B
+    bValid := false.B
   }
 }
 
-class StreamHarness(val K: Int = 16, val readLatency: Int = 1) extends Module {
+class StreamHarness(val K: Int = 16, val readLatency: Int = 1, val W: Int = 8,
+                    val wDelay: Int = 0) extends Module {
   val io = IO(new Bundle {
     val instr       = Input(UInt(32.W))
     val instr_valid = Input(Bool())
@@ -128,12 +142,16 @@ class StreamHarness(val K: Int = 16, val readLatency: Int = 1) extends Module {
     val dbg_clct    = Output(UInt(16.W))
     val dbg_dma_done = Output(UInt(16.W))
     val dbg_wcount   = Output(UInt(5.W))
-    val dbg_bnd      = Output(UInt(7.W))
+    val dbg_capq     = Output(UInt(6.W))
+    val dbg_dmaq     = Output(UInt(4.W))
+    val dbg_bnd      = Output(UInt(9.W))
     val dbg_drain    = Output(Bool())
+    val dbg_cycles   = Output(UInt(32.W))
+    val dbg_mac      = Output(UInt(32.W))
   })
 
-  val eng = Module(new NpuProgramEngine(K, 8))
-  val ram = Module(new LatencyRamModel(readLatency))
+  val eng = Module(new NpuProgramEngine(K, 8, W))
+  val ram = Module(new LatencyRamModel(readLatency, wDelay))
 
   eng.io.instr       := io.instr
   eng.io.instr_valid := io.instr_valid
@@ -147,11 +165,18 @@ class StreamHarness(val K: Int = 16, val readLatency: Int = 1) extends Module {
   io.dbg_clct        := eng.io.dbg_clct
   io.dbg_dma_done    := eng.io.dbg_dma_done
   io.dbg_wcount      := eng.io.dbg_wcount
+  io.dbg_capq        := eng.io.dbg_capq
+  io.dbg_dmaq        := eng.io.dbg_dmaq
   io.dbg_bnd         := eng.io.dbg_bnd
   io.dbg_drain       := eng.io.drain
+  io.dbg_cycles      := eng.io.dbg_cycles
+  io.dbg_mac         := eng.io.dbg_mac
 
   eng.io.fetch_fill_req  := false.B
   eng.io.fetch_fill_addr := 0.U
+  // This harness never issues instruction-line fills (straight-line issue
+  // streams instructions in directly); tie the new burst-length port off.
+  eng.io.fetch_fill_beats := 0.U
 
   ram.io.s_axi_awaddr  := eng.io.m_axi_awaddr
   ram.io.s_axi_awlen   := eng.io.m_axi_awlen
@@ -233,4 +258,99 @@ object StreamSpecUtil {
   /** The columns of `pe` that match `g` exactly (the capture search). */
   def columnsOf(g: Array[Int], pe: Array[Array[Int]]): Seq[Int] =
     (0 until pe(0).length).filter(c => (0 until g.length).forall(i => g(i) == pe(i)(c)))
+
+  def resetSession(dut: StreamHarness): Unit = {
+    dut.io.session_reset.poke(true.B); dut.clock.step()
+    dut.io.session_reset.poke(false.B)
+  }
+
+  def runToDrain(dut: StreamHarness, maxCycles: Int = 2000000): Unit = {
+    var n = 0
+    while (!dut.io.dbg_drain.peek().litToBoolean && n < maxCycles) { dut.clock.step(); n += 1 }
+    assert(dut.io.dbg_drain.peek().litToBoolean, s"session did not drain within $maxCycles cycles")
+  }
+
+  case class Perf(cycles: Long, feeds: Long, macs: Long) {
+    def macsPerCycle: Double = if (cycles == 0) 0.0 else macs.toDouble / cycles
+    def pctPeak(K: Int): Double = if (cycles == 0) 0.0 else 100.0 * feeds.toDouble / cycles
+  }
+
+  def perf(dut: StreamHarness, K: Int): Perf = {
+    val macs  = dut.io.dbg_mac.peek().litValue.toLong
+    val cyc   = dut.io.dbg_cycles.peek().litValue.toLong
+    // dbg_mac counts only useful (non-mma.last) K² MACs; derive useful feeds.
+    val feeds = macs / (K.toLong * K)
+    assert(feeds * K.toLong * K == macs, s"mac/feed mismatch: macs=$macs K=$K")
+    Perf(cyc, feeds, macs)
+  }
+
+  def printPerf(label: String, K: Int, p: Perf): Unit =
+    println(f"[perf] $label%-28s cycles=${p.cycles}%8d feeds=${p.feeds}%7d " +
+      f"macs=${p.macs}%12d macs/cyc=${p.macsPerCycle}%8.1f peak=${p.pctPeak(K)}%6.1f%%")
+
+  // ==========================================================================
+  // Array-pipeline phase segmentation (the head/body/tail model)
+  //   head = first feed  -> first capture   (systolic fill, ~3n-1)
+  //   body = first capture -> last feed     (must be 1 feed/cycle = peak)
+  //   tail = last feed   -> drain           (flush + boundary + stores)
+  // ==========================================================================
+  case class Phases(
+    firstFeedCyc: Long, firstClctCyc: Long, lastFeedCyc: Long, drainCyc: Long,
+    finalFeeds: Long, accAtFirstClct: Long,
+    maxW: Long, maxCapq: Long, maxDmaq: Long, maxBnd: Long) {
+    def head: Long       = firstClctCyc - firstFeedCyc
+    def body: Long       = lastFeedCyc - firstClctCyc
+    def tail: Long       = drainCyc - lastFeedCyc
+    def total: Long      = drainCyc - firstFeedCyc
+    def bodyFeeds: Long  = finalFeeds - accAtFirstClct
+    /** Feeds issued per cycle during the body; 1.0 = full utilization. */
+    def bodyUtil: Double = if (body <= 0) 0.0 else bodyFeeds.toDouble / body
+    /** Cycle count if the body ran at 1 feed/cycle (head + feeds + tail). */
+    def idealTotal: Long = head + finalFeeds + tail
+  }
+
+  /** Drive `prog` holding `instr_valid` continuously (the frontend's stream),
+    * tracing the engine's feed/collect/drain counters every cycle, and return
+    * the array-pipeline head/body/tail segmentation. */
+  def traceRun(dut: StreamHarness, prog: Seq[Int], maxCycles: Int = 2000000): Phases = {
+    var idx = 0
+    var firstFeed = -1L
+    var firstClct = -1L
+    var lastFeed = -1L
+    var drainCyc = -1L
+    var accAtFirstClct = BigInt(0)
+    var accPrev = BigInt(0)
+    var maxW = 0L; var maxCapq = 0L; var maxDmaq = 0L; var maxBnd = 0L
+    var n = 0
+    var done = false
+    while (!done && n < maxCycles) {
+      val valid = idx < prog.length
+      dut.io.instr.poke(if (valid) (prog(idx).toLong & 0xFFFFFFFFL).U else 0.U)
+      dut.io.instr_valid.poke(valid.B)
+      val cyc   = dut.io.dbg_cycles.peek().litValue.toLong
+      val acc   = dut.io.dbg_mma_acc.peek().litValue
+      val clct  = dut.io.dbg_clct.peek().litValue
+      val ready = dut.io.instr_ready.peek().litToBoolean
+      if (firstFeed < 0 && acc > 0) firstFeed = cyc
+      if (firstClct < 0 && clct > 0) { firstClct = cyc; accAtFirstClct = acc }
+      if (acc > accPrev) lastFeed = cyc
+      accPrev = acc
+      maxW    = math.max(maxW,    dut.io.dbg_wcount.peek().litValue.toLong)
+      maxCapq = math.max(maxCapq, dut.io.dbg_capq.peek().litValue.toLong)
+      maxDmaq = math.max(maxDmaq, dut.io.dbg_dmaq.peek().litValue.toLong)
+      maxBnd  = math.max(maxBnd,  dut.io.dbg_bnd.peek().litValue.toLong)
+      if (dut.io.dbg_drain.peek().litToBoolean && idx >= prog.length) { drainCyc = cyc; done = true }
+      else { dut.clock.step(); n += 1; if (valid && ready) idx += 1 }
+    }
+    assert(done, s"traceRun did not drain within $maxCycles cycles")
+    assert(firstFeed >= 0 && firstClct >= 0, "traceRun saw no feed or no capture")
+    Phases(firstFeed, firstClct, lastFeed, drainCyc, accPrev.toLong, accAtFirstClct.toLong,
+      maxW, maxCapq, maxDmaq, maxBnd)
+  }
+
+  def printPhases(label: String, p: Phases): Unit = {
+    println(f"[phase] $label%-26s head=${p.head}%6d body=${p.body}%7d tail=${p.tail}%6d " +
+      f"total=${p.total}%7d feeds=${p.finalFeeds}%5d bodyUtil=${p.bodyUtil * 100.0}%7.1f%%")
+    println(f"[phase]   maxW=${p.maxW}%3d maxCapq=${p.maxCapq}%3d maxDmaq=${p.maxDmaq}%2d maxBnd=${p.maxBnd}%3d")
+  }
 }

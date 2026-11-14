@@ -9,6 +9,7 @@ import isa.NpuAssembler._
 class DecodeDispatchPolicySpec extends AnyFlatSpec {
   "engine decode policy" should "reject out-of-range MMA operands" in {
     simulate(new StreamHarness(K = 16)) { dut =>
+      StreamSpecUtil.resetSession(dut)
       dut.io.session_reset.poke(false.B)
       // Warm past the simulator's initial reset cycle.  StreamSpecUtil.issue
       // deasserts instr_valid after a single clock step, so without this the
@@ -32,6 +33,7 @@ class DecodeDispatchPolicySpec extends AnyFlatSpec {
 
   it should "reject out-of-range memory operands and unsupported families" in {
     simulate(new StreamHarness(K = 16)) { dut =>
+      StreamSpecUtil.resetSession(dut)
       dut.io.session_reset.poke(false.B)
       dut.clock.step()   // warm past the simulator's initial reset cycle (see above)
       def expectIllegal(instr: Int): Unit = {
@@ -51,6 +53,7 @@ class DecodeDispatchPolicySpec extends AnyFlatSpec {
 
   it should "reject legacy R-format mma (rs3 aliases funct7)" in {
     simulate(new StreamHarness(K = 16)) { dut =>
+      StreamSpecUtil.resetSession(dut)
       dut.io.session_reset.poke(false.B)
       dut.clock.step()   // warm past the simulator's initial reset cycle (see above)
       def expectIllegal(instr: Int): Unit = {
@@ -73,6 +76,7 @@ class DecodeDispatchPolicySpec extends AnyFlatSpec {
 
   it should "still accept and drain an in-range one-shot session" in {
     simulate(new StreamHarness(K = 16)) { dut =>
+      StreamSpecUtil.resetSession(dut)
       dut.io.session_reset.poke(false.B)
       StreamSpecUtil.preloadI8(dut, NpuSections.A, Seq.tabulate(16)(i => i + 1))
       StreamSpecUtil.preloadI8(dut, NpuSections.B, Seq.tabulate(16)(i => 2))

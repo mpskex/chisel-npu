@@ -3,22 +3,21 @@
 //  npuDmaEngine.scala — DMA engine: moves vector data between the L3 DDR
 //  DATA section and the VX/VE/VR register file.
 //
-//  Request-driven AXI master (128-bit):
-//    L2R  (L3 → RF): burst read 2/4/8 beats (VX/VE/VR = 32/64/128 B), stage
-//                    into a beat buffer, then ONE wide RF write per vector.
-//    R2L  (RF → L3): combinational RF read, beat pack, AXI write with the
-//                    wdata-preload fix (wvalid asserted together with awvalid).
+//  Request-driven AXI master.  AXI data width is `DW` (default 512, matching
+//  the 4x DDR4 MIG controller) so one vector is few beats:
+//    VX = 32 B -> 1 beat (low 32 B valid, WSTRB), VE = 64 B -> 1 beat,
+//    VR = 128 B -> 2 beats.  (At the old 128-bit width VR was 8 beats.)
+//    L2R  (L3 -> RF): burst read the beats, stage into a beat buffer, then
+//                    ONE wide RF write per vector.
+//    R2L  (RF -> L3): combinational RF read, pack a DW-wide beat, AXI write
+//                    with the wdata-preload fix (wvalid with awvalid).
 //
-//  Carries the hardened patterns from npu_dma_master.v:
-//    - rready asserted at the first AR and held across all read phases
-//      (rready continuity — prevents the xbar/dwidth converter from losing
-//      the first beat of the next burst).
-//    - read-timeout retry: if no beat arrives within `readTimeout` cycles,
-//      re-issue the AR (16K cycles ≈ 82 µs at 200 MHz by default).
+//  Request pipelining (c7dae30): `req_ready` rises once the current burst's
+//  data phase has started and a one-deep request buffer latches the next
+//  request (its address phase overlaps the previous data phase).
 //
-//  The RF interface exposes one write port per register class (L2R) and one
-//  read port per class (R2L).  Exactly one write port pulses per L2R request;
-//  read addresses are held for the whole R2L request.
+//  Hardened patterns carried from npu_dma_master.v: rready continuity, and
+//  read/write timeout retries.
 // -----------------------------------------------------------------------------
 
 package dma
@@ -26,17 +25,23 @@ package dma
 import chisel3._
 import chisel3.util._
 
-class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384) extends Module {
+class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384,
+                   val DW: Int = 512) extends Module {
 
   require(N == 8, s"NpuDmaEngine: N=$N not supported (byte packing assumes 8)")
   require(K % 16 == 0, s"NpuDmaEngine: K=$K must be a multiple of 16")
+  require(DW == 512, s"NpuDmaEngine: DW=$DW not supported (DW=512 target)")
 
+  val DBYTES = DW / 8               // 64 bytes per AXI beat
   val VX_BYTES = K * N / 8          // 32  B
   val VE_BYTES = K * 2 * N / 8      // 64  B
   val VR_BYTES = K * 4 * N / 8      // 128 B
-  val BEATS_VX = VX_BYTES / 16      // 2
-  val BEATS_VE = VE_BYTES / 16      // 4
-  val BEATS_VR = VR_BYTES / 16      // 8
+  def ceilDiv(a: Int, b: Int) = (a + b - 1) / b
+  val BEATS_VX = ceilDiv(VX_BYTES, DBYTES)   // 1
+  val BEATS_VE = ceilDiv(VE_BYTES, DBYTES)   // 1
+  val BEATS_VR = ceilDiv(VR_BYTES, DBYTES)   // 2
+  val MAX_BEATS = math.max(4, math.max(BEATS_VR, math.max(BEATS_VE, BEATS_VX)))
+  val SZ = log2Ceil(DW / 8)         // 6 (awsize)
 
   val VX_ADDR = log2Ceil(K)         // 5 bits (L = K = 32)
   val VE_ADDR = log2Ceil(K / 2)     // 4 bits
@@ -51,10 +56,8 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
                                         // 3 = L3 → instruction line buffer (1 beat)
     val req_width = Input(UInt(2.W))    // 0 = VX, 1 = VE, 2 = VR (ACCUM/fetch: VR)
     val req_rf_addr = Input(UInt(5.W))  // VX/VE/VR register index
-    val req_l3_addr = Input(UInt(32.W)) // absolute DDR address (16 B aligned)
-    // R2L store-data override: when set, the store beats come from the
-    // latched capture payload (K×4N, VR width) instead of the RF read —
-    // the streamed dispatch's "read right after the mma's final tick" path.
+    val req_l3_addr = Input(UInt(32.W)) // absolute DDR address (aligned)
+    val req_beats   = Input(UInt(3.W))  // beats per request (1..4; dir=3 only)
     val req_store_data_valid = Input(Bool())
     val req_store_data = Input(Vec(K, UInt((4 * N).W)))
     val busy      = Output(Bool())
@@ -64,9 +67,10 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
     val acc_valid = Output(Bool())
     val acc_out   = Output(Vec(K, UInt((4 * N).W)))
 
-    // ---- Instruction line buffer (dir=3; valid one cycle before done) ----
+    // ---- Instruction line buffer (dir=3; beats stream back, one per cycle) ----
     val instr_valid = Output(Bool())
-    val instr_out   = Output(UInt(128.W))
+    val instr_out   = Output(UInt(DW.W))
+    val instr_last  = Output(Bool())     // asserted on the last beat of the burst
 
     // ---- RF write ports (L2R; one pulses per request) ----
     val rf_w_vx_en   = Output(Bool())
@@ -87,15 +91,15 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
     val rf_r_vr_addr = Output(UInt(VR_ADDR.W))
     val rf_r_vr_data = Input(Vec(K, UInt((4 * N).W)))
 
-    // ---- AXI4 master (128-bit, INCR, id = 0) ----
+    // ---- AXI4 master (DW-bit, INCR, id = 0) ----
     val m_axi_awaddr  = Output(UInt(32.W))
     val m_axi_awlen   = Output(UInt(8.W))
     val m_axi_awsize  = Output(UInt(3.W))
     val m_axi_awburst = Output(UInt(2.W))
     val m_axi_awvalid = Output(Bool())
     val m_axi_awready = Input(Bool())
-    val m_axi_wdata   = Output(UInt(128.W))
-    val m_axi_wstrb   = Output(UInt(16.W))
+    val m_axi_wdata   = Output(UInt(DW.W))
+    val m_axi_wstrb   = Output(UInt((DW / 8).W))
     val m_axi_wlast   = Output(Bool())
     val m_axi_wvalid  = Output(Bool())
     val m_axi_wready  = Input(Bool())
@@ -107,7 +111,7 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
     val m_axi_arburst = Output(UInt(2.W))
     val m_axi_arvalid = Output(Bool())
     val m_axi_arready = Input(Bool())
-    val m_axi_rdata   = Input(UInt(128.W))
+    val m_axi_rdata   = Input(UInt(DW.W))
     val m_axi_rlast   = Input(Bool())
     val m_axi_rvalid  = Input(Bool())
     val m_axi_rready  = Output(Bool())
@@ -118,34 +122,48 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
   }
   val state = RegInit(DmaState.IDLE)
 
-  // ---- Latched request ----
+  // ---- Latched request (in-flight) ----
   val reqDir   = RegInit(0.U(2.W))
   val reqWidth = RegInit(0.U(2.W))
   val reqRfAddr = RegInit(0.U(5.W))
   val reqL3Addr = RegInit(0.U(32.W))
+  val reqBeats  = RegInit(1.U(3.W))     // latched burst length (dir=3)
   val reqStoreDataValid = RegInit(false.B)
   val reqStoreData = RegInit(VecInit(Seq.fill(K)(0.U((4 * N).W))))
 
-  val beatCnt  = RegInit(0.U(4.W))
-  val buf      = RegInit(VecInit(Seq.fill(8)(0.U(128.W))))
+  val beatCnt  = RegInit(0.U(log2Ceil(MAX_BEATS + 1).W))
+  val instrBeat = RegInit(0.U(3.W))     // dir=3 INSTRW beat index 0..reqBeats-1
+  val buf      = RegInit(VecInit(Seq.fill(MAX_BEATS)(0.U(DW.W))))
   val timeoutCnt = RegInit(0.U(16.W))
   val awDone   = RegInit(false.B)
   val wtoCnt   = RegInit(0.U(16.W))   // write-phase timeout: re-issue the write
   val wtoRetry = RegInit(0.U(3.W))    // WRESP retries before forcing done
 
+  // ---- One-deep pipelined next-request buffer (c7dae30) ----
+  val bufValid  = RegInit(false.B)
+  val bufDir    = RegInit(0.U(2.W))
+  val bufWidth  = RegInit(0.U(2.W))
+  val bufRfAddr = RegInit(0.U(5.W))
+  val bufL3Addr = RegInit(0.U(32.W))
+  val bufBeats  = RegInit(1.U(3.W))     // buffered burst length (dir=3)
+  val bufStoreDataValid = RegInit(false.B)
+  val bufStoreData = RegInit(VecInit(Seq.fill(K)(0.U((4 * N).W))))
+
   def beatsOf(w: UInt): UInt =
-    Mux(reqDir === 3.U, 1.U,  // fetch mode: single 16 B beat
-      MuxLookup(w, BEATS_VX.U(4.W))(Seq(
-        0.U -> BEATS_VX.U(4.W), 1.U -> BEATS_VE.U(4.W), 2.U -> BEATS_VR.U(4.W))))
+    Mux(reqDir === 3.U, reqBeats,
+      MuxLookup(w, BEATS_VX.U)(Seq(
+        0.U -> BEATS_VX.U, 1.U -> BEATS_VE.U, 2.U -> BEATS_VR.U)))
 
   val beats = beatsOf(reqWidth)
 
   // ---- Defaults ----
-  io.busy       := state =/= DmaState.IDLE
+  // busy must include a buffered-but-unpromoted request, else a caller that
+  // drains on !busy exits with a request still queued.
+  io.busy       := (state =/= DmaState.IDLE) || bufValid
   io.done       := false.B
   io.acc_valid  := false.B
   io.instr_valid := false.B
-  io.req_ready  := state === DmaState.IDLE
+  io.instr_last  := false.B
   io.rf_w_vx_en := false.B
   io.rf_w_ve_en := false.B
   io.rf_w_vr_en := false.B
@@ -163,10 +181,29 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
   }
   io.instr_out := 0.U
 
-  // AXI defaults
-  io.m_axi_awaddr  := reqL3Addr
+  // AXI defaults.  The bus is 512-bit and ALL transfers use SIZE=6 (one 64-byte
+  // beat), so the AXI address MUST be 64-byte aligned.  The engine's addresses
+  // are only 16-byte (instruction lines) or 32-byte (VX) aligned, so align the
+  // AXI address down and recover the requested bytes with `rdOff` (the byte
+  // offset within the beat).  The old code issued SIZE=6 at the unaligned
+  // address and assumed the data was in the low lanes: on silicon that is an
+  // AXI protocol violation / wrong lane (VX at offset 32, CODE lines at 16/32/
+  // 48), while the Chisel RAM models ignored size and always returned low
+  // lanes, hiding it.
+  val beatMask  = "hFFFFFFC0".U(32.W)
+  val rdOff     = reqL3Addr(5, 0)             // byte offset inside the 64-B beat
+  // VX is VX_BYTES-aligned: select its VX_BYTES chunk within the 64-B beat
+  // (2-way for K=32, 4-way for K=16) instead of a 512-bit barrel shifter.
+  val vxChunks  = (DW / 8) / VX_BYTES
+  val vxLo      = log2Ceil(VX_BYTES)
+  val vxSel     = if (vxChunks > 1) rdOff(vxLo + log2Ceil(vxChunks) - 1, vxLo) else 0.U
+  // VE is VE_BYTES-aligned as well (1 beat: 1 chunk for K=32, 2 for K=16).
+  val veChunks  = (DW / 8) / VE_BYTES
+  val veLo      = log2Ceil(VE_BYTES)
+  val veSel     = if (veChunks > 1) rdOff(veLo + log2Ceil(veChunks) - 1, veLo) else 0.U
+  io.m_axi_awaddr  := (reqL3Addr & beatMask)
   io.m_axi_awlen   := beats - 1.U
-  io.m_axi_awsize  := 4.U             // 16 bytes per beat
+  io.m_axi_awsize  := SZ.U
   io.m_axi_awburst := 1.U             // INCR
   io.m_axi_awvalid := false.B
   io.m_axi_wdata   := 0.U
@@ -174,9 +211,9 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
   io.m_axi_wlast   := false.B
   io.m_axi_wvalid  := false.B
   io.m_axi_bready  := false.B
-  io.m_axi_araddr  := reqL3Addr
+  io.m_axi_araddr  := (reqL3Addr & beatMask)
   io.m_axi_arlen   := beats - 1.U
-  io.m_axi_arsize  := 4.U
+  io.m_axi_arsize  := SZ.U
   io.m_axi_arburst := 1.U
   io.m_axi_arvalid := false.B
   io.m_axi_rready  := false.B
@@ -187,58 +224,99 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
     beatCnt      := beatCnt + 1.U
   }
 
-  // ---- R2L: beat pack from combinational RF reads ----
-  // Byte-vector assembly (element connects are always writable).
-  val wbytes = Wire(Vec(16, UInt(8.W)))
-  for (b <- 0 until 16) wbytes(b) := 0.U
-  when (reqWidth === 0.U) {  // VX: 16 lanes per beat
-    for (i <- 0 until 16) {
-      wbytes(i) := io.rf_r_vx_data((beatCnt << 4.U) + i.U)
-    }
-  }.elsewhen (reqWidth === 1.U) {  // VE: 8 lanes per beat
-    for (i <- 0 until 8) {
-      wbytes(2 * i)     := io.rf_r_ve_data((beatCnt << 3.U) + i.U)(7, 0)
-      wbytes(2 * i + 1) := io.rf_r_ve_data((beatCnt << 3.U) + i.U)(15, 8)
-    }
-  }.otherwise {  // VR: 4 lanes per beat
-    for (i <- 0 until 4) {
-      for (b <- 0 until 4) {
-        wbytes(4 * i + b) := Mux(reqStoreDataValid,
-          reqStoreData((beatCnt << 2.U) + i.U)(8 * b + 7, 8 * b),
-          io.rf_r_vr_data((beatCnt << 2.U) + i.U)(8 * b + 7, 8 * b))
+  // ---- R2L: pack a DW-wide beat from combinational RF reads ----
+  // Byte-vector assembly (element assignable), then one whole-word connect.
+  val fullStrb = ((BigInt(1) << (DW / 8)) - 1).U((DW / 8).W)
+  val wbytes = Wire(Vec(DW / 8, UInt(8.W)))
+  for (b <- 0 until DW / 8) wbytes(b) := 0.U
+  val wstrb = WireDefault(0.U((DW / 8).W))
+  when (reqWidth === 0.U) {          // VX: K lanes x 8 bit, 1 beat
+    // Place the VX_BYTES at its aligned chunk of the 64-B beat.
+    for (c <- 0 until vxChunks) {
+      when (vxSel === c.U) {
+        for (i <- 0 until K) wbytes(c * VX_BYTES + i) := io.rf_r_vx_data(i)
       }
     }
+    wstrb := MuxLookup(vxSel, 0.U((DW / 8).W))(
+      (0 until vxChunks).map(c =>
+        c.U -> (((BigInt(1) << VX_BYTES) - 1).U << (c * VX_BYTES))))
+  }.elsewhen (reqWidth === 1.U) {    // VE: K lanes x 16 bit, 1 beat
+    for (c <- 0 until veChunks) {
+      when (veSel === c.U) {
+        for (i <- 0 until K) {
+          wbytes(c * VE_BYTES + 2 * i)     := io.rf_r_ve_data(i)(7, 0)
+          wbytes(c * VE_BYTES + 2 * i + 1) := io.rf_r_ve_data(i)(15, 8)
+        }
+      }
+    }
+    wstrb := MuxLookup(veSel, 0.U((DW / 8).W))(
+      (0 until veChunks).map(c =>
+        c.U -> (((BigInt(1) << VE_BYTES) - 1).U << (c * VE_BYTES))))
+  }.otherwise {                      // VR: 16 lanes x 32 bit per beat, 2 beats
+    val lanesPerBeat = DW / 32
+    for (i <- 0 until lanesPerBeat) {
+      val lane = beatCnt * lanesPerBeat.U + i.U
+      val v = Mux(reqStoreDataValid, reqStoreData(lane), io.rf_r_vr_data(lane))
+      for (b <- 0 until 4) wbytes(4 * i + b) := v(8 * b + 7, 8 * b)
+    }
+    wstrb := fullStrb
   }
   io.m_axi_wdata := wbytes.asUInt
+  io.m_axi_wstrb := wstrb
 
-  // ---- L2R: assemble wide RF write from the beat buffer ----
+  // ---- L2R: assemble wide RF writes from the beat buffer ----
   val rfWDataVx = Wire(Vec(K, UInt(N.W)))
   val rfWDataVe = Wire(Vec(K, UInt((2 * N).W)))
   val rfWDataVr = Wire(Vec(K, UInt((4 * N).W)))
+  // The AXI read is 64-B aligned, so the requested vector starts at byte
+  // `rdOff` of the beat.  Select the aligned VX chunk (small mux, K-exact).
+  val vxBeat = MuxLookup(vxSel, 0.U((VX_BYTES * 8).W))(
+    (0 until vxChunks).map(c =>
+      c.U -> buf(0)((c + 1) * VX_BYTES * 8 - 1, c * VX_BYTES * 8)))
+  val veBeat = MuxLookup(veSel, 0.U((VE_BYTES * 8).W))(
+    (0 until veChunks).map(c =>
+      c.U -> buf(0)((c + 1) * VE_BYTES * 8 - 1, c * VE_BYTES * 8)))
   for (lane <- 0 until K) {
-    rfWDataVx(lane) := buf(lane / 16)(8 * (lane % 16) + 7, 8 * (lane % 16))
-    rfWDataVe(lane) := buf(lane / 8)(16 * (lane % 8) + 15, 16 * (lane % 8))
-    rfWDataVr(lane) := buf(lane / 4)(32 * (lane % 4) + 31, 32 * (lane % 4))
+    rfWDataVx(lane) := vxBeat(8 * lane + 7, 8 * lane)
+    rfWDataVe(lane) := veBeat(16 * lane + 15, 16 * lane)
+    rfWDataVr(lane) := buf(lane / (DW / 32))(32 * (lane % (DW / 32)) + 31,
+                                             32 * (lane % (DW / 32)))
   }
 
   switch (state) {
     is (DmaState.IDLE) {
-      when (io.req_valid) {
-        reqDir    := io.req_dir
-        // ACCUM mode always reads a full VR vector (128 B, 8 beats);
-        // fetch mode beats handled in beatsOf.
-        reqWidth  := Mux(io.req_dir === 2.U, 2.U, io.req_width)
-        reqRfAddr := io.req_rf_addr
-        reqL3Addr := io.req_l3_addr
-        reqStoreDataValid := io.req_store_data_valid
-        for (lane <- 0 until K) reqStoreData(lane) := io.req_store_data(lane)
+      when (bufValid) {
+        // Promote the buffered request.
+        reqDir    := bufDir
+        reqWidth  := bufWidth
+        reqRfAddr := bufRfAddr
+        reqL3Addr := bufL3Addr
+        reqBeats  := bufBeats
+        reqStoreDataValid := bufStoreDataValid
+        for (lane <- 0 until K) reqStoreData(lane) := bufStoreData(lane)
+        bufValid  := false.B
         beatCnt   := 0.U
+        instrBeat := 0.U
         timeoutCnt := 0.U
         awDone    := false.B
         wtoCnt    := 0.U
         wtoRetry  := 0.U
-        when (io.req_dir === 1.U) { state := DmaState.WAW }       // R2L
-        .otherwise                  { state := DmaState.AR }       // L2R / ACCUM / fetch
+        state := Mux(bufDir === 1.U, DmaState.WAW, DmaState.AR)
+      } .elsewhen (io.req_valid) {
+        reqDir    := io.req_dir
+        reqWidth  := Mux(io.req_dir === 2.U, 2.U, io.req_width)
+        reqRfAddr := io.req_rf_addr
+        reqL3Addr := io.req_l3_addr
+        reqBeats  := io.req_beats
+        reqStoreDataValid := io.req_store_data_valid
+        for (lane <- 0 until K) reqStoreData(lane) := io.req_store_data(lane)
+        beatCnt   := 0.U
+        instrBeat := 0.U
+        timeoutCnt := 0.U
+        awDone    := false.B
+        wtoCnt    := 0.U
+        wtoRetry  := 0.U
+        state := Mux(io.req_dir === 1.U, DmaState.WAW, DmaState.AR)
       }
     }
 
@@ -259,7 +337,6 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
         }
       } .otherwise {
         when (timeoutCnt === (readTimeout - 1).U) {
-          // No beat arrived: re-issue the request (self-heal).
           beatCnt   := 0.U
           timeoutCnt := 0.U
           state := DmaState.AR
@@ -270,7 +347,6 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
     }
 
     is (DmaState.RFW) {
-      // One wide RF write with the fully-assembled vector.
       when (reqWidth === 0.U) {
         io.rf_w_vx_en := true.B
         io.rf_w_vx_data := rfWDataVx
@@ -285,27 +361,30 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
     }
 
     is (DmaState.ACCW) {
-      // Publish the K×1 ACCUM vector (MMA in_accum) from the beat buffer.
       io.acc_valid := true.B
       for (lane <- 0 until K) {
-        io.acc_out(lane) := buf(lane / 4)(32 * (lane % 4) + 31, 32 * (lane % 4))
+        io.acc_out(lane) := buf(lane / (DW / 32))(32 * (lane % (DW / 32)) + 31,
+                                                  32 * (lane % (DW / 32)))
       }
       state := DmaState.DONE
     }
 
     is (DmaState.INSTRW) {
-      // Publish the fetched 16 B instruction line.
       io.instr_valid := true.B
-      io.instr_out   := buf(0)
-      state := DmaState.DONE
+      // Stream the burst beats back one per cycle.  The fetch address is
+      // 64-byte aligned, so no rdOff quarter select is needed for dir=3.
+      io.instr_out  := buf(instrBeat)
+      io.instr_last := instrBeat === (reqBeats - 1.U)
+      when (instrBeat === (reqBeats - 1.U)) {
+        state := DmaState.DONE
+      } .otherwise {
+        instrBeat := instrBeat + 1.U
+      }
     }
 
     is (DmaState.WAW) {
-      // AW together with W (beat 0 preloaded) — the S_WR_W preload fix.
       io.m_axi_awvalid := !awDone
       io.m_axi_wvalid  := beatCnt < beats
-      io.m_axi_wdata   := wbytes.asUInt
-      io.m_axi_wstrb   := 0xFFFF.U(16.W)
       io.m_axi_wlast   := beatCnt === beats - 1.U
       val wadv         = io.m_axi_wready && beatCnt < beats
       when (io.m_axi_awready) {
@@ -314,10 +393,6 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
         when (beatCnt + Mux(wadv, 1.U, 0.U) === beats) { state := DmaState.WRESP }
         .otherwise                                     { state := DmaState.WDATA }
       } .elsewhen (wtoCnt === (readTimeout - 1).U) {
-        // awready never came (or a WRESP retry re-issued into a fabric that
-        // is still draining the abandoned write).  Re-try a few times, then
-        // force-complete so the engine can never hang waiting for a write
-        // grant.
         when (wtoRetry === 7.U) {
           state := DmaState.DONE
         } .otherwise {
@@ -334,18 +409,12 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
 
     is (DmaState.WDATA) {
       io.m_axi_wvalid := beatCnt < beats
-      io.m_axi_wdata  := wbytes.asUInt
-      io.m_axi_wstrb  := 0xFFFF.U(16.W)
       io.m_axi_wlast  := beatCnt === beats - 1.U
       when (io.m_axi_wready && beatCnt < beats) {
         beatCnt := beatCnt + 1.U
         wtoCnt  := 0.U
         when (beatCnt === beats - 1.U) { state := DmaState.WRESP }
       } .elsewhen (wtoCnt === (readTimeout - 1).U) {
-        // No beat accepted for readTimeout cycles: the fabric stalled the
-        // write channel mid-burst — re-issue the whole write from WAW
-        // (the store data is latched and idempotent, so a partial duplicate
-        // write is harmless).  Mirrors the read-path timeout retry.
         awDone   := false.B
         beatCnt  := 0.U
         wtoCnt   := 0.U
@@ -362,11 +431,6 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
         wtoCnt   := 0.U
         wtoRetry := 0.U
       } .elsewhen (wtoCnt === (readTimeout - 1).U) {
-        // The write response never came back (seen on silicon: beats are
-        // accepted but bvalid is dropped on the MIG/clkconv path).  Re-issue
-        // the write a few times (the store is idempotent so a duplicate
-        // write is safe); if it still never responds, force-complete the
-        // write so the engine can never hang permanently on a lost BRESP.
         when (wtoRetry === 7.U) {
           state := DmaState.DONE
         } .otherwise {
@@ -385,5 +449,33 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
       io.done := true.B
       state   := DmaState.IDLE
     }
+  }
+
+  // ---- Request acceptance: one-deep buffer; `req_ready` rises once the
+  //      current burst's data phase has started (address/data overlap). ----
+  val dataPhaseStarted =
+    (state === DmaState.READ) || (state === DmaState.WDATA) ||
+    (state === DmaState.WRESP) || (state === DmaState.WAW)
+  val wantBuffer = io.req_valid && !bufValid && !io.done && state =/= DmaState.IDLE
+  // Never advertise readiness while a buffered request is waiting to be
+  // promoted: in IDLE-with-buffer the new request would be silently dropped
+  // (the promote wins, and `wantBuffer` excludes IDLE).
+  io.req_ready := !bufValid && ((state === DmaState.IDLE) || dataPhaseStarted)
+  // dir=3 fetch bursts must request 1..4 beats: 0 underflows the INSTRW
+  // `reqBeats - 1` compare and any wider value would index past the 4-entry
+  // `buf`.  Guard the raw input before it is latched (and buffered).
+  when (io.req_dir === 3.U && io.req_valid) {
+    assert(io.req_beats >= 1.U && io.req_beats <= 4.U,
+      "NpuDmaEngine: dir=3 req_beats must be in 1..4")
+  }
+  when (wantBuffer) {
+    bufValid  := true.B
+    bufDir    := io.req_dir
+    bufWidth  := Mux(io.req_dir === 2.U, 2.U, io.req_width)
+    bufRfAddr := io.req_rf_addr
+    bufL3Addr := io.req_l3_addr
+    bufBeats  := io.req_beats
+    bufStoreDataValid := io.req_store_data_valid
+    for (lane <- 0 until K) bufStoreData(lane) := io.req_store_data(lane)
   }
 }

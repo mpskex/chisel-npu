@@ -5,14 +5,12 @@
 //  The silicon wedge reproduced intermittently at the chained vse32: the mma
 //  producer's clctD can retire the producer before the store word streams into
 //  the window (the MIG's variable latency vs. the frontend fetch cadence).  The
-//  old useCapData detection required a *pending prior* slot (`vxWrMask &
-//  priorMask`), so a late store missed the capture: it read the RF instead of
-//  popping the capQ, the mma's capture sat in capQ forever, and `drain` never
-//  asserted.
+//  old useCapData detection required a *pending prior* slot, so a late store
+//  missed the capture and `drain` never asserted.
 //
-//  This test issues the store only AFTER the mma has fully retired (clct
-//  fired), which is exactly the late-entry scenario — the store must still be
-//  recognized as a capture consumer and the engine must drain.
+//  This test issues the store only AFTER the round's mma + mma.last have fully
+//  retired (the capture is already committed to VR[0]), which is exactly the
+//  late-entry scenario — the store must read VR[0] directly and drain.
 // -----------------------------------------------------------------------------
 
 package engine
@@ -35,11 +33,13 @@ class LateStoreCaptureSpec extends AnyFlatSpec {
     simulate(new StreamHarness(K = 16, readLatency = 50)) { dut =>
       StreamSpecUtil.preloadI8(dut, NpuSections.A, aVals.map(_ & 0xFF))
       StreamSpecUtil.preloadI8(dut, NpuSections.B, bVals.map(_ & 0xFF))
+      StreamSpecUtil.resetSession(dut)
 
       // feed the mma and let it fully retire (clct fires, slot done)
       StreamSpecUtil.issue(dut, vle8(4, NpuSections.SECT_A, 0))
       StreamSpecUtil.issue(dut, vle8(8, NpuSections.SECT_B, 0))
       StreamSpecUtil.issue(dut, mma(0, 4, 8, 0))
+      StreamSpecUtil.issue(dut, mmaLast(0, 0, 0, 0))
       var prev = BigInt(0)
       for (t <- 0 until 10000) {
         val c = dut.io.dbg_clct.peek().litValue
@@ -58,13 +58,13 @@ class LateStoreCaptureSpec extends AnyFlatSpec {
 
       // NOW issue the store — it enters the window after the mma retired.
       StreamSpecUtil.issue(dut, vse32(0, NpuSections.SECT_OUT, 0: Int))
-      // let it drain (the core's drain needs the capQ to empty)
+      // let it drain (the store reads the already-committed VR[0])
       var drained = false
       for (t <- 0 until 20000) {
         if (dut.io.dbg_drain.peek().litToBoolean) { drained = true; }
         dut.clock.step()
       }
-      assert(drained, "engine did not drain after the late store (capQ stuck)")
+      assert(drained, "engine did not drain after the late store")
 
       // the stored value must be the mma capture (a b-column), not garbage
       val out = StreamSpecUtil.readI32(dut, NpuSections.OUT, k)

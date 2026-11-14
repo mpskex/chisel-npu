@@ -10,7 +10,8 @@ import org.scalatest.flatspec.AnyFlatSpec
 import testUtil._
 import isa.NpuAssembler._
 
-class FrontendSpecHarness(val K: Int = 32) extends Module {
+class FrontendSpecHarness(val K: Int = 32, val readLatency: Int = 1,
+                          val readJitter: Int = 0, val bDelay: Int = 0) extends Module {
   val io = IO(new Bundle {
     val ctrl_addr  = Input(UInt(7.W))
     val ctrl_we    = Input(Bool())
@@ -32,7 +33,7 @@ class FrontendSpecHarness(val K: Int = 32) extends Module {
     val dbg_acc    = Output(UInt(16.W))
     val dbg_clctc  = Output(UInt(16.W))
     val dbg_dma    = Output(UInt(16.W))
-    val dbg_bnd    = Output(UInt(7.W))
+    val dbg_bnd    = Output(UInt(9.W))
     val dbg_drain  = Output(Bool())
     val dbg_mma_out0 = Output(UInt(32.W))
     val dbg_cnt    = Output(UInt(4.W))
@@ -49,7 +50,8 @@ class FrontendSpecHarness(val K: Int = 32) extends Module {
   })
 
   val fe = Module(new NpuProgramEngineFrontend(K, 8))
-  val ram = Module(new AxiRamModel())
+  val ram = Module(new AxiRamModel(readLatency = readLatency,
+    readJitter = readJitter, bDelay = bDelay))
 
   fe.io.ctrl_addr  := io.ctrl_addr
   fe.io.ctrl_we    := io.ctrl_we
@@ -176,7 +178,7 @@ class NpuProgramEngineFrontendSpec extends AnyFlatSpec {
     ctrlWrite(dut, 0x0, 0)
   }
 
-  def waitDone(dut: FrontendSpecHarness, maxCycles: Int = 500000): Unit = {
+  def waitDone(dut: FrontendSpecHarness, maxCycles: Int = 500000): Long = {
     var n = 0
     var lastAcc = BigInt(-1)
     while (((ctrlRead(dut, 0x0) >> 1) & 1) == 0 && n < maxCycles) {
@@ -188,6 +190,7 @@ class NpuProgramEngineFrontendSpec extends AnyFlatSpec {
       dut.clock.step(); n += 1
     }
     assert(((ctrlRead(dut, 0x0) >> 1) & 1) == 1, s"program did not finish within $maxCycles cycles")
+    n
   }
 
   def s8(v: Int): Int = { val b = v & 0xFF; if (b >= 128) b - 256 else b }
@@ -209,7 +212,7 @@ class NpuProgramEngineFrontendSpec extends AnyFlatSpec {
         vle8(rd = 8, sect = NpuSections.SECT_B, off = 0),
         vle32(rd = 3, sect = NpuSections.SECT_ACCUM, off = 0),
         mma(rd = 2, vs1 = 4, vs2 = 8, vs3 = 3),
-        mmaLast(rd = 0, vs1 = 0, vs2 = 0, vs3 = 0),
+        mmaLast(rd = 2, vs1 = 0, vs2 = 0, vs3 = 3),
         vse32(src = 2, sect = NpuSections.SECT_OUT, off = 0),
       )
       preloadInstrs(dut, prog)
@@ -231,7 +234,7 @@ class NpuProgramEngineFrontendSpec extends AnyFlatSpec {
     }
   }
 
-  "NpuProgramEngineFrontend" should "run a streamed 3-mma session (running sums)" in {
+  "NpuProgramEngineFrontend" should "run three back-to-back reduce matmul rounds" in {
     simulate(new FrontendSpecHarness(K = 16)) { dut =>
       val k = 16
       val aVals = Array.tabulate(3, k)((m, j) => s8(m * 7 + j + 1))
@@ -239,24 +242,15 @@ class NpuProgramEngineFrontendSpec extends AnyFlatSpec {
       preload(dut, NpuSections.A, aVals.flatten.map(_ & 0xFF))
       preload(dut, NpuSections.B, bVals.flatten.map(_ & 0xFF))
 
-      // streamed form: reused operands (VX[4]/VX[8]) + vd=0 (VR[0], disjoint)
-      // + per-feed vse; captures = the running partial sums
-      val prog = Seq(
-        vle8(rd = 4, sect = NpuSections.SECT_A, off = 0),
-        vle8(rd = 8, sect = NpuSections.SECT_B, off = 0),
-        mma(rd = 0, vs1 = 4, vs2 = 8, vs3 = 0),
-        vse32(src = 0, sect = NpuSections.SECT_OUT, off = 0),
-        vle8(rd = 4, sect = NpuSections.SECT_A, off = 16),
-        vle8(rd = 8, sect = NpuSections.SECT_B, off = 16),
-        mma(rd = 0, vs1 = 4, vs2 = 8, vs3 = 0),
-        vse32(src = 0, sect = NpuSections.SECT_OUT, off = 64),
-        vle8(rd = 4, sect = NpuSections.SECT_A, off = 32),
-        vle8(rd = 8, sect = NpuSections.SECT_B, off = 32),
-        mma(rd = 0, vs1 = 4, vs2 = 8, vs3 = 0),
-        vse32(src = 0, sect = NpuSections.SECT_OUT, off = 128),
-        mmaLast(rd = 0, vs1 = 0, vs2 = 0, vs3 = 0),
-      )
-      preloadInstrs(dut, prog)
+      // reduce round = K accumulate feeds + mma.last (capture VR[0]) + one vse
+      val prog = (0 until 3).flatMap { m =>
+        Seq(vle8(rd = 4, sect = NpuSections.SECT_A, off = m * k),
+            vle8(rd = 8, sect = NpuSections.SECT_B, off = m * k)) ++
+          (0 until k).map(_ => mma(rd = 0, vs1 = 4, vs2 = 8, vs3 = 0)) ++
+          Seq(mmaLast(rd = 0, vs1 = 0, vs2 = 0, vs3 = 0),
+              vse32(src = 0, sect = NpuSections.SECT_OUT, off = m * 4 * k))
+      }
+      preloadInstrs(dut, prog.toSeq)
       ctrlWrite(dut, 0x14, prog.length)
       start(dut)
       waitDone(dut)
@@ -264,13 +258,13 @@ class NpuProgramEngineFrontendSpec extends AnyFlatSpec {
       val out = readI32(dut, NpuSections.OUT, 3 * k)
       for (m <- 0 until 3) {
         val g = out.slice(m * k, (m + 1) * k)
-        val pe = Array.tabulate(k, k)((i, j) => (0 to m).map(t => aVals(t)(i) * bVals(t)(j)).sum)
+        val pe = Array.tabulate(k, k)((i, j) => k * aVals(m)(i) * bVals(m)(j))
         val found = (0 until k).filter(c => (0 until k).forall(i => g(i) == pe(i)(c)))
-        assert(found.nonEmpty, s"capture $m is not a running-sum column: ${g.toList}")
+        assert(found.nonEmpty, s"round $m capture is not K*a*b: ${g.toList}")
       }
       val status = ctrlRead(dut, 0x8)
       assert(((status >> 31) & 1) == 0, "no illegal expected")
-      assert(((status >> 16) & 0x7FFF) == 1, "frames_done should be 1")
+      assert(((status >> 16) & 0x7FFF) == 3, "frames_done should be 3 (one per mma.last)")
     }
   }
 
@@ -285,7 +279,7 @@ class NpuProgramEngineFrontendSpec extends AnyFlatSpec {
         vle8(rd = 4, sect = NpuSections.SECT_A, off = 0),
         vle8(rd = 8, sect = NpuSections.SECT_B, off = 0),
         mma(rd = 2, vs1 = 4, vs2 = 8, vs3 = 0),
-        mmaLast(rd = 0, vs1 = 0, vs2 = 0, vs3 = 0),
+        mmaLast(rd = 2, vs1 = 0, vs2 = 0, vs3 = 0),
         vse32(src = 2, sect = NpuSections.SECT_OUT, off = 0),
       )
       preloadInstrs(dut, prog)
@@ -337,7 +331,7 @@ class NpuProgramEngineFrontendSpec extends AnyFlatSpec {
     }
   }
 
-  "NpuProgramEngineFrontend" should "re-fill after start invalidation with stable misses" in {
+  "NpuProgramEngineFrontend" should "PROG_LEN invalidates and re-warms; a second start reuses the cache" in {
     simulate(new FrontendSpecHarness(K = 16)) { dut =>
       val k = 16
       val a = Array.tabulate(k)(j => j + 1)
@@ -348,7 +342,7 @@ class NpuProgramEngineFrontendSpec extends AnyFlatSpec {
         vle8(rd = 4, sect = NpuSections.SECT_A, off = 0),
         vle8(rd = 8, sect = NpuSections.SECT_B, off = 0),
         mma(rd = 1, vs1 = 4, vs2 = 8, vs3 = 0),
-        mmaLast(rd = 0, vs1 = 0, vs2 = 0, vs3 = 0),
+        mmaLast(rd = 1, vs1 = 0, vs2 = 0, vs3 = 0),
         vse32(src = 1, sect = NpuSections.SECT_OUT, off = 0),
       )
       preloadInstrs(dut, prog)
@@ -357,13 +351,17 @@ class NpuProgramEngineFrontendSpec extends AnyFlatSpec {
       waitDone(dut)
       val stats1 = ctrlRead(dut, 0x10)
 
-      start(dut)   // start invalidates the cache (program may have changed)
+      // Re-writing PROG_LEN invalidates the cache and re-warms the first burst;
+      // a second start must hit the warm cache (zero new demand misses).
+      ctrlWrite(dut, 0x14, prog.length)
+      dut.clock.step(200)   // host gap: let the warm complete
+      start(dut)
       waitDone(dut)
       val stats2 = ctrlRead(dut, 0x10)
       val misses1 = stats1 & 0xFFFF
       val misses2 = stats2 & 0xFFFF
-      assert(misses2 > misses1,
-        s"each run should re-demand-fill the program lines: run1=$misses1 run2=$misses2")
+      assert(misses2 == misses1,
+        s"second run should hit the warm cache: run1=$misses1 run2=$misses2")
     }
   }
 
@@ -388,6 +386,141 @@ class NpuProgramEngineFrontendSpec extends AnyFlatSpec {
       }
       assert(maxRun >= 2,
         s"instruction feed is not pipelined: max consecutive pc increments = $maxRun")
+    }
+  }
+
+  "NpuProgramEngineFrontend" should "abort an in-flight fill and restart cleanly" in {
+    simulate(new FrontendSpecHarness(K = 16, readLatency = 40)) { dut =>
+      // The faulting word is the LAST word of a non-final line (line 50 =
+      // words 200..203; bad at word 203), so the next-line (51) fill is in
+      // flight when the halt is decoded and the engine's flush must abort it.
+      val bad = 0x03 | (0 << 7) | (2 << 12) | (1 << 15) | (2 << 20)
+      val prog = (Seq.fill(203)(nop) :+ bad) ++ Seq.fill(3)(nop)
+      preloadInstrs(dut, prog)
+      ctrlWrite(dut, 0x14, prog.length)
+      start(dut)
+      waitDone(dut, maxCycles = 20000)
+      val st = ctrlRead(dut, 0x8)
+      assert(((st >> 31) & 1) == 1 && (st & 0xFFFF) == 203, s"illegal at pc 203, got $st")
+
+      // Second session on the same simulator/DUT must fetch and complete.
+      val ok = Seq(nop, nop, nop, nop)
+      preloadInstrs(dut, ok)
+      ctrlWrite(dut, 0x14, ok.length)
+      start(dut)
+      waitDone(dut, maxCycles = 5000)
+      val st2 = ctrlRead(dut, 0x8)
+      assert(((st2 >> 31) & 1) == 0, "second session must not inherit the illegal flag")
+      assert((st2 & 0xFFFF) == ok.length - 1, s"second session pc, got $st2")
+    }
+  }
+
+  "NpuProgramEngineFrontend" should "fetch 1024 NOPs in 16 four-beat requests" in {
+    simulate(new FrontendSpecHarness(K = 16, readLatency = 40)) { dut =>
+      val prog = Seq.fill(1024)(nop)
+      preloadInstrs(dut, prog)
+      ctrlWrite(dut, 0x14, prog.length)
+      val s0 = ctrlRead(dut, 0x10)
+      start(dut)
+      val cycles = waitDone(dut, maxCycles = 20000)
+      val s1 = ctrlRead(dut, 0x10)
+      val fills = (((s1 >> 16) & 0xFFFF) - ((s0 >> 16) & 0xFFFF) & 0xFFFF) +
+                  ((s1 & 0xFFFF) - (s0 & 0xFFFF) & 0xFFFF)
+      assert(fills == 16, s"expected 16 requests, got $fills")
+      assert(cycles < 1500, s"1024 NOPs took $cycles cycles")
+    }
+  }
+
+  "NpuProgramEngineFrontend" should "keep a flat slope on a 4096-NOP program" in {
+    simulate(new FrontendSpecHarness(K = 16, readLatency = 40)) { dut =>
+      val prog = Seq.fill(4096)(nop)
+      preloadInstrs(dut, prog)
+      ctrlWrite(dut, 0x14, prog.length)
+      start(dut)
+      val cycles = waitDone(dut, maxCycles = 40000)
+      assert(cycles < 1.5 * 4096, s"4096 NOPs took $cycles cycles (slope > 1.5)")
+    }
+  }
+
+  "NpuProgramEngineFrontend" should "use a 1-beat tail for a 70-word program" in {
+    simulate(new FrontendSpecHarness(K = 16, readLatency = 40)) { dut =>
+      val bad = 0x03 | (0 << 7) | (2 << 12) | (1 << 15) | (2 << 20)
+      val prog = Seq.fill(69)(nop) :+ bad   // 70 words: 4-line burst + 1-line tail + 6 words
+      preloadInstrs(dut, prog)
+      ctrlWrite(dut, 0x14, prog.length)
+      start(dut)
+      waitDone(dut, maxCycles = 20000)
+      val st = ctrlRead(dut, 0x8)
+      assert(((st >> 31) & 1) == 1 && (st & 0xFFFF) == 69, s"illegal at pc 69, got $st")
+    }
+  }
+
+  "NpuProgramEngineFrontend" should "fetch across a 16-word line boundary" in {
+    simulate(new FrontendSpecHarness(K = 16, readLatency = 40)) { dut =>
+      val bad = 0x03 | (0 << 7) | (2 << 12) | (1 << 15) | (2 << 20)
+      val prog = Seq.fill(64)(nop) :+ bad
+      preloadInstrs(dut, prog)
+      ctrlWrite(dut, 0x14, prog.length)
+      start(dut)
+      waitDone(dut, maxCycles = 20000)
+      val st = ctrlRead(dut, 0x8)
+      assert(((st >> 31) & 1) == 1 && (st & 0xFFFF) == 64, s"illegal at pc 64, got $st")
+    }
+  }
+
+  "NpuProgramEngineFrontend" should "pre-warm the first burst on PROG_LEN" in {
+    simulate(new FrontendSpecHarness(K = 16, readLatency = 40)) { dut =>
+      val prog = Seq.fill(256)(nop)
+      preloadInstrs(dut, prog)
+      val s0 = ctrlRead(dut, 0x10)
+      ctrlWrite(dut, 0x14, prog.length)
+      dut.clock.step(200)                    // host gap before START
+      val s1 = ctrlRead(dut, 0x10)
+      val fills = (((s1 >> 16) & 0xFFFF) - ((s0 >> 16) & 0xFFFF) & 0xFFFF) +
+                  ((s1 & 0xFFFF) - (s0 & 0xFFFF) & 0xFFFF)
+      assert(fills == 1, s"PROG_LEN should issue one warm burst, got $fills")
+      assert(dut.io.dbg_run.peek().litValue == 0, "warm must not start the session")
+      assert(dut.io.dbg_pc.peek().litValue == 0, "warm must not issue instructions")
+
+      val s2 = ctrlRead(dut, 0x10)
+      start(dut)
+      val cycles = waitDone(dut, maxCycles = 20000)
+      val s3 = ctrlRead(dut, 0x10)
+      val missDelta = ((s3 & 0xFFFF) - (s2 & 0xFFFF)) & 0xFFFF
+      assert(missDelta == 0, s"line 0 should hit the warm cache, got $missDelta misses")
+      assert(cycles < 20000, "session did not complete")
+    }
+  }
+
+  "NpuProgramEngineFrontend" should "warm the new CODE after a program change" in {
+    simulate(new FrontendSpecHarness(K = 16, readLatency = 40)) { dut =>
+      val badA = 0x03 | (0 << 7) | (2 << 12) | (1 << 15) | (2 << 20)
+      val progA = Seq.fill(32)(nop) :+ badA
+      preloadInstrs(dut, progA)
+      ctrlWrite(dut, 0x14, progA.length)
+      start(dut)
+      waitDone(dut, maxCycles = 20000)
+
+      val badB = 0x03 | (0 << 7) | (2 << 12) | (2 << 15) | (2 << 20)   // mma.reset, rs1=2 (illegal, distinguishable)
+      val progB = Seq.fill(8)(nop) :+ badB   // line 0 of B differs
+      preloadInstrs(dut, progB)
+      ctrlWrite(dut, 0x14, progB.length)
+      start(dut)
+      waitDone(dut, maxCycles = 20000)
+      val err = ctrlRead(dut, 0xC)
+      assert(err == (badB.toLong & 0xFFFFFFFFL), s"warm read stale CODE: $err")
+    }
+  }
+
+  "NpuProgramEngineFrontend" should "start immediately after PROG_LEN without a warm" in {
+    simulate(new FrontendSpecHarness(K = 16, readLatency = 40)) { dut =>
+      val prog = Seq.fill(64)(nop)
+      preloadInstrs(dut, prog)
+      ctrlWrite(dut, 0x14, prog.length)   // no extra gap
+      start(dut)
+      waitDone(dut, maxCycles = 20000)
+      val st = ctrlRead(dut, 0x8)
+      assert(((st >> 31) & 1) == 0 && (st & 0xFFFF) == prog.length - 1, s"race start, got $st")
     }
   }
 }

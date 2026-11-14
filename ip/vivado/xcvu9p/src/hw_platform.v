@@ -133,7 +133,14 @@ module hw_platform
   always @(posedge clk_fabric or negedge arst_n)
     if (!arst_n) fab_rstn_sync <= 2'b00;
     else         fab_rstn_sync <= {fab_rstn_sync[0], 1'b1};
-  wire aresetn_fabric = fab_rstn_sync[1];
+  wire aresetn_fabric_raw = fab_rstn_sync[1];
+  // Drive the very-high-fanout fabric reset (async-reset pin of every engine /
+  // MMALU flop) through a global buffer so it uses the low-skew global clock
+  // network instead of general routing.  Routed as a general net it was the
+  // critical path: fab_rstn_sync_reg[1] -> MMPE_*/res_reg/R, 0 logic levels and
+  // ~5.15 ns of pure route at 200 MHz (the classic high-fanout reset problem).
+  wire aresetn_fabric;
+  BUFG u_bufg_fab_rstn (.I(aresetn_fabric_raw), .O(aresetn_fabric));
 
   // ── XDMA M_AXI (S00 of ddr_top) — same nets as hw_platform.v ───────────────
   wire              m_axi_awready;
@@ -320,8 +327,8 @@ module hw_platform
   wire              npu_awlock;
   wire [3 : 0]      npu_awcache;
   wire [3 : 0]      npu_awqos;
-  wire [127 : 0]    npu_wdata;
-  wire [15 : 0]     npu_wstrb;
+  wire [511 : 0]    npu_wdata;
+  wire [63 : 0]     npu_wstrb;
   wire              npu_wlast;
   wire              npu_wvalid;
   wire              npu_wready;
@@ -341,7 +348,7 @@ module hw_platform
   wire [3 : 0]      npu_arcache;
   wire [3 : 0]      npu_arqos;
   wire [3 : 0]      npu_rid;
-  wire [127 : 0]    npu_rdata;
+  wire [511 : 0]    npu_rdata;
   wire [1 : 0]      npu_rresp;
   wire              npu_rlast;
   wire              npu_rvalid;
@@ -360,8 +367,8 @@ module hw_platform
   wire [3 : 0]      npu250_awqos;
   wire              npu250_awvalid;
   wire              npu250_awready;
-  wire [127 : 0]    npu250_wdata;
-  wire [15 : 0]     npu250_wstrb;
+  wire [511 : 0]    npu250_wdata;
+  wire [63 : 0]     npu250_wstrb;
   wire              npu250_wlast;
   wire              npu250_wvalid;
   wire              npu250_wready;
@@ -382,7 +389,7 @@ module hw_platform
   wire              npu250_arvalid;
   wire              npu250_arready;
   wire [3 : 0]      npu250_rid;
-  wire [127 : 0]    npu250_rdata;
+  wire [511 : 0]    npu250_rdata;
   wire [1 : 0]      npu250_rresp;
   wire              npu250_rlast;
   wire              npu250_rvalid;
@@ -508,84 +515,43 @@ module hw_platform
   wire              npu512_rvalid;
   wire              npu512_rready;
 
-  npu_dw u_npu_dw (
-    .s_axi_aclk     (axi_aclk),
-    .s_axi_aresetn  (axi_aresetn),
-    .s_axi_awid     (npu250_awid),
-    .s_axi_awaddr   (npu250_awaddr),
-    .s_axi_awlen    (npu250_awlen),
-    .s_axi_awsize   (npu250_awsize),
-    .s_axi_awburst  (npu250_awburst),
-    .s_axi_awlock   (npu250_awlock),
-    .s_axi_awcache  (npu250_awcache),
-    .s_axi_awprot   (npu250_awprot),
-    .s_axi_awregion (npu250_awregion),
-    .s_axi_awqos    (npu250_awqos),
-    .s_axi_awvalid  (npu250_awvalid),
-    .s_axi_awready  (npu250_awready),
-    .s_axi_wdata    (npu250_wdata),
-    .s_axi_wstrb    (npu250_wstrb),
-    .s_axi_wlast    (npu250_wlast),
-    .s_axi_wvalid   (npu250_wvalid),
-    .s_axi_wready   (npu250_wready),
-    .s_axi_bid      (npu250_bid),
-    .s_axi_bresp    (npu250_bresp),
-    .s_axi_bvalid   (npu250_bvalid),
-    .s_axi_bready   (npu250_bready),
-    .s_axi_arid     (npu250_arid),
-    .s_axi_araddr   (npu250_araddr),
-    .s_axi_arlen    (npu250_arlen),
-    .s_axi_arsize   (npu250_arsize),
-    .s_axi_arburst  (npu250_arburst),
-    .s_axi_arlock   (npu250_arlock),
-    .s_axi_arcache  (npu250_arcache),
-    .s_axi_arprot   (npu250_arprot),
-    .s_axi_arregion (npu250_arregion),
-    .s_axi_arqos    (npu250_arqos),
-    .s_axi_arvalid  (npu250_arvalid),
-    .s_axi_arready  (npu250_arready),
-    .s_axi_rid      (npu250_rid),
-    .s_axi_rdata    (npu250_rdata),
-    .s_axi_rresp    (npu250_rresp),
-    .s_axi_rlast    (npu250_rlast),
-    .s_axi_rvalid   (npu250_rvalid),
-    .s_axi_rready   (npu250_rready),
-    .m_axi_awaddr   (npu512_awaddr),
-    .m_axi_awlen    (npu512_awlen),
-    .m_axi_awsize   (npu512_awsize),
-    .m_axi_awburst  (npu512_awburst),
-    .m_axi_awlock   (npu512_awlock),
-    .m_axi_awcache  (npu512_awcache),
-    .m_axi_awprot   (npu512_awprot),
-    .m_axi_awregion (),
-    .m_axi_awqos    (npu512_awqos),
-    .m_axi_awvalid  (npu512_awvalid),
-    .m_axi_awready  (npu512_awready),
-    .m_axi_wdata    (npu512_wdata),
-    .m_axi_wstrb    (npu512_wstrb),
-    .m_axi_wlast    (npu512_wlast),
-    .m_axi_wvalid   (npu512_wvalid),
-    .m_axi_wready   (npu512_wready),
-    .m_axi_bresp    (npu512_bresp),
-    .m_axi_bvalid   (npu512_bvalid),
-    .m_axi_bready   (npu512_bready),
-    .m_axi_araddr   (npu512_araddr),
-    .m_axi_arlen    (npu512_arlen),
-    .m_axi_arsize   (npu512_arsize),
-    .m_axi_arburst  (npu512_arburst),
-    .m_axi_arlock   (npu512_arlock),
-    .m_axi_arcache  (npu512_arcache),
-    .m_axi_arprot   (npu512_arprot),
-    .m_axi_arregion (),
-    .m_axi_arqos    (npu512_arqos),
-    .m_axi_arvalid  (npu512_arvalid),
-    .m_axi_arready  (npu512_arready),
-    .m_axi_rdata    (npu512_rdata),
-    .m_axi_rresp    (npu512_rresp),
-    .m_axi_rlast    (npu512_rlast),
-    .m_axi_rvalid   (npu512_rvalid),
-    .m_axi_rready   (npu512_rready)
-  );
+  // ── NPU 512-bit pass-through: npu_cc already clock-crosses 512 -> 512, and
+  //    the engine is 512-bit, so no data-width conversion is needed. ─────────
+  assign npu512_awaddr  = npu250_awaddr;
+  assign npu512_awlen   = npu250_awlen;
+  assign npu512_awsize  = npu250_awsize;
+  assign npu512_awburst = npu250_awburst;
+  assign npu512_awlock  = npu250_awlock;
+  assign npu512_awcache = npu250_awcache;
+  assign npu512_awprot  = npu250_awprot;
+  assign npu512_awqos   = npu250_awqos;
+  assign npu512_awvalid = npu250_awvalid;
+  assign npu250_awready = npu512_awready;
+  assign npu512_wdata   = npu250_wdata;
+  assign npu512_wstrb   = npu250_wstrb;
+  assign npu512_wlast   = npu250_wlast;
+  assign npu512_wvalid  = npu250_wvalid;
+  assign npu250_wready  = npu512_wready;
+  assign npu250_bresp   = npu512_bresp;
+  assign npu250_bvalid  = npu512_bvalid;
+  assign npu512_bready  = npu250_bready;
+  assign npu250_bid     = 4'b0;
+  assign npu512_araddr  = npu250_araddr;
+  assign npu512_arlen   = npu250_arlen;
+  assign npu512_arsize  = npu250_arsize;
+  assign npu512_arburst = npu250_arburst;
+  assign npu512_arlock  = npu250_arlock;
+  assign npu512_arcache = npu250_arcache;
+  assign npu512_arprot  = npu250_arprot;
+  assign npu512_arqos   = npu250_arqos;
+  assign npu512_arvalid = npu250_arvalid;
+  assign npu250_arready = npu512_arready;
+  assign npu250_rdata   = npu512_rdata;
+  assign npu250_rresp   = npu512_rresp;
+  assign npu250_rlast   = npu512_rlast;
+  assign npu250_rvalid  = npu512_rvalid;
+  assign npu512_rready  = npu250_rready;
+  assign npu250_rid     = 4'b0;
 
   // ── Bypass BAR: 512->32 @250, then 250->200, then AXI4->AXI4-Lite ──────────
   wire [63 : 0]     byp32_awaddr;
@@ -761,9 +727,9 @@ module hw_platform
     .m_axi_rready   (byp32_rready)
   );
 
-  byp_cc u_byp_cc (
-    .s_axi_aclk     (axi_aclk),
-    .s_axi_aresetn  (axi_aresetn),
+  byp_pc u_byp_pc (
+    .aclk           (axi_aclk),
+    .aresetn        (axi_aresetn),
     .s_axi_awaddr   (byp32_awaddr),
     .s_axi_awlen    (byp32_awlen),
     .s_axi_awsize   (byp32_awsize),
@@ -799,83 +765,6 @@ module hw_platform
     .s_axi_rlast    (byp32_rlast),
     .s_axi_rvalid   (byp32_rvalid),
     .s_axi_rready   (byp32_rready),
-    .m_axi_aclk     (clk_fabric),
-    .m_axi_aresetn  (aresetn_fabric),
-    .m_axi_awaddr   (byp200_awaddr),
-    .m_axi_awlen    (byp200_awlen),
-    .m_axi_awsize   (byp200_awsize),
-    .m_axi_awburst  (byp200_awburst),
-    .m_axi_awlock   (byp200_awlock),
-    .m_axi_awcache  (byp200_awcache),
-    .m_axi_awprot   (byp200_awprot),
-    .m_axi_awregion (byp200_awregion),
-    .m_axi_awqos    (byp200_awqos),
-    .m_axi_awvalid  (byp200_awvalid),
-    .m_axi_awready  (byp200_awready),
-    .m_axi_wdata    (byp200_wdata),
-    .m_axi_wstrb    (byp200_wstrb),
-    .m_axi_wlast    (byp200_wlast),
-    .m_axi_wvalid   (byp200_wvalid),
-    .m_axi_wready   (byp200_wready),
-    .m_axi_bresp    (byp200_bresp),
-    .m_axi_bvalid   (byp200_bvalid),
-    .m_axi_bready   (byp200_bready),
-    .m_axi_araddr   (byp200_araddr),
-    .m_axi_arlen    (byp200_arlen),
-    .m_axi_arsize   (byp200_arsize),
-    .m_axi_arburst  (byp200_arburst),
-    .m_axi_arlock   (byp200_arlock),
-    .m_axi_arcache  (byp200_arcache),
-    .m_axi_arprot   (byp200_arprot),
-    .m_axi_arregion (byp200_arregion),
-    .m_axi_arqos    (byp200_arqos),
-    .m_axi_arvalid  (byp200_arvalid),
-    .m_axi_arready  (byp200_arready),
-    .m_axi_rdata    (byp200_rdata),
-    .m_axi_rresp    (byp200_rresp),
-    .m_axi_rlast    (byp200_rlast),
-    .m_axi_rvalid   (byp200_rvalid),
-    .m_axi_rready   (byp200_rready)
-  );
-
-  byp_pc u_byp_pc (
-    .aclk           (clk_fabric),
-    .aresetn        (aresetn_fabric),
-    .s_axi_awaddr   (byp200_awaddr),
-    .s_axi_awlen    (byp200_awlen),
-    .s_axi_awsize   (byp200_awsize),
-    .s_axi_awburst  (byp200_awburst),
-    .s_axi_awlock   (byp200_awlock),
-    .s_axi_awcache  (byp200_awcache),
-    .s_axi_awprot   (byp200_awprot),
-    .s_axi_awregion (byp200_awregion),
-    .s_axi_awqos    (byp200_awqos),
-    .s_axi_awvalid  (byp200_awvalid),
-    .s_axi_awready  (byp200_awready),
-    .s_axi_wdata    (byp200_wdata),
-    .s_axi_wstrb    (byp200_wstrb),
-    .s_axi_wlast    (byp200_wlast),
-    .s_axi_wvalid   (byp200_wvalid),
-    .s_axi_wready   (byp200_wready),
-    .s_axi_bresp    (byp200_bresp),
-    .s_axi_bvalid   (byp200_bvalid),
-    .s_axi_bready   (byp200_bready),
-    .s_axi_araddr   (byp200_araddr),
-    .s_axi_arlen    (byp200_arlen),
-    .s_axi_arsize   (byp200_arsize),
-    .s_axi_arburst  (byp200_arburst),
-    .s_axi_arlock   (byp200_arlock),
-    .s_axi_arcache  (byp200_arcache),
-    .s_axi_arprot   (byp200_arprot),
-    .s_axi_arregion (byp200_arregion),
-    .s_axi_arqos    (byp200_arqos),
-    .s_axi_arvalid  (byp200_arvalid),
-    .s_axi_arready  (byp200_arready),
-    .s_axi_rdata    (byp200_rdata),
-    .s_axi_rresp    (byp200_rresp),
-    .s_axi_rlast    (byp200_rlast),
-    .s_axi_rvalid   (byp200_rvalid),
-    .s_axi_rready   (byp200_rready),
     .m_axi_awaddr   (ctrl_awaddr),
     .m_axi_awprot   (ctrl_awprot),
     .m_axi_awvalid  (ctrl_awvalid),
@@ -901,6 +790,8 @@ module hw_platform
   npu_engine_subsys u_npu (
     .aclk                    (clk_fabric),
     .aresetn                 (aresetn_fabric),
+    .aclk_ctrl               (axi_aclk),
+    .aresetn_ctrl            (axi_aresetn),
     .s_axil_awaddr           (ctrl_awaddr[11:0]),
     .s_axil_awprot           (ctrl_awprot),
     .s_axil_awvalid          (ctrl_awvalid),

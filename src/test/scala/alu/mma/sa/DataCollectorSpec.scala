@@ -20,6 +20,9 @@ class DataCollectorSpec extends AnyFlatSpec{
             val _in_t = new Array[Int](_n)
             var valid_cnt = 0
 
+            dut.io.keep_d.poke(true.B)
+            dut.io.session_reset.poke(false.B)
+
             // random initialize the
             for (i <- 0 until _n * _n) {
                 _mat(i) = rand.between(-128, 128)

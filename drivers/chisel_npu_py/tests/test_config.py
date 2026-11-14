@@ -10,7 +10,7 @@ from chisel_npu_py.config import NPUConfig, Section, default_config
 def test_default_config_is_sane():
     cfg = default_config()
     cfg.validate()
-    assert cfg.K == 16
+    assert cfg.K == 32
     assert cfg.nop_wait == 2 * cfg.K + 8
     assert set(cfg.sections) == {"A", "B", "ACCUM", "OUT", "CODE"}
     assert cfg.ctrl["CTRL"] == 0x00

@@ -40,6 +40,8 @@ class TrajHarness extends Module {
   io.dbg_mma_acc := eng.io.dbg_mma_acc; io.dbg_clct := eng.io.dbg_clct
   io.dbg_traj := eng.io.dbg_traj
   eng.io.fetch_fill_req := false.B; eng.io.fetch_fill_addr := 0.U
+  // This harness never issues instruction-line fills; tie the burst length off.
+  eng.io.fetch_fill_beats := 0.U
   ram.io.s_axi_awaddr := eng.io.m_axi_awaddr; ram.io.s_axi_awlen := eng.io.m_axi_awlen
   ram.io.s_axi_awsize := eng.io.m_axi_awsize; ram.io.s_axi_awburst := eng.io.m_axi_awburst
   ram.io.s_axi_awvalid := eng.io.m_axi_awvalid; eng.io.m_axi_awready := ram.io.s_axi_awready

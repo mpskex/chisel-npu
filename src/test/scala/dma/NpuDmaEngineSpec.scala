@@ -27,6 +27,7 @@ class DmaSpecHarness(val K: Int = DmaSpecHarness.K,
     val req_width   = Input(UInt(2.W))
     val req_rf_addr = Input(UInt(5.W))
     val req_l3_addr = Input(UInt(32.W))
+    val req_beats   = Input(UInt(3.W))
     val req_store_data_valid = Input(Bool())
     val req_store_data = Input(Vec(K, UInt(32.W)))
     val busy        = Output(Bool())
@@ -36,7 +37,8 @@ class DmaSpecHarness(val K: Int = DmaSpecHarness.K,
     val acc_out     = Output(Vec(K, UInt((4 * N).W)))
 
     val instr_valid = Output(Bool())
-    val instr_out   = Output(UInt(128.W))
+    val instr_out   = Output(UInt(512.W))
+    val instr_last  = Output(Bool())
 
     val rf_w_vx_en   = Output(Bool())
     val rf_w_vx_addr = Output(UInt(log2Ceil(K).W))
@@ -72,6 +74,7 @@ class DmaSpecHarness(val K: Int = DmaSpecHarness.K,
   dma.io.req_width   := io.req_width
   dma.io.req_rf_addr := io.req_rf_addr
   dma.io.req_l3_addr := io.req_l3_addr
+  dma.io.req_beats   := io.req_beats
   dma.io.req_store_data_valid := io.req_store_data_valid
   for (l <- 0 until K) dma.io.req_store_data(l) := io.req_store_data(l)
   io.busy            := dma.io.busy
@@ -80,6 +83,7 @@ class DmaSpecHarness(val K: Int = DmaSpecHarness.K,
   io.acc_out         := dma.io.acc_out
   io.instr_valid     := dma.io.instr_valid
   io.instr_out       := dma.io.instr_out
+  io.instr_last      := dma.io.instr_last
 
   io.rf_w_vx_en   := dma.io.rf_w_vx_en
   io.rf_w_vx_addr := dma.io.rf_w_vx_addr
@@ -180,11 +184,13 @@ class NpuDmaEngineSpec extends AnyFlatSpec {
     dut.io.dbg_rd_data.peek().litValue
   }
 
-  def issue(dut: DmaSpecHarness, dir: Int, width: Int, rfAddr: Int, l3Addr: Int): Unit = {
+  def issue(dut: DmaSpecHarness, dir: Int, width: Int, rfAddr: Int, l3Addr: Int,
+            beats: Int = 1): Unit = {
     dut.io.req_dir.poke(dir.U)
     dut.io.req_width.poke(width.U)
     dut.io.req_rf_addr.poke(rfAddr.U)
     dut.io.req_l3_addr.poke(l3Addr.U)
+    dut.io.req_beats.poke(beats.U)
     dut.io.req_store_data_valid.poke(false.B)
     for (l <- 0 until dut.io.req_store_data.length) dut.io.req_store_data(l).poke(0.U)
     dut.io.req_valid.poke(true.B)
@@ -343,17 +349,17 @@ class NpuDmaEngineSpec extends AnyFlatSpec {
     }
   }
 
-  "NpuDmaEngine" should "fetch a 16 B instruction line (dir=3)" in {
+  "NpuDmaEngine" should "fetch a full 64 B instruction beat (dir=3)" in {
     simulate(new DmaSpecHarness(readTimeout = 8)) { dut =>
-      val pat = pattern(0x600, 16)
-      preload(dut, RAM_ADDR, pat)
+      val pat = pattern(0x600, 64)
+      preload(dut, RAM_ADDR, pat)          // RAM_ADDR is 64 B aligned
       issue(dut, dir = 3, width = 0, rfAddr = 0, l3Addr = RAM_ADDR)
       var captured = false
       var n = 0
       while (!dut.io.done.peek().litToBoolean && n < 2000) {
         if (!captured && dut.io.instr_valid.peek().litToBoolean) {
           val got = dut.io.instr_out.peek().litValue
-          for (b <- 0 until 16) {
+          for (b <- 0 until 64) {
             val exp = BigInt(pat(b) & 0xFF)
             val act = (got >> (8 * b)) & 0xFF
             assert(act == exp, s"fetch byte $b: got $act want $exp")
@@ -362,8 +368,32 @@ class NpuDmaEngineSpec extends AnyFlatSpec {
         }
         dut.clock.step(); n += 1
       }
-      assert(dut.io.done.peek().litToBoolean, "fetch did not finish")
-      assert(captured, "instr_valid never pulsed")
+      assert(dut.io.done.peek().litToBoolean && captured, "fetch did not finish")
+    }
+  }
+
+  "NpuDmaEngine" should "stream four instruction beats per request (dir=3)" in {
+    simulate(new DmaSpecHarness(readTimeout = 8)) { dut =>
+      val pat = pattern(0x700, 256)
+      preload(dut, RAM_ADDR, pat)          // 64 B aligned; 4 beats
+      issue(dut, dir = 3, width = 0, rfAddr = 0, l3Addr = RAM_ADDR, beats = 4)
+      var beats = 0
+      var n = 0
+      while (!dut.io.done.peek().litToBoolean && n < 2000) {
+        if (dut.io.instr_valid.peek().litToBoolean) {
+          val got = dut.io.instr_out.peek().litValue
+          for (b <- 0 until 64) {
+            val exp = BigInt(pat(beats * 64 + b) & 0xFF)
+            val act = (got >> (8 * b)) & 0xFF
+            assert(act == exp, s"beat $beats byte $b")
+          }
+          assert(dut.io.instr_last.peek().litToBoolean == (beats == 3), s"instr_last at beat $beats")
+          beats += 1
+        }
+        dut.clock.step(); n += 1
+      }
+      assert(dut.io.done.peek().litToBoolean, "burst fetch did not finish")
+      assert(beats == 4, s"expected 4 beats, got $beats")
     }
   }
 

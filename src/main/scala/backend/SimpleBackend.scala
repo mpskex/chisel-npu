@@ -169,6 +169,7 @@ class NCoreBackend(
   mmalu.io.ctrl.keep      := dec.mma_keep
   mmalu.io.ctrl.use_accum := false.B
   mmalu.io.ctrl.busy      := (dec.family === OpFamily.MMA)
+  mmalu.io.session_reset  := false.B
 
   // MMALU write-back directly to VR (port 1) — NO precision truncation
   // mmalu.io.out is Vec(K, SInt(N4.W)) = Vec(K, SInt(32.W)) for N=8
