@@ -10,6 +10,14 @@ Two shapes are measured on the FPGA host:
               mma.last + one vector store.  The MACs/cycle column shows how
               much of the array throughput survives with a long dependency
               chain and a per-round store.
+  pipe-<r>    the same rounds, but each round's store is issued ``PIPE_DEPTH``
+              rounds later (just before the next feeds) with a 4-deep vd ring.
+              The capture it depends on is long settled, so the instruction
+              window head never stalls on the ~80-cycle capture latency.
+              This probes how much of the round tail is the store's RAW wait.
+  feed-<n>    two loads followed by ``n`` back-to-back MMAs and a single
+              mma.last + store.  With only one capture at the end, this is the
+              sustained array feed rate (isolated from per-round captures).
 
 For every case the ``FETCH_STATS`` ctrl register (0x10) is sampled before and
 after the run; its high half counts prefetch fills and its low half counts
@@ -35,6 +43,17 @@ NOP_SIZES = (1024, 8192, 32768, 60000, 65535)
 
 # Reduce-round counts; 2 + r*(K+2) instructions each.
 ROUND_COUNTS = (1, 4, 16, 64, 256)
+
+# Pipelined-store rounds.  The store for round r-PIPE_DEPTH is issued at the
+# start of round r, before that round's feeds reuse the same vd.  With a
+# 4-deep vd ring the capture the store reads is four rounds (~140 cycles) old,
+# so the store's RAW wait is hidden and the window head never stalls.
+PIPE_DEPTH = 4
+PIPE_ROUNDS = (16, 64, 256)
+
+# Long back-to-back MMA feeds with a single capture at the end (array feed
+# rate isolated from the per-round capture/store boundary).
+FEED_COUNTS = (256, 1024, 8192)
 
 # CODE window in bytes / words (the engine's fetch address space).  The
 # engine's program counter is 16 bits, so the last instruction sits at
@@ -126,6 +145,54 @@ def run_rounds(npu: ChiselNPU, rounds: int) -> dict:
     return perf
 
 
+def run_pipelined_rounds(npu: ChiselNPU, rounds: int,
+                         depth: int = PIPE_DEPTH) -> dict:
+    """Reduce rounds with each store delayed ``depth`` rounds (vd ring).
+
+    Round r's store (for round r-depth) is issued *before* round r's feeds, so
+    the capture it reads settled long ago and the store's RAW wait does not
+    hold the instruction-window head.  The vd ring is ``depth`` deep: the
+    capture of round r reuses the vd of round r-depth only after that round's
+    store has been issued.
+    """
+    k = npu.cfg.K
+    a = np.ones(k, dtype=np.int8)
+    b = np.ones(k, dtype=np.int8)
+    words = [isa.vle8(4, isa.SECT_A, 0), isa.vle8(8, isa.SECT_B, 0)]
+    for r in range(rounds):
+        if r >= depth:
+            words.append(isa.vse32((r - depth) % depth,
+                                   isa.SECT_OUT, 0))
+        words += [isa.mma(0, 4, 8, 0) for _ in range(k)]
+        words.append(isa.mma_last(r % depth, 0, 0, 0))
+    for r in range(max(0, rounds - depth), rounds):
+        words.append(isa.vse32(r % depth, isa.SECT_OUT, 0))
+    if len(words) > CODE_WORDS:
+        raise ValueError(
+            f"{rounds} pipelined rounds = {len(words)} words exceeds CODE")
+    before = read_fetch_stats(npu)
+    perf = dict(npu.run(words, memories={"A": a, "B": b})["perf"])
+    perf["fills"] = fills_since(before, read_fetch_stats(npu))
+    return perf
+
+
+def run_feed_stream(npu: ChiselNPU, feeds: int) -> dict:
+    """Two loads + ``feeds`` back-to-back MMAs + one mma.last + one store."""
+    k = npu.cfg.K
+    a = np.ones(k, dtype=np.int8)
+    b = np.ones(k, dtype=np.int8)
+    words = [isa.vle8(4, isa.SECT_A, 0), isa.vle8(8, isa.SECT_B, 0)]
+    words += [isa.mma(0, 4, 8, 0) for _ in range(feeds)]
+    words += [isa.mma_last(0, 0, 0, 0), isa.vse32(0, isa.SECT_OUT, 0)]
+    if len(words) > CODE_WORDS:
+        raise ValueError(
+            f"{feeds} feeds = {len(words)} words exceeds the CODE window")
+    before = read_fetch_stats(npu)
+    perf = dict(npu.run(words, memories={"A": a, "B": b})["perf"])
+    perf["fills"] = fills_since(before, read_fetch_stats(npu))
+    return perf
+
+
 # ── report ──────────────────────────────────────────────────────────────────
 
 HEADER = f"{'case':<12}{'instr':>8}{'cycles':>12}{'cyc/instr':>11}" \
@@ -153,6 +220,10 @@ def main() -> int:
         print_row(f"nop-{n}", run_nops(npu, n))
     for rounds in ROUND_COUNTS:
         print_row(f"round-{rounds}", run_rounds(npu, rounds))
+    for rounds in PIPE_ROUNDS:
+        print_row(f"pipe-{rounds}", run_pipelined_rounds(npu, rounds))
+    for feeds in FEED_COUNTS:
+        print_row(f"feed-{feeds}", run_feed_stream(npu, feeds))
     return 0
 
 
