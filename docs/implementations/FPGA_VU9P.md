@@ -331,3 +331,101 @@ Run-to-run variance: on the final bitstream the 36-instruction perf test
 measured 242 cycles on two back-to-back runs, identical, with `feeds=33` on
 both (idempotent). The previous bitstream varied 624–634 cycles on the same
 program; the **631** before-figure is representative of that range.
+
+## MACs/cycle: feed scaling and the path to 1K
+
+Measured on the same A+B+P bitstream with
+`drivers/chisel_npu_py/tool/fetch_sweep.py`.  The source tree also carries the
+later abort-hardening commit (`46259b2`), which is schedule-neutral and is not
+in this bitstream; the numbers below are the measured artifact.  At K=32 the
+array peak is **K² = 1,024 MACs/cycle**.
+
+### Feed scaling (one capture at the end)
+
+Program: two `vle8` loads + `n` back-to-back `mma` + one `mma.last` + one
+`vse32`.  The largest legal `n` is 65,531: 2 + n + 1 + 1 = 65,535 words, the
+16-bit-pc program maximum.  A pure feed stream has no per-round capture/store
+boundary, so this isolates the array/feed/issue path.
+
+| feeds | instructions | cycles | MACs/cycle | % of 1,024 |
+|---:|---:|---:|---:|---:|
+| 1 | 5 | 211 | 4.9 | 0.5% |
+| 16 | 20 | 226 | 72.5 | 7.1% |
+| 32 | 36 | 259 | 126.5 | 12.4% |
+| 64 | 68 | 313 | 209.4 | 20.4% |
+| 128 | 132 | 405 | 323.6 | 31.6% |
+| 256 | 260 | 511 | 513.0 | 50.1% |
+| 512 | 516 | 767 | 683.6 | 66.8% |
+| 1,024 | 1,028 | 1,279 | 819.8 | 80.1% |
+| 2,048 | 2,052 | 2,311 | 907.5 | 88.6% |
+| 4,096 | 4,100 | 4,381 | 957.4 | 93.5% |
+| 8,192 | 8,196 | 8,559 | 980.1 | 95.7% |
+| 16,384 | 16,388 | 16,807 | 998.2 | 97.5% |
+| 32,768 | 32,772 | 33,468 | **1,002.6** | 97.9% |
+| 65,531 | 65,535 | 66,656 | **1,006.7** | 98.3% |
+
+The curve is the startup/ramp (a single feed is dominated by the load/fetch and
+capture latency); from ~4 k feeds the feed rate is flat and **exceeds 1,000
+MACs/cycle** at 32,768 feeds.  The array, feed pipeline, tag ring, vd FIFO,
+and instruction fetch can therefore sustain the 1K target on a long feed
+stream.  The max-length feed run is 1.017 cycles/instruction.
+
+### The round/matmul shape: the DMA is now the wall
+
+| shape | cycles | MACs/cycle | % of peak |
+|:--|--:|--:|--:|
+| `round-256` (store immediately after each round) | 29,867 | 280.9 | 27.4% |
+| `pipe-256` (store delayed 4 rounds, 4-vd ring) | 20,136 | 416.6 | 40.7% |
+| `feed-8,192` (one capture) | 8,559 | 980.1 | 95.7% |
+| `feed-65,531` (one capture) | 66,656 | 1,006.7 | 98.3% |
+
+The software store pipeline (`PIPE_DEPTH = 4`, a 4-deep vd ring: round r's
+store is issued at the start of round r+4, before that round reuses the same
+vd) removes the store's RAW wait on the ~81-cycle capture and lifts the shape
+from 280.9 to 416.6.  The remaining round time is not the array:
+
+- `pipe-256` issues **256 `vse` stores + 137 instruction-fill requests = 393
+  DMA requests**.
+- 20,136 cycles / 393 = **51.2 cycles per DMA request** — the DMA engine
+  processes one request at a time, so the store's 2-beat write response and the
+  fill's 4-beat read cannot overlap.
+- In `feed-65,531` there are 1,024 fills + 1 store = 1,025 requests
+  (≈52 k cycles at 51.2) hidden behind the 65.5 k feed cycles, so the DMA is
+  not visible there; in the round shape it is the critical resource.
+
+### How to reach 1K for the round shape
+
+The ceiling is set by the instruction mix: K useful feeds + `mma.last` +
+`vse` per round.
+
+| scheme | useful feeds per issue/feed cycle | MACs/cycle |
+|:--|:--|--:|
+| single issue, current shape | 32 / 34 | **964** |
+| `vse` dual-issued with an MMA | 32 / 33 | **993** |
+| `mma.last` consumes no array feed | 32 / 32 | **1,024** |
+
+Steps, in order:
+
+1. **Software store pipeline + vd ring** — implemented in `fetch_sweep.py` and
+   measured: round-256 **280.9 → 416.6**.  No RTL.
+2. **Pipelined / outstanding DMA** (the load-bearing next RTL change).  Allow
+   2–4 outstanding AXI reads/writes, overlap the read and write channels, and
+   add a small completion scoreboard so the `dmaQ` can issue the next request
+   while the previous response is outstanding.  Hiding the ~51-cycle request
+   latency should take `pipe-256` from 20.1 k toward ~9 k cycles:
+   **~900–960 MACs/cycle**.
+3. **Store coalescing** (optional, reduces the request count).  Four adjacent
+   128 B `vse` stores can become one 512 B write, cutting 256 stores to 64;
+   alone it caps around ~820, combined with (2) it gives margin.
+4. **Issue overhead**: remove the one-cycle `vrPending` bubble (allow an MMA
+   feed in the cycle the deferred store is enqueued) and/or dual-issue the
+   DMA with the MMALU: **964–993**.
+5. **Capture-only round boundary** (for exactly 1,024): eliminate the
+   `mma.last` zero feed and redesign the `keep=0` reset wave so the capture is
+   triggered without an array feed cycle.  This is an ISA/microarchitecture
+   change; without it the practical ceiling is **993 (97%)**.
+
+Current status: the feed path is at **1,006.7 (98.3%)**; the round shape is at
+**416.6 (40.7%)** and is DMA-request-bound.  The next implementation is
+step 2 (the pipelined DMA); steps 3–5 follow.  The exact 1K for a matmul round
+requires step 5; the practical 993 requires steps 2–4.

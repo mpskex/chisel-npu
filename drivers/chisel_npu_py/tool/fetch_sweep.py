@@ -18,6 +18,8 @@ Two shapes are measured on the FPGA host:
   feed-<n>    two loads followed by ``n`` back-to-back MMAs and a single
               mma.last + store.  With only one capture at the end, this is the
               sustained array feed rate (isolated from per-round captures).
+              ``n`` sweeps 1, 16, 32, 64, ... 65531 (the largest feed count
+              that fits the 16-bit program counter).
 
 For every case the ``FETCH_STATS`` ctrl register (0x10) is sampled before and
 after the run; its high half counts prefetch fills and its low half counts
@@ -52,8 +54,11 @@ PIPE_DEPTH = 4
 PIPE_ROUNDS = (16, 64, 256)
 
 # Long back-to-back MMA feeds with a single capture at the end (array feed
-# rate isolated from the per-round capture/store boundary).
-FEED_COUNTS = (256, 1024, 8192)
+# rate isolated from the per-round capture/store boundary).  The sweep runs
+# from one feed to the largest count that fits the 16-bit pc: 65535 words
+# total = 2 loads + feeds + mma.last + vse, i.e. feeds <= 65531.
+FEED_COUNTS = (1, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192,
+               16384, 32768, 65531)
 
 # CODE window in bytes / words (the engine's fetch address space).  The
 # engine's program counter is 16 bits, so the last instruction sits at
@@ -61,6 +66,7 @@ FEED_COUNTS = (256, 1024, 8192)
 CODE_BYTES = config.default_config().sections["CODE"].window
 CODE_WORDS = CODE_BYTES // 4
 MAX_WORDS = CODE_WORDS - 1
+MAX_FEEDS = MAX_WORDS - 4
 
 
 # ── fetch statistics ────────────────────────────────────────────────────────
@@ -184,11 +190,13 @@ def run_feed_stream(npu: ChiselNPU, feeds: int) -> dict:
     words = [isa.vle8(4, isa.SECT_A, 0), isa.vle8(8, isa.SECT_B, 0)]
     words += [isa.mma(0, 4, 8, 0) for _ in range(feeds)]
     words += [isa.mma_last(0, 0, 0, 0), isa.vse32(0, isa.SECT_OUT, 0)]
-    if len(words) > CODE_WORDS:
+    if not 0 < feeds <= MAX_FEEDS or len(words) > MAX_WORDS:
         raise ValueError(
-            f"{feeds} feeds = {len(words)} words exceeds the CODE window")
+            f"{feeds} feeds = {len(words)} words exceeds the "
+            f"{MAX_WORDS}-word program limit")
     before = read_fetch_stats(npu)
-    perf = dict(npu.run(words, memories={"A": a, "B": b})["perf"])
+    with _full_code_window(npu):
+        perf = dict(npu.run(words, memories={"A": a, "B": b})["perf"])
     perf["fills"] = fills_since(before, read_fetch_stats(npu))
     return perf
 
