@@ -158,4 +158,3 @@ def test_run_raises_on_device_error():
     drv.open()
     with pytest.raises(NpuDriverError, match="MEM_FAULT"):
         drv.run(prog_len=4, segments={p.SEG_A: (0x100, 0x100, b"")})
-
