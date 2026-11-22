@@ -136,12 +136,22 @@ the routing blows up; the engine was made to fit by reducing it (W=4 + the
 
 With that, the engine fabric domain closes at 100 MHz (WNS +0.054 ns on the
 ctrl-CDC build, +0.003 ns on the feed-counter build; 0 failing endpoints /
-0 unrouted nets).  Implementation runs with the ML estimators disabled
-(`place.3d.congestionML 0`, `place.disableMlde 1`) and single-threaded
-placement — Vivado 2025.2 still segfaults randomly in
-`LgbmTree::~LgbmTree` (`HCMBoostTreeEstimator` destructor), so the flow
-retries the implementation.  Timing must be re-checked after every RTL change
-because the margin is sub-0.1 ns.
+0 unrouted nets).
+
+Implementation now uses the **parallel ML-on flow**: ML congestion/delay
+estimators are enabled, placement runs 8-threaded with `-ultrathreads` on this
+SSI part, and several place/phys_opt/route candidates run concurrently.  On the
+same post-opt checkpoint, ML-on placement is ~26 min at ~13.5 GB versus ~51 min
+for the old ML-off single-threaded placement at ~12.3 GB.  The flow checkpoints
+after placement and physical optimization, retries a crashed route from the
+checkpoint, and falls back to ML-off/2-thread routing if Vivado 2025.2
+segfaults.  The full design and sizing model are in
+[`docs/designs/06.parallel-ml-build.md`](../designs/06.parallel-ml-build.md).
+The old ML-off single-thread recipe is tracked as
+`ip/vivado/xcvu9p/scripts/impl_1thread_noml.tcl` and remains the known-good
+fallback.
+Timing must be re-checked after every RTL change because the margin is
+sub-0.1 ns.
 
 ## Instruction-supply streaming (A+B+P)
 
@@ -183,16 +193,31 @@ make build                                   # Chisel -> top.sv
 # one-time IP setup: DDR4 narrow burst, XDMA bypass, 100 MHz MMCM, converters
 vivado -mode batch -source ip/vivado/xcvu9p/scripts/setup_platform.tcl
 
-# current flow (Vivado 2025.2 in the Ubuntu 22.04 runtime container):
-#   synth + opt_design -> hw_platform_opt.dcp
-#   ML-off place/route at 100 MHz, reads src/cdc.xdc, WNS gate -1.0 ns
-vivado -mode batch -source build/latest_synth_opt.tcl
-vivado -mode batch -source build/impl_100mhz_nomlcong.tcl
-# -> ip/vivado/xcvu9p/top_npu_vu9p.bit
+# current flow: parallel ML-on place/phys_opt/route candidates
+#   (synth + opt_design first; Vivado 2025.2 in the Ubuntu 22.04 container)
+tool/fpga/build_vu9p_parallel.sh --jobs 3 --threads 8 --ml on
+# -> ip/vivado/xcvu9p/top_npu_vu9p.bit, plus per-candidate logs/checkpoints
+
+# inspect the plan / sizing without launching Vivado
+tool/fpga/build_vu9p_parallel.sh --dry-run --skip-chisel
+
+# reuse an existing post-opt checkpoint
+tool/fpga/build_vu9p_parallel.sh --skip-chisel --skip-synth
 ```
 
-`ip/vivado/xcvu9p/scripts/build_npu_vu9p.tcl` is the legacy single-shot
-200 MHz flow (kept for reference).
+`build_npu_vu9p.tcl` is the project synth/opt/single-shot driver.  It now
+parallelizes OOC IP synthesis (`launch_runs synth_1 -jobs $VIVADO_JOBS`) and,
+with `NPU_STOP_AFTER_OPT=1`, stops after `opt_design` for the host launcher.
+`launch_runs ... -jobs N` parallelizes **runs**, not one run; per-run
+`general.maxThreads` is controlled by the `STEPS.*.TCL.PRE` hooks in
+`impl_pre.tcl`.  The legacy ML-off single-thread recipe is tracked as
+`ip/vivado/xcvu9p/scripts/impl_1thread_noml.tcl` for a known-good fallback.
+
+Host note: the dev host is Ubuntu 26.04 / glibc 2.43; Vivado 2025.2 officially
+supports Ubuntu 22.04/24.04, and the host binary aborts on glibc 2.43.  All
+builds run in `vivado-runtime:22.04` with the host Vivado install bind-mounted.
+The design peaks at ~13.4 GB, and the host has 60 GiB RAM + 64 GiB swap; the
+2025.2 failures are SIGSEGVs, not OOM kills.
 
 ## Remote programming (no local JTAG)
 

@@ -13,6 +13,7 @@ nav:
     - Streamed dispatch (overview): designs/02.streamed-dispatch.md
     - Streamed issuing (detail): designs/04.streamed-issuing.md
     - Pipelined DMA (1K MACs/cycle): designs/05.pipelined-dma.md
+    - Parallel ML-build flow: designs/06.parallel-ml-build.md
   - Implementation:
     - Neural Core: implementations/NeuralCore.md
     - Processing Element: implementations/ProcessingElement.md

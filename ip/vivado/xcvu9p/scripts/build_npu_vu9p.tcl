@@ -91,9 +91,20 @@ if {[get_ips -quiet npu_cc] ne ""} {
 
 set jobs 4
 if {[info exists ::env(VIVADO_JOBS)]} { set jobs $::env(VIVADO_JOBS) }
+set max_threads 8
+if {[info exists ::env(NPU_MAX_THREADS)]} {
+    set max_threads $::env(NPU_MAX_THREADS)
+} elseif {[info exists ::env(VIVADO_MAX_THREADS)]} {
+    set max_threads $::env(VIVADO_MAX_THREADS)
+}
+set stop_after_opt 0
+if {[info exists ::env(NPU_STOP_AFTER_OPT)]} { set stop_after_opt $::env(NPU_STOP_AFTER_OPT) }
+set ultra_threads 1
+if {[info exists ::env(NPU_ULTRATHREADS)]} { set ultra_threads $::env(NPU_ULTRATHREADS) }
+puts "BUILD_THREADS=$max_threads SYNTH_JOBS=$jobs STOP_AFTER_OPT=$stop_after_opt ULTRATHREADS=$ultra_threads"
 
 # ── Synthesis (all runs, incl. OOC IP) ──────────────────────────────────────
-set_param general.maxThreads 8
+set_param general.maxThreads $max_threads
 # Disable auto-incremental synthesis: the stale reference checkpoint
 # (prj.srcs/utils_1/imports/synth_1/hw_platform.dcp) otherwise reuses ~100% of
 # a previous engine netlist, so a regenerated top.sv is silently ignored.
@@ -102,7 +113,10 @@ if {[llength [get_runs -quiet synth_1]] > 0} {
     catch { set_property INCREMENTAL_CHECKPOINT "" [get_runs synth_1] }
 }
 reset_run synth_1
-launch_runs synth_1 -jobs 1
+# -jobs parallelizes the OOC IP synthesis runs (XDMA, MIG, converters).  It
+# does not parallelize a single impl run; see NPU_STOP_AFTER_OPT + the host
+# launcher tool/fpga/parallel_impl.py for that.
+launch_runs synth_1 -jobs $jobs
 wait_on_run synth_1
 set prog [get_property PROGRESS [get_runs synth_1]]
 puts "SYNTH_PROGRESS=$prog"
@@ -121,9 +135,44 @@ foreach ip [get_ips -quiet] {
     }
 }
 
+# ── Optional stop after opt_design (parallel-impl hand-off) ──────────────────
+# The host launcher tool/fpga/parallel_impl.py consumes hw_platform_opt.dcp and
+# runs multiple ML-on place/route candidates in parallel.  Stopping here keeps
+# synthesis/opt single-consumer and avoids re-running it per candidate.
+if {$stop_after_opt} {
+    set_param general.maxThreads $max_threads
+    reset_run impl_1
+    launch_runs impl_1 -to_step opt_design -jobs 1
+    wait_on_run impl_1
+    set oprog [get_property PROGRESS [get_runs impl_1]]
+    puts "OPT_PROGRESS=$oprog STATUS=[get_property STATUS [get_runs impl_1]]"
+    if {$oprog ne "100%"} { exit 1 }
+    set opt_dcp [file join $XCVU9P prj prj.runs impl_1 hw_platform_opt.dcp]
+    if {![file exists $opt_dcp]} {
+        puts "ERROR: opt_design checkpoint not found: $opt_dcp"
+        exit 1
+    }
+    puts "OPT_DCP=$opt_dcp"
+    puts "STOP_AFTER_OPT_DONE"
+    exit 0
+}
+
 # ── Implementation + bitstream ──────────────────────────────────────────────
-set_param general.maxThreads 8
+set_param general.maxThreads $max_threads
 set_property STEPS.PLACE_DESIGN.ARGS.DIRECTIVE ExtraTimingOpt [get_runs impl_1]
+if {[catch {set_property STEPS.PLACE_DESIGN.ARGS.ULTRA_THREADS $ultra_threads [get_runs impl_1]} err]} {
+    puts "WARNING: could not set place -ultrathreads: $err"
+}
+# Project-mode runs are generated with `set_param general.maxThreads 2` in the
+# init step, so a parent-process set_param does not reach place/route.  These
+# pre-hooks run in the child process immediately before each step and restore
+# the requested thread count / ML mode.
+set impl_pre [file join $SCRIPT_DIR impl_pre.tcl]
+foreach step {PLACE_DESIGN PHYS_OPT_DESIGN ROUTE_DESIGN} {
+    if {[catch {set_property STEPS.${step}.TCL.PRE $impl_pre [get_runs impl_1]} err]} {
+        puts "WARNING: could not set ${step} pre-hook: $err"
+    }
+}
 reset_run impl_1
 launch_runs impl_1 -to_step write_bitstream -jobs $jobs
 wait_on_run impl_1
