@@ -459,6 +459,25 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
   }
 
   // ==========================================================================
+  // Abort: terminate the session and return to idle.  The engine's
+  // session_reset pulse performs the queue/scoreboard flush.
+  // ==========================================================================
+  when (io.core_abort) {
+    runState      := RunState.RUN_IDLE
+    doneReg       := false.B
+    statusIllegal := false.B
+    pc            := 0.U
+    fpc           := 0.U
+    framesDone    := 0.U
+    ifqHead       := 0.U
+    ifqTail       := 0.U
+    ifqCount      := 0.U
+    fillState     := FillState.IDLE
+    fillBeat      := 0.U
+    warmValid     := false.B
+  }
+
+  // ==========================================================================
   // Register file readback (word-addressable)
   // ==========================================================================
   io.core_busy        := busy
