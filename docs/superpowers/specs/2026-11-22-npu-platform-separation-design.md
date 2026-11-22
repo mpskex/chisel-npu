@@ -222,7 +222,8 @@ The core never sees a system address. The core-to-hub interface is a
 **segmented AXI** master:
 
 ```
-core AXI address = byte offset within the selected segment
+core AXI address  = flat local offset (A=0, B=0x400, ACCUM=0x800,
+                    OUT=0x880, CODE=0x4000)
 core AXI sideband = seg[2:0]
 ```
 
@@ -234,19 +235,21 @@ section offsets are unchanged.
 The hub translates:
 
 ```
-sys_addr = SEG_BASE[seg] + core_offset
-valid    = core_offset + burst_bytes <= SEG_LIMIT[seg]
+rel      = core_offset - LOCAL_BASE[seg]
+sys_addr = SEG_BASE[seg] + rel
+valid    = (core_offset >= LOCAL_BASE[seg]) &&
+           (rel + burst_bytes <= SEG_LIMIT[seg])
 ```
 
 - `SEG_BASE` is 64-byte aligned; `SEG_LIMIT` is a multiple of 64.
-- The core checks `offset + vector_bytes <= seg_limit[seg]` at DMA issue and
-  raises `mem_fault` with the segment/offset. The frontend checks the code
-  fetch against `seg_limit[CODE]`. The hub drives the active limits into the
-  core.
+- The core checks `slots.off + vector_bytes <= seg_limit[seg]` at DMA issue
+  and raises `mem_fault` with the segment/offset. The hub's START validation
+  checks the code window against `seg_limit[CODE]`. The hub drives the active
+  limits into the core.
 - The hub also guards the translated burst; if the core ever issues an
-  out-of-range request it asserts `mem_fault` and clamps to the segment base,
-  and the session aborts. The core check is the normal path; the hub guard is
-  defense in depth.
+  out-of-range request the translator reports `BUS_ERROR` and clamps to the
+  segment base, and the session aborts. The core check is the normal path;
+  the hub guard is defense in depth.
 - Data burst bytes: VX = K bytes, VE = 2K, VR = 4K; the AXI beat is 64 B and
   the core aligns down, so the limit/base alignment rules keep every beat
   inside the segment.
