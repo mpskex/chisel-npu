@@ -218,9 +218,10 @@ with `NPU_STOP_AFTER_OPT=1`, stops after `opt_design` for the host launcher.
 
 Host note: the dev host is Ubuntu 26.04 / glibc 2.43; Vivado 2025.2 officially
 supports Ubuntu 22.04/24.04, and the host binary aborts on glibc 2.43.  All
-builds run in `vivado-runtime:22.04` with the host Vivado install bind-mounted.
-The design peaks at ~13.4 GB, and the host has 60 GiB RAM + 64 GiB swap; the
-2025.2 failures are SIGSEGVs, not OOM kills.
+builds run in `vivado-runtime:22.04` with the host Vivado install bind-mounted
+and `--ipc=host` (Docker's default `/dev/shm` is only 64 MB).  The design peaks
+at ~13.4 GB, and the host has 60 GiB RAM + 64 GiB swap; the 2025.2 failures are
+SIGSEGVs, not OOM kills.
 
 ## Remote programming (no local JTAG)
 
