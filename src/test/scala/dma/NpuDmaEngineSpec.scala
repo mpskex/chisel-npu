@@ -74,6 +74,7 @@ class DmaSpecHarness(val K: Int = DmaSpecHarness.K,
   dma.io.req_width   := io.req_width
   dma.io.req_rf_addr := io.req_rf_addr
   dma.io.req_l3_addr := io.req_l3_addr
+  dma.io.req_seg     := 0.U
   dma.io.req_beats   := io.req_beats
   dma.io.req_store_data_valid := io.req_store_data_valid
   for (l <- 0 until K) dma.io.req_store_data(l) := io.req_store_data(l)

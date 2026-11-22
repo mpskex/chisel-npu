@@ -34,20 +34,23 @@ import sram.mwreg._
 import dma._
 
 // ---------------------------------------------------------------------------
-// L3 memory map (mirrors drivers/chisel_npu_py native section table).
+// Local memory map (the core never sees a system address).  The segment
+// sideband selects the section; these are the flat local offsets used by the
+// core and testbenches.  The hub subtracts LOCAL_BASE[seg] and adds the
+// programmed system base.
 // ---------------------------------------------------------------------------
 object NpuSections {
-  val DATA_BASE = 0x40000000L
-  val A         = 0x40000000L   // int8[K×K]   1 KiB
-  val B         = 0x40000400L   // int8[K×K]   1 KiB
-  val ACCUM     = 0x40000800L   // int32[K×1]  128 B
-  val OUT       = 0x40000880L   // int32[K×K]  4 KiB
-  val CODE_BASE = 0x40004000L   // code section (entry at base)
+  val A         = 0x0000L   // int8[K×K]   1 KiB
+  val B         = 0x0400L   // int8[K×K]   1 KiB
+  val ACCUM     = 0x0800L   // int32[K×1]  128 B
+  val OUT       = 0x0880L   // int32[K×K]  4 KiB
+  val CODE_BASE = 0x4000L   // code section (entry at base)
 
   val SECT_A     = 0
   val SECT_B     = 1
   val SECT_ACCUM = 2
   val SECT_OUT   = 3
+  val SEG_CODE   = 4
 }
 
 class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends Module {
@@ -93,6 +96,14 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     // session cannot contaminate the next run.
     val session_reset = Input(Bool())
 
+    // ---- Segment limits (bytes; from the peripheral control hub) ----------
+    val seg_limit = Input(Vec(5, UInt(32.W)))
+
+    // ---- Memory-range fault (data path) -----------------------------------
+    val mem_fault = Output(Bool())
+    val fault_seg = Output(UInt(3.W))
+    val fault_addr = Output(UInt(32.W))
+
     // ---- Debug: RF VX read (testbench only) ----
     val dbg_vx_addr = Input(UInt(5.W))
     val dbg_vx_data = Output(Vec(K, UInt(N.W)))
@@ -136,6 +147,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
 
     // ---- AXI4 master (128-bit, same shape as NpuDmaEngine) ----
     val m_axi_awaddr  = Output(UInt(32.W))
+    val m_axi_awseg   = Output(UInt(3.W))
     val m_axi_awlen   = Output(UInt(8.W))
     val m_axi_awsize  = Output(UInt(3.W))
     val m_axi_awburst = Output(UInt(2.W))
@@ -149,6 +161,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     val m_axi_bvalid  = Input(Bool())
     val m_axi_bready  = Output(Bool())
     val m_axi_araddr  = Output(UInt(32.W))
+    val m_axi_arseg   = Output(UInt(3.W))
     val m_axi_arlen   = Output(UInt(8.W))
     val m_axi_arsize  = Output(UInt(3.W))
     val m_axi_arburst = Output(UInt(2.W))
@@ -217,7 +230,8 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     val dir        = UInt(2.W)      // 0 = vle, 1 = vse, 3 = fetch fill
     val dmaWidth   = UInt(2.W)
     val rfAddr     = UInt(5.W)
-    val l3Addr     = UInt(32.W)
+    val seg        = UInt(3.W)      // NPU segment ID
+    val l3Addr     = UInt(32.W)     // flat local offset (hub subtracts LOCAL_BASE)
     val beats      = UInt(3.W)      // fetch-fill burst length (dir=3 only)
     // The vse's VX read mask captured at issue: the window slot retires at
     // issue (P2), so the completion can no longer read it back off the slot to
@@ -425,6 +439,13 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   val dmaQTail = RegInit(0.U(log2Ceil(DMAQ_DEPTH).W))
   val dmaQCount = RegInit(0.U((log2Ceil(DMAQ_DEPTH) + 1).W))
   val dmaQFull  = dmaQCount === DMAQ_DEPTH.U
+
+  val dmaFault   = RegInit(false.B)
+  val faultSegR  = RegInit(0.U(3.W))
+  val faultAddrR = RegInit(0.U(32.W))
+  io.mem_fault  := dmaFault
+  io.fault_seg  := faultSegR
+  io.fault_addr := faultAddrR
 
   // ==========================================================================
   // Register file
@@ -715,6 +736,10 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
         val isVrStore = isStore && slots(s).memWidth === 2.U
         issueVrStore   := isVrStore
         issueVrStoreVd := slots(s).rd
+        val dmaSeg = Cat(0.U(1.W), slots(s).sect)
+        val vecBytes = MuxLookup(slots(s).memWidth, K.U(32.W))(Seq(
+          0.U -> K.U(32.W), 1.U -> (2 * K).U(32.W), 2.U -> (4 * K).U(32.W)))
+        val dmaFits = slots(s).off + vecBytes <= io.seg_limit(slots(s).sect)
         val dmaL3 = MuxLookup(slots(s).sect, 0.U(32.W))(Seq(
           NpuSections.SECT_A.U(2.W)     -> NpuSections.A.U(32.W),
           NpuSections.SECT_B.U(2.W)     -> NpuSections.B.U(32.W),
@@ -724,7 +749,12 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
         // Snapshot the vse's VX read mask for the tag-reader clear at done.
         val dmaMask = readSlotsL(slots(s).family, slots(s).rd,
           slots(s).rs1, slots(s).rs2, slots(s).memWidth, slots(s).vs3)
-        when (isVrStore) {
+        when (!dmaFits) {
+          dmaFault := true.B
+          faultSegR := dmaSeg
+          faultAddrR := Cat(0.U(18.W), slots(s).sect, slots(s).off)
+          slots(s).done := true.B
+        } .elsewhen (isVrStore) {
           // Capture the full entry plus the issue-cycle RF VR read.  The entry
           // is enqueued through the normal tail port next cycle (issue is
           // stalled while vrPendingValid), so storeData is register-fed.
@@ -734,6 +764,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
           vrPending.dir := 1.U
           vrPending.dmaWidth := slots(s).memWidth
           vrPending.rfAddr := slots(s).rd
+          vrPending.seg := dmaSeg
           vrPending.l3Addr := dmaL3
           vrPending.rdMask := dmaMask
           vrPending.storeDataValid := true.B
@@ -748,6 +779,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
           dmaQ(dmaQTail).dir := Mux(isStore, 1.U, 0.U)
           dmaQ(dmaQTail).dmaWidth := slots(s).memWidth
           dmaQ(dmaQTail).rfAddr := slots(s).rd
+          dmaQ(dmaQTail).seg := dmaSeg
           dmaQ(dmaQTail).l3Addr := dmaL3
           dmaQ(dmaQTail).rdMask := dmaMask
           dmaQ(dmaQTail).storeDataValid := false.B
@@ -1075,6 +1107,9 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     dmaQCount := 0.U
     fifoHead  := fifoTail
     fifoCount := 0.U
+    dmaFault  := false.B
+    faultSegR := 0.U
+    faultAddrR := 0.U
   }
 
   // Session reset (frontend start pulse): same flush as illegal, plus the
@@ -1084,6 +1119,9 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   // or unit=NONE from a previous session otherwise corrupts the scoreboard's
   // pending-MMA detection and lets the mma_last overtake the mma.
   when (io.session_reset) {
+    dmaFault  := false.B
+    faultSegR := 0.U
+    faultAddrR := 0.U
     for (s <- 0 until W) {
       slots(s).valid      := false.B
       slots(s).done       := false.B
@@ -1151,6 +1189,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   dma.io.req_dir    := dmaHead.dir
   dma.io.req_width  := dmaHead.dmaWidth
   dma.io.req_rf_addr := dmaHead.rfAddr
+  dma.io.req_seg     := dmaHead.seg
   dma.io.req_l3_addr := dmaHead.l3Addr
   dma.io.req_beats  := dmaHead.beats
   // A VR store carries the snapshot latched at its issue (WAR-safe); VX/VE
@@ -1191,6 +1230,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     dmaQ(dmaQTail).dir := 3.U
     dmaQ(dmaQTail).dmaWidth := 0.U
     dmaQ(dmaQTail).rfAddr := 0.U
+    dmaQ(dmaQTail).seg := NpuSections.SEG_CODE.U(3.W)
     dmaQ(dmaQTail).l3Addr := io.fetch_fill_addr
     dmaQ(dmaQTail).beats := io.fetch_fill_beats
     dmaQ(dmaQTail).rdMask := 0.U
@@ -1333,6 +1373,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   // AXI master
   // ==========================================================================
   io.m_axi_awaddr  := dma.io.m_axi_awaddr
+  io.m_axi_awseg   := dma.io.m_axi_awseg
   io.m_axi_awlen   := dma.io.m_axi_awlen
   io.m_axi_awsize  := dma.io.m_axi_awsize
   io.m_axi_awburst := dma.io.m_axi_awburst
@@ -1346,6 +1387,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   dma.io.m_axi_bvalid := io.m_axi_bvalid
   io.m_axi_bready  := dma.io.m_axi_bready
   io.m_axi_araddr  := dma.io.m_axi_araddr
+  io.m_axi_arseg   := dma.io.m_axi_arseg
   io.m_axi_arlen   := dma.io.m_axi_arlen
   io.m_axi_arsize  := dma.io.m_axi_arsize
   io.m_axi_arburst := dma.io.m_axi_arburst

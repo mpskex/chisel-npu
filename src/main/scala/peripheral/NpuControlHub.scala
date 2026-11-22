@@ -178,8 +178,12 @@ class NpuControlHub(val K: Int = 32, val N: Int = 8, val L: Int = 32,
     (segBaseLo(i)(5, 0) === 0.U) && (effLimit(i)(5, 0) === 0.U)
   }).reduce(_ && _)
 
+  val endWord   = entryPc +& progLen
+  val codeBytes = ((endWord +& 15.U) >> 4) << 6
+  val codeFits  = codeBytes <= effLimit(NpuCtrlProtocol.Seg.CODE)
+  val wordFits  = endWord <= 0xFFFF.U
   val canStart = (state === HubState.IDLE || state === HubState.DONE) &&
-                 progLen =/= 0.U && segAligned
+                 progLen =/= 0.U && segAligned && codeFits && wordFits
   val startAccept = startPulse && canStart
   val badConfigEvt = startPulse && !canStart
 
@@ -204,7 +208,8 @@ class NpuControlHub(val K: Int = 32, val N: Int = 8, val L: Int = 32,
                    abortEvt || badConfigEvt
 
   // Core abort pulse.
-  val coreAbort = (state === HubState.RUN) && (stopPulse || watchdogExpired || busErrEvt) ||
+  val coreAbort = (state === HubState.RUN) &&
+                  (stopPulse || watchdogExpired || busErrEvt || io.core_mem_fault) ||
                   softResetPulse
   io.core_abort := coreAbort
 
@@ -229,13 +234,7 @@ class NpuControlHub(val K: Int = 32, val N: Int = 8, val L: Int = 32,
   io.core_start := startAccept
 
   when (state === HubState.RUN) {
-    when (doneEvt) {
-      state        := HubState.DONE
-      doneSticky   := true.B
-      latchedCycles := io.core_cycles
-      latchedMacs   := io.core_macs
-      latchedFetch  := io.core_fetch_stats
-    } .elsewhen (illegalEvt) {
+    when (illegalEvt) {
       state       := HubState.IDLE
       errorSticky := true.B
       errorCode   := NpuCtrlProtocol.Error.ILLEGAL.U
@@ -269,6 +268,12 @@ class NpuControlHub(val K: Int = 32, val N: Int = 8, val L: Int = 32,
       abortedSticky  := true.B
       errorSticky    := true.B
       errorCode      := NpuCtrlProtocol.Error.ABORTED.U
+    } .elsewhen (doneEvt) {
+      state        := HubState.DONE
+      doneSticky   := true.B
+      latchedCycles := io.core_cycles
+      latchedMacs   := io.core_macs
+      latchedFetch  := io.core_fetch_stats
     }
   }
 

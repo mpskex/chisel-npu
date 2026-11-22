@@ -58,6 +58,14 @@ class FrontendSpecHarness(val K: Int = 32, val readLatency: Int = 1,
   fe.io.ctrl_wdata := io.ctrl_wdata
   io.ctrl_rdata    := fe.io.ctrl_rdata
 
+  // This harness uses the legacy ctrl port; the native hub path is off.
+  fe.io.native_ctrl   := false.B
+  fe.io.core_start    := false.B
+  fe.io.core_abort    := false.B
+  fe.io.core_prog_len := 0.U
+  fe.io.core_entry_pc := 0.U
+  fe.io.seg_limit     := VecInit(Seq.fill(5)(0xFFFFFFFFL.U))
+
   ram.io.s_axi_awaddr  := fe.io.m_axi_awaddr
   ram.io.s_axi_awlen   := fe.io.m_axi_awlen
   ram.io.s_axi_awsize  := fe.io.m_axi_awsize

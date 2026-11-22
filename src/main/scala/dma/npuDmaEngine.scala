@@ -56,7 +56,8 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
                                         // 3 = L3 → instruction line buffer (1 beat)
     val req_width = Input(UInt(2.W))    // 0 = VX, 1 = VE, 2 = VR (ACCUM/fetch: VR)
     val req_rf_addr = Input(UInt(5.W))  // VX/VE/VR register index
-    val req_l3_addr = Input(UInt(32.W)) // absolute DDR address (aligned)
+    val req_seg     = Input(UInt(3.W))  // NPU segment ID (0=A,1=B,2=ACCUM,3=OUT,4=CODE)
+    val req_l3_addr = Input(UInt(32.W)) // segment-relative byte offset (aligned)
     val req_beats   = Input(UInt(3.W))  // beats per request (1..4; dir=3 only)
     val req_store_data_valid = Input(Bool())
     val req_store_data = Input(Vec(K, UInt((4 * N).W)))
@@ -92,7 +93,10 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
     val rf_r_vr_data = Input(Vec(K, UInt((4 * N).W)))
 
     // ---- AXI4 master (DW-bit, INCR, id = 0) ----
+    // The address is the segment-relative offset; `awseg`/`arseg` select the
+    // segment and the hub adds the system base.
     val m_axi_awaddr  = Output(UInt(32.W))
+    val m_axi_awseg   = Output(UInt(3.W))
     val m_axi_awlen   = Output(UInt(8.W))
     val m_axi_awsize  = Output(UInt(3.W))
     val m_axi_awburst = Output(UInt(2.W))
@@ -106,6 +110,7 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
     val m_axi_bvalid  = Input(Bool())
     val m_axi_bready  = Output(Bool())
     val m_axi_araddr  = Output(UInt(32.W))
+    val m_axi_arseg   = Output(UInt(3.W))
     val m_axi_arlen   = Output(UInt(8.W))
     val m_axi_arsize  = Output(UInt(3.W))
     val m_axi_arburst = Output(UInt(2.W))
@@ -126,6 +131,7 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
   val reqDir   = RegInit(0.U(2.W))
   val reqWidth = RegInit(0.U(2.W))
   val reqRfAddr = RegInit(0.U(5.W))
+  val reqSeg    = RegInit(0.U(3.W))
   val reqL3Addr = RegInit(0.U(32.W))
   val reqBeats  = RegInit(1.U(3.W))     // latched burst length (dir=3)
   val reqStoreDataValid = RegInit(false.B)
@@ -144,6 +150,7 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
   val bufDir    = RegInit(0.U(2.W))
   val bufWidth  = RegInit(0.U(2.W))
   val bufRfAddr = RegInit(0.U(5.W))
+  val bufSeg    = RegInit(0.U(3.W))
   val bufL3Addr = RegInit(0.U(32.W))
   val bufBeats  = RegInit(1.U(3.W))     // buffered burst length (dir=3)
   val bufStoreDataValid = RegInit(false.B)
@@ -202,6 +209,7 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
   val veLo      = log2Ceil(VE_BYTES)
   val veSel     = if (veChunks > 1) rdOff(veLo + log2Ceil(veChunks) - 1, veLo) else 0.U
   io.m_axi_awaddr  := (reqL3Addr & beatMask)
+  io.m_axi_awseg   := reqSeg
   io.m_axi_awlen   := beats - 1.U
   io.m_axi_awsize  := SZ.U
   io.m_axi_awburst := 1.U             // INCR
@@ -212,6 +220,7 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
   io.m_axi_wvalid  := false.B
   io.m_axi_bready  := false.B
   io.m_axi_araddr  := (reqL3Addr & beatMask)
+  io.m_axi_arseg   := reqSeg
   io.m_axi_arlen   := beats - 1.U
   io.m_axi_arsize  := SZ.U
   io.m_axi_arburst := 1.U
@@ -290,6 +299,7 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
         reqDir    := bufDir
         reqWidth  := bufWidth
         reqRfAddr := bufRfAddr
+        reqSeg    := bufSeg
         reqL3Addr := bufL3Addr
         reqBeats  := bufBeats
         reqStoreDataValid := bufStoreDataValid
@@ -306,6 +316,7 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
         reqDir    := io.req_dir
         reqWidth  := Mux(io.req_dir === 2.U, 2.U, io.req_width)
         reqRfAddr := io.req_rf_addr
+        reqSeg    := io.req_seg
         reqL3Addr := io.req_l3_addr
         reqBeats  := io.req_beats
         reqStoreDataValid := io.req_store_data_valid
@@ -473,6 +484,7 @@ class NpuDmaEngine(val K: Int = 32, val N: Int = 8, val readTimeout: Int = 16384
     bufDir    := io.req_dir
     bufWidth  := Mux(io.req_dir === 2.U, 2.U, io.req_width)
     bufRfAddr := io.req_rf_addr
+    bufSeg    := io.req_seg
     bufL3Addr := io.req_l3_addr
     bufBeats  := io.req_beats
     bufStoreDataValid := io.req_store_data_valid

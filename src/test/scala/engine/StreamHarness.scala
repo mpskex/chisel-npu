@@ -158,6 +158,8 @@ class StreamHarness(val K: Int = 16, val readLatency: Int = 1, val W: Int = 8,
   io.instr_ready     := eng.io.instr_ready
   io.illegal_out     := eng.io.illegal_out
   eng.io.session_reset := io.session_reset
+  // Test harness: no peripheral limit checks; allow every segment.
+  eng.io.seg_limit := VecInit(Seq.fill(5)(0xFFFFFFFFL.U))
 
   eng.io.dbg_vx_addr := io.dbg_vx_addr
   io.dbg_vx_data     := eng.io.dbg_vx_data
