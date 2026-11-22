@@ -45,3 +45,6 @@ __all__ = [
     "isa",
     "__version__",
 ]
+
+from .driver import NpuDriverCore  # noqa: E402
+from .protocol import DeviceInfo  # noqa: E402
