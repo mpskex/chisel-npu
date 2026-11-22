@@ -145,10 +145,11 @@ checkpoint, ML-on placement measured **25:05 at 13.25 GB** with post-place
 **WNS +0.272 ns**, versus ~43 min for the old ML-off single-threaded placement
 at ~12.3 GB.  In the ML-on flow, routing the ML-on placement took **36:15** and closed at
 **−0.055 ns**; routing the known-good ML-off placement took 48:10 and closed at
-**+0.056 ns**.  The default parallel set includes an ML-off safety placement
-intended to preserve that QoR (the 2-thread variant is under validation; use
-`ExtraTimingOpt:off:1` for the exact known-good placement path).  The fast
-ML-on-only path is ~1h30 end-to-end; the two-candidate QoR path is ~1h50–2:03.
+**+0.056 ns**.  The default parallel set includes an ML-off 2-thread safety
+placement, which measured **+0.002 ns**, 0 unrouted, **86:46** for the full
+implementation (≈1:48:49 including synth/opt).  Use
+`--place-specs ExtraTimingOpt:off:1` for the max-margin +0.056 ns path
+(≈2:03).  The fast ML-on-only path is ~1h30 end-to-end.
 `place_design -ultrathreads` was tested and is **not usable**: both attempts
 SIGSEGV in `HAPLFSimPLFlow::collectControlSetInfo` during Phase 2.5 Global
 Place Phase1 (a per-SLR thread race), so it is opt-in only.  The flow
@@ -216,9 +217,11 @@ tool/fpga/build_vu9p_parallel.sh --skip-chisel --skip-synth
 
 The default candidate set is one ML-on placement plus an ML-off 2-thread
 safety placement, so the flow can choose between the faster ML-on route
-(−0.055 ns) and the known-good QoR route (+0.056 ns).  For the fastest single
+(−0.055 ns) and the safety route (+0.002 ns).  For the fastest single
 bitstream, use `--jobs 1 --place-specs ExtraTimingOpt:on:8` (≈1h30
-synth-to-bitstream; WNS −0.055 ns).
+synth-to-bitstream; WNS −0.055 ns).  For maximum margin, use
+`--place-specs ExtraTimingOpt:on:8,ExtraTimingOpt:off:1` (≈2:03; WNS
++0.056 ns).
 
 `build_npu_vu9p.tcl` is the project synth/opt/single-shot driver.  It now
 parallelizes OOC IP synthesis (`launch_runs synth_1 -jobs $VIVADO_JOBS`) and,
