@@ -15,7 +15,11 @@
 #   --threads N                general.maxThreads per candidate (default 8)
 #   --synth-jobs N             parallel OOC IP synthesis jobs (default 4)
 #   --ml on|off|hybrid         ML model mode (default on)
-#   --place-directives LIST    comma-separated place directives
+#   --place-specs LIST         directive:ml:threads candidates
+#                              (default: ExtraTimingOpt:on:8,
+#                               SSI_SpreadLogic_high:on:8,
+#                               ExtraTimingOpt:off:2)
+#   --place-directives LIST    shorthand: all candidates use --ml/--threads
 #   --route-directives LIST    comma-separated route directives
 #   --ultrathreads             opt-in place_design -ultrathreads (experimental;
 #                              crashes in HAPLFSimPLFlow::collectControlSetInfo)
@@ -42,7 +46,9 @@ JOBS=3
 THREADS=8
 SYNTH_JOBS=4
 ML=on
-PLACE_DIRECTIVES="ExtraTimingOpt,SSI_SpreadLogic_high,AltSpreadLogic_high"
+PLACE_SPECS="ExtraTimingOpt:on:8,SSI_SpreadLogic_high:on:8,ExtraTimingOpt:off:2"
+PLACE_DIRECTIVES=""
+USE_PLACE_DIRECTIVES=0
 ROUTE_DIRECTIVES="Default"
 ULTRA=0
 RESUME=0
@@ -56,7 +62,8 @@ while [ $# -gt 0 ]; do
         --threads) THREADS=$2; shift ;;
         --synth-jobs) SYNTH_JOBS=$2; shift ;;
         --ml) ML=$2; shift ;;
-        --place-directives) PLACE_DIRECTIVES=$2; shift ;;
+        --place-specs) PLACE_SPECS=$2; USE_PLACE_DIRECTIVES=0; shift ;;
+        --place-directives) PLACE_DIRECTIVES=$2; USE_PLACE_DIRECTIVES=1; shift ;;
         --route-directives) ROUTE_DIRECTIVES=$2; shift ;;
         --ultrathreads) ULTRA=1 ;;
         --no-ultrathreads) ULTRA=0 ;;
@@ -111,8 +118,12 @@ CMD=(python3 tool/fpga/parallel_impl.py
     --jobs "$JOBS"
     --threads "$THREADS"
     --ml "$ML"
-    --place-directives "$PLACE_DIRECTIVES"
     --route-directives "$ROUTE_DIRECTIVES")
+if [ "$USE_PLACE_DIRECTIVES" = "1" ]; then
+    CMD+=(--place-directives "$PLACE_DIRECTIVES")
+else
+    CMD+=(--place-specs "$PLACE_SPECS")
+fi
 if [ "$ULTRA" = "1" ]; then
     CMD+=(--ultrathreads)
 else

@@ -142,13 +142,18 @@ Implementation now uses the **parallel ML-on flow**: ML congestion/delay
 estimators are enabled, placement runs 8-threaded, and several
 place/phys_opt/route candidates run concurrently.  On the same post-opt
 checkpoint, ML-on placement measured **25:05 at 13.25 GB** with post-place
-**WNS +0.272 ns**, versus ~51 min for the old ML-off single-threaded placement
-at ~12.3 GB.  `place_design -ultrathreads` was tested and is **not usable**:
-both attempts SIGSEGV in `HAPLFSimPLFlow::collectControlSetInfo` during
-Phase 2.5 Global Place Phase1 (a per-SLR thread race), so it is opt-in only.
-The flow checkpoints after placement and physical optimization, retries a
-crashed route from the checkpoint, and falls back to ML-off/2-thread routing
-if Vivado 2025.2 segfaults.  The full design and sizing model are in
+**WNS +0.272 ns**, versus ~43 min for the old ML-off single-threaded placement
+at ~12.3 GB.  Routing the ML-on placement took **36:15** and closed at
+**−0.055 ns**; routing the known-good ML-off placement took 48:10 and closed at
+**+0.056 ns**.  The default parallel set therefore includes an ML-off
+2-thread safety placement, so it can select the better QoR; the fast ML-on-only
+path is ~1h27 end-to-end, and the three-candidate QoR path is ~1h49.
+`place_design -ultrathreads` was tested and is **not usable**: both attempts
+SIGSEGV in `HAPLFSimPLFlow::collectControlSetInfo` during Phase 2.5 Global
+Place Phase1 (a per-SLR thread race), so it is opt-in only.  The flow
+checkpoints after placement and physical optimization, retries a crashed route
+from the checkpoint, and falls back to ML-off/2-thread routing if Vivado 2025.2
+segfaults.  The full design and sizing model are in
 [`docs/designs/06.parallel-ml-build.md`](../designs/06.parallel-ml-build.md).
 The old ML-off single-thread recipe is tracked as
 `ip/vivado/xcvu9p/scripts/impl_1thread_noml.tcl` and remains the known-good
@@ -207,6 +212,12 @@ tool/fpga/build_vu9p_parallel.sh --dry-run --skip-chisel
 # reuse an existing post-opt checkpoint
 tool/fpga/build_vu9p_parallel.sh --skip-chisel --skip-synth
 ```
+
+The default candidate set is two ML-on placements plus an ML-off 2-thread
+safety placement, so the flow can choose between the faster ML-on route
+(−0.055 ns) and the known-good QoR route (+0.056 ns).  For the fastest single
+bitstream, use `--jobs 1 --place-specs ExtraTimingOpt:on:8` (≈1h27
+synth-to-bitstream; WNS −0.055 ns).
 
 `build_npu_vu9p.tcl` is the project synth/opt/single-shot driver.  It now
 parallelizes OOC IP synthesis (`launch_runs synth_1 -jobs $VIVADO_JOBS`) and,

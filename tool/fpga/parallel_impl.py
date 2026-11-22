@@ -39,6 +39,11 @@ DEFAULT_CHECKPOINT = (
     / "ip/vivado/xcvu9p/prj/prj.runs/impl_1/hw_platform_opt.dcp"
 )
 DEFAULT_BITSTREAM = REPO_ROOT / "ip/vivado/xcvu9p/top_npu_vu9p.bit"
+DEFAULT_PLACE_SPECS = (
+    "ExtraTimingOpt:on:8,"
+    "SSI_SpreadLogic_high:on:8,"
+    "ExtraTimingOpt:off:2"
+)
 
 CRASH_PATTERNS = (
     "Abnormal program termination",
@@ -48,6 +53,13 @@ CRASH_PATTERNS = (
     "HCMBoostTreeEstimator",
     "HCMBoost",
 )
+
+
+@dataclasses.dataclass
+class PlaceSpec:
+    directive: str
+    ml: str = "on"
+    threads: int = 8
 
 
 @dataclasses.dataclass
@@ -110,6 +122,38 @@ def _effective_jobs(args: argparse.Namespace) -> int:
 
 def _sanitize(text: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", text).strip("_") or "candidate"
+
+
+def _parse_place_specs(
+    text: str, default_ml: str, default_threads: int
+) -> list[PlaceSpec]:
+    specs: list[PlaceSpec] = []
+    for item in text.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        parts = [part.strip() for part in item.split(":")]
+        directive = parts[0]
+        ml = parts[1] if len(parts) > 1 and parts[1] else default_ml
+        threads = (
+            int(parts[2])
+            if len(parts) > 2 and parts[2]
+            else default_threads
+        )
+        if ml not in {"on", "off", "hybrid"}:
+            raise SystemExit(
+                f"invalid ML mode '{ml}' in place spec '{item}' "
+                "(expected on/off/hybrid)"
+            )
+        if not 1 <= threads <= 8:
+            raise SystemExit(
+                f"invalid thread count {threads} in place spec '{item}' "
+                "(Vivado general.maxThreads is 1..8)"
+            )
+        specs.append(PlaceSpec(directive=directive, ml=ml, threads=threads))
+    if not specs:
+        raise SystemExit("no placement candidates specified")
+    return specs
 
 
 def _read_env_file(path: Path) -> dict[str, str]:
@@ -473,6 +517,22 @@ def _write_json(path: Path, results: list[RunResult], selected: RunResult | None
     path.write_text(json.dumps(payload, indent=2) + "\n")
 
 
+def _resolve_place_specs(args: argparse.Namespace) -> list[PlaceSpec]:
+    if args.place_specs:
+        return _parse_place_specs(args.place_specs, args.ml, args.threads)
+    if args.place_directives:
+        directives = [
+            item.strip()
+            for item in args.place_directives.split(",")
+            if item.strip()
+        ]
+        return [
+            PlaceSpec(directive=directive, ml=args.ml, threads=args.threads)
+            for directive in directives
+        ]
+    return _parse_place_specs(DEFAULT_PLACE_SPECS, args.ml, args.threads)
+
+
 def _build_split(args: argparse.Namespace) -> int:
     base = Path(args.out_dir).resolve()
     base.mkdir(parents=True, exist_ok=True)
@@ -480,34 +540,35 @@ def _build_split(args: argparse.Namespace) -> int:
     if not checkpoint.exists():
         raise SystemExit(f"checkpoint not found: {checkpoint}")
 
-    place_directives = [item.strip() for item in args.place_directives.split(",") if item.strip()]
+    place_specs = _resolve_place_specs(args)
     route_directives = [item.strip() for item in args.route_directives.split(",") if item.strip()]
-    if not place_directives:
-        place_directives = ["ExtraTimingOpt"]
     if not route_directives:
         route_directives = ["Default"]
 
     all_results: list[RunResult] = []
 
-    place_specs: list[RunSpec] = []
-    for index, directive in enumerate(place_directives):
-        tag = f"place{index}_{_sanitize(directive)}"
-        place_specs.append(
+    place_runs: list[RunSpec] = []
+    for index, place_spec in enumerate(place_specs):
+        tag = (
+            f"place{index}_{_sanitize(place_spec.directive)}"
+            f"_ml{place_spec.ml}_{place_spec.threads}t"
+        )
+        place_runs.append(
             RunSpec(
                 tag=tag,
                 stage="place",
                 checkpoint=checkpoint,
                 out_dir=base / tag,
-                place_directive=directive,
+                place_directive=place_spec.directive,
                 route_directive=route_directives[0],
                 ultrathreads=args.ultrathreads,
-                ml=args.ml,
-                threads=args.threads,
+                ml=place_spec.ml,
+                threads=place_spec.threads,
             )
         )
 
     print("=== stage 1: placements ===", flush=True)
-    place_results = _run_batch(place_specs, args)
+    place_results = _run_batch(place_runs, args)
     all_results.extend(place_results)
     good_places = [result for result in place_results if result.ok and result.wns is not None]
     good_places.sort(key=lambda result: result.wns, reverse=True)
@@ -628,24 +689,30 @@ def _build_full(args: argparse.Namespace) -> int:
     if not checkpoint.exists():
         raise SystemExit(f"checkpoint not found: {checkpoint}")
 
-    place_directives = [item.strip() for item in args.place_directives.split(",") if item.strip()]
+    place_specs = _resolve_place_specs(args)
     route_directives = [item.strip() for item in args.route_directives.split(",") if item.strip()]
+    if not route_directives:
+        route_directives = ["Default"]
     specs: list[RunSpec] = []
-    for index, place_directive in enumerate(place_directives):
+    for index, place_spec in enumerate(place_specs):
         for route_directive in route_directives:
-            tag = f"full{index}_{_sanitize(place_directive)}_{_sanitize(route_directive)}"
+            tag = (
+                f"full{index}_{_sanitize(place_spec.directive)}"
+                f"_ml{place_spec.ml}_{place_spec.threads}t"
+                f"_{_sanitize(route_directive)}"
+            )
             specs.append(
                 RunSpec(
                     tag=tag,
                     stage="full",
                     checkpoint=checkpoint,
                     out_dir=base / tag,
-                    place_directive=place_directive,
+                    place_directive=place_spec.directive,
                     route_directive=route_directive,
                     physopt_directive=args.physopt_directive,
                     ultrathreads=args.ultrathreads,
-                    ml=args.ml,
-                    threads=args.threads,
+                    ml=place_spec.ml,
+                    threads=place_spec.threads,
                     bitstream=base / tag / "candidate.bit",
                 )
             )
@@ -683,9 +750,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--vivado-root", default=os.environ.get("VIVADO_ROOT", ""))
     parser.add_argument("--vivado-image", default=os.environ.get("VIVADO_IMAGE", ""))
     parser.add_argument(
+        "--place-specs",
+        default=None,
+        help="comma-separated place candidates as directive:ml:threads, "
+        f"e.g. '{DEFAULT_PLACE_SPECS}'",
+    )
+    parser.add_argument(
         "--place-directives",
-        default="ExtraTimingOpt,SSI_SpreadLogic_high,AltSpreadLogic_high",
-        help="comma-separated place_design directives",
+        default=None,
+        help="shorthand: comma-separated directives using --ml/--threads",
     )
     parser.add_argument(
         "--route-directives",
@@ -746,15 +819,21 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(f"checkpoint not found: {checkpoint}")
 
     if args.dry_run:
-        scopes = [item.strip() for item in args.place_directives.split(",") if item.strip()]
+        place_specs = _resolve_place_specs(args)
         routes = [item.strip() for item in args.route_directives.split(",") if item.strip()]
         print(f"mode={args.mode} checkpoint={checkpoint}")
-        print(f"place directives: {', '.join(scopes)}")
-        print(f"route directives: {', '.join(routes)}")
-        print(f"ml={args.ml} threads={args.threads} ultrathreads={args.ultrathreads}")
         print(
-            f"split plan: {len(scopes)} place + {len(scopes)} physopt + "
-            f"{len(scopes) * len(routes)} route candidate(s)"
+            "place candidates: "
+            + ", ".join(
+                f"{spec.directive} (ml={spec.ml}, {spec.threads} threads)"
+                for spec in place_specs
+            )
+        )
+        print(f"route directives: {', '.join(routes)}")
+        print(f"route ml={args.ml} threads={args.threads} ultrathreads={args.ultrathreads}")
+        print(
+            f"split plan: {len(place_specs)} place + {len(place_specs)} physopt + "
+            f"{len(place_specs) * len(routes)} route candidate(s)"
         )
         print(f"bitstream destination: {Path(args.bitstream_dst).resolve()}")
         return 0
