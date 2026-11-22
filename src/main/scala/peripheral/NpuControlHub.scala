@@ -182,10 +182,10 @@ class NpuControlHub(val K: Int = 32, val N: Int = 8, val L: Int = 32,
   val codeBytes = ((endWord +& 15.U) >> 4) << 6
   val codeFits  = codeBytes <= effLimit(NpuCtrlProtocol.Seg.CODE)
   val wordFits  = endWord <= 0xFFFF.U
-  val canStart = (state === HubState.IDLE || state === HubState.DONE) &&
-                 progLen =/= 0.U && segAligned && codeFits && wordFits
-  val startAccept = startPulse && canStart
-  val badConfigEvt = startPulse && !canStart
+  val canStartCfg = progLen =/= 0.U && segAligned && codeFits && wordFits
+  val startAttempt = (state === HubState.IDLE || state === HubState.DONE) && startPulse
+  val startAccept  = startAttempt && canStartCfg
+  val badConfigEvt = startAttempt && !canStartCfg
 
   // Watchdog cycle counter.
   val watchdogCnt = RegInit(0.U(32.W))

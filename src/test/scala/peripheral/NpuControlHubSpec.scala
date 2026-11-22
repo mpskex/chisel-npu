@@ -226,6 +226,12 @@ class NpuControlHubSpec extends AnyFlatSpec {
       assert(dut.io.core_prog_len.peek().litValue == 7)
       assert(dut.io.core_entry_pc.peek().litValue == 2)
 
+      // A second START while busy is ignored (not a bad-config error).
+      write(dut, NpuCtrlProtocol.CONTROL, 1L)
+      assert((read(dut, NpuCtrlProtocol.STATUS) & 0x4) == 0,
+        "START while busy must not set ERROR")
+      assert(dut.io.start_count.peek().litValue == 1)
+
       dut.io.core_cycles.poke(1234.U)
       dut.io.core_macs.poke(5678.U)
       dut.io.core_fetch_stats.poke(0x00030002L.U)
