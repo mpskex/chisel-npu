@@ -17,7 +17,6 @@
 #   --ml on|off|hybrid         ML model mode (default on)
 #   --place-specs LIST         directive:ml:threads candidates
 #                              (default: ExtraTimingOpt:on:8,
-#                               SSI_SpreadLogic_high:on:8,
 #                               ExtraTimingOpt:off:2)
 #   --place-directives LIST    shorthand: all candidates use --ml/--threads
 #   --route-directives LIST    comma-separated route directives
@@ -46,7 +45,7 @@ JOBS=3
 THREADS=8
 SYNTH_JOBS=4
 ML=on
-PLACE_SPECS="ExtraTimingOpt:on:8,SSI_SpreadLogic_high:on:8,ExtraTimingOpt:off:2"
+PLACE_SPECS="ExtraTimingOpt:on:8,ExtraTimingOpt:off:2"
 PLACE_DIRECTIVES=""
 USE_PLACE_DIRECTIVES=0
 ROUTE_DIRECTIVES="Default"

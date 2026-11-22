@@ -39,11 +39,7 @@ DEFAULT_CHECKPOINT = (
     / "ip/vivado/xcvu9p/prj/prj.runs/impl_1/hw_platform_opt.dcp"
 )
 DEFAULT_BITSTREAM = REPO_ROOT / "ip/vivado/xcvu9p/top_npu_vu9p.bit"
-DEFAULT_PLACE_SPECS = (
-    "ExtraTimingOpt:on:8,"
-    "SSI_SpreadLogic_high:on:8,"
-    "ExtraTimingOpt:off:2"
-)
+DEFAULT_PLACE_SPECS = "ExtraTimingOpt:on:8,ExtraTimingOpt:off:2"
 
 CRASH_PATTERNS = (
     "Abnormal program termination",

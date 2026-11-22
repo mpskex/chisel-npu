@@ -214,7 +214,7 @@ tool/fpga/build_vu9p_parallel.sh --dry-run --skip-chisel
 tool/fpga/build_vu9p_parallel.sh --skip-chisel --skip-synth
 ```
 
-The default candidate set is two ML-on placements plus an ML-off 2-thread
+The default candidate set is one ML-on placement plus an ML-off 2-thread
 safety placement, so the flow can choose between the faster ML-on route
 (−0.055 ns) and the known-good QoR route (+0.056 ns).  For the fastest single
 bitstream, use `--jobs 1 --place-specs ExtraTimingOpt:on:8` (≈1h27
