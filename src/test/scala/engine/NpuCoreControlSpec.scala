@@ -191,6 +191,8 @@ class NpuCoreControlSpec extends AnyFlatSpec {
 
       assert(dut.io.core_mem_fault.peek().litValue == 1, "out-of-range vle8 must raise mem_fault")
       assert(dut.io.core_fault_seg.peek().litValue == NpuSections.SECT_A)
+      assert((dut.io.core_fault_addr.peek().litValue & 0xFFF) == 0x100,
+        s"fault address must carry the section offset, got 0x${dut.io.core_fault_addr.peek().litValue.toString(16)}")
     }
   }
 }

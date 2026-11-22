@@ -752,7 +752,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
         when (!dmaFits) {
           dmaFault := true.B
           faultSegR := dmaSeg
-          faultAddrR := Cat(0.U(18.W), slots(s).sect, slots(s).off)
+          faultAddrR := Cat(0.U(20.W), slots(s).off)
           slots(s).done := true.B
         } .elsewhen (isVrStore) {
           // Capture the full entry plus the issue-cycle RF VR read.  The entry
