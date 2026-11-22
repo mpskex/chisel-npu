@@ -1,4 +1,12 @@
-# FPGA Verification Platform — xc7k480tffg1156-2
+# FPGA Bring-up — xc7k480t
+
+> **Baseline note (2026-11-22):** the current IP release is `NpuPeripheral`
+> with the vu9p engine `NpuProgramEngineFrontend(K=32, N=8, W=8)`. The
+> K=16/W=4 values below describe the earlier xc7k480t engine and are kept
+> for board bring-up history. The board flow in this document is scheduled
+> to move to the `npu-platform` repository; the NPU IP release is
+> board-agnostic.
+
 
 > **LEGACY V10 TOPOLOGY.** This document has two parts. The V10 architecture,
 > timing-history, ILA, and V0–V10 bring-up sections describe the **legacy V10

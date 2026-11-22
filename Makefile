@@ -1,4 +1,4 @@
-.PHONY: docs build build-fpga build-fpga-debug build-fpga-clean test-hw py-build py-deploy py-test-unit py-test-hw
+.PHONY: docs build release build-fpga build-fpga-debug build-fpga-clean test-hw py-build py-deploy py-test-unit py-test-hw
 
 export ARCH=`uname -m`
 # Currently the image does not support arm64, 
@@ -31,6 +31,9 @@ top.v:
 	if [ ${ARCH} = "arm64" ]; then docker run -u $(id -u):$(id -g) --rm -i -v ${PWD}:/workspace/ fangruil/chisel-dev:arm64 sbt run; else docker run -u $(id -u):$(id -g) --rm -i -v ${PWD}:/workspace/ fangruil/chisel-dev:amd64 sbt run; fi
 
 build: top.v
+
+release: build
+	bash tool/release_manifest.sh
 
 build-sc: top.v
 	if [ ${ARCH} = "arm64" ]; then docker run -u $(id -u):$(id -g) --rm -i -v ${PWD}:/workspace/ fangruil/chisel-dev:arm64 verilator top.v -sc -Mdir systemc; else docker run -u $(id -u):$(id -g) --rm -i -v ${PWD}:/workspace/ fangruil/chisel-dev:amd64 verilator top.v -sc -Mdir systemc; fi

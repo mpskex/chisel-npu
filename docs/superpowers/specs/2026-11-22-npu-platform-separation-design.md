@@ -139,7 +139,7 @@ resp_valid, resp_rdata[31:0], resp_error <- resp_ready
 | Offset | Name | Access | Semantics |
 |---|---|---|---|
 | `0x000` | `ID` | RO | magic `0x4E505531` ("NPU1") |
-| `0x004` | `VERSION` | RO | major[31:16] / minor[15:8] / patch[7:0] |
+| `0x004` | `VERSION` | RO | major[31:24] / minor[23:16] / patch[15:8] / reserved[7:0] |
 | `0x008` | `CAPS` | RO | feature bits; `NUM_SEG`; `LOCAL_MAP`; trace depth; IRQ; watchdog; AXI64 |
 | `0x00C` | `CONFIG` | RO | K, N, L, W, AXI data width |
 | `0x010` | `CONTROL` | W | bit0 `START`; bit1 `STOP/ABORT`; bit2 `SOFT_RESET` (all self-clearing) |
