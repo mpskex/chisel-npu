@@ -143,11 +143,12 @@ estimators are enabled, placement runs 8-threaded, and several
 place/phys_opt/route candidates run concurrently.  On the same post-opt
 checkpoint, ML-on placement measured **25:05 at 13.25 GB** with post-place
 **WNS +0.272 ns**, versus ~43 min for the old ML-off single-threaded placement
-at ~12.3 GB.  Routing the ML-on placement took **36:15** and closed at
+at ~12.3 GB.  In the ML-on flow, routing the ML-on placement took **36:15** and closed at
 **−0.055 ns**; routing the known-good ML-off placement took 48:10 and closed at
-**+0.056 ns**.  The default parallel set therefore includes an ML-off
-2-thread safety placement, so it can select the better QoR; the fast ML-on-only
-path is ~1h27 end-to-end, and the three-candidate QoR path is ~1h49.
+**+0.056 ns**.  The default parallel set includes an ML-off safety placement
+intended to preserve that QoR (the 2-thread variant is under validation; use
+`ExtraTimingOpt:off:1` for the exact known-good placement path).  The fast
+ML-on-only path is ~1h27 end-to-end; the three-candidate QoR path is ~1h49–1:57.
 `place_design -ultrathreads` was tested and is **not usable**: both attempts
 SIGSEGV in `HAPLFSimPLFlow::collectControlSetInfo` during Phase 2.5 Global
 Place Phase1 (a per-SLR thread race), so it is opt-in only.  The flow

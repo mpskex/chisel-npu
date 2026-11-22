@@ -90,6 +90,8 @@ set ml         [cand_env CAND_ML on]
 set threads    [cand_env CAND_MAX_THREADS 8]
 set gate       [cand_env CAND_GATE_NS -1.0]
 set bitstream  [file normalize [cand_env CAND_BITSTREAM [file join $out_dir candidate.bit]]]
+set repo_root  [file normalize [file join [file dirname [info script]] ../../..]]
+set cdc_xdc    [file join $repo_root ip vivado xcvu9p src cdc.xdc]
 
 file mkdir $out_dir
 set result_file [file join $out_dir result.env]
@@ -134,6 +136,13 @@ if {![file exists $checkpoint]} {
 
 set t_start [clock seconds]
 open_checkpoint $checkpoint
+# Re-apply the CDC constraints so a checkpoint produced by an older flow
+# cannot silently drop the async clock groups.  This matches the measured
+# impl_1thread_noml.tcl recipe; re-reading is harmless when already present.
+if {[file exists $cdc_xdc]} {
+    read_xdc $cdc_xdc
+    puts "CAND_CDC_XDC=$cdc_xdc"
+}
 set_param general.maxThreads $threads
 cand_set_ml $ml
 puts "CAND_OPENED=$checkpoint"

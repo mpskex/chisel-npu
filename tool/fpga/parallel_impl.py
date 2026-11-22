@@ -140,17 +140,27 @@ def _parse_place_specs(
             if len(parts) > 2 and parts[2]
             else default_threads
         )
+        if not directive:
+            raise SystemExit(f"empty directive in place spec '{item}'")
         if ml not in {"on", "off", "hybrid"}:
             raise SystemExit(
                 f"invalid ML mode '{ml}' in place spec '{item}' "
                 "(expected on/off/hybrid)"
             )
-        if not 1 <= threads <= 8:
+        try:
+            threads_value = int(threads)
+        except (TypeError, ValueError):
             raise SystemExit(
-                f"invalid thread count {threads} in place spec '{item}' "
+                f"invalid thread count '{threads}' in place spec '{item}'"
+            ) from None
+        if not 1 <= threads_value <= 8:
+            raise SystemExit(
+                f"invalid thread count {threads_value} in place spec '{item}' "
                 "(Vivado general.maxThreads is 1..8)"
             )
-        specs.append(PlaceSpec(directive=directive, ml=ml, threads=threads))
+        specs.append(
+            PlaceSpec(directive=directive, ml=ml, threads=threads_value)
+        )
     if not specs:
         raise SystemExit("no placement candidates specified")
     return specs
@@ -798,6 +808,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
+    if not 1 <= args.threads <= 8:
+        raise SystemExit("--threads must be between 1 and 8 (Vivado limit)")
+    if args.retries < 0:
+        raise SystemExit("--retries must be >= 0")
+    if args.jobs < 1:
+        raise SystemExit("--jobs must be >= 1")
     args.jobs_effective = _effective_jobs(args)
     avail = _mem_available_gb()
     cores = _physical_cores()
@@ -821,6 +837,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.dry_run:
         place_specs = _resolve_place_specs(args)
         routes = [item.strip() for item in args.route_directives.split(",") if item.strip()]
+        if not routes:
+            routes = ["Default"]
         print(f"mode={args.mode} checkpoint={checkpoint}")
         print(
             "place candidates: "
