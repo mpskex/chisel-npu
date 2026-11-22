@@ -134,10 +134,13 @@ class NpuControlHub(val K: Int = 32, val N: Int = 8, val L: Int = 32,
   when (respValid && io.ctrl.resp.ready) { respValid := false.B }
 
   // Byte-strobe merge helper.
-  def merge(old: UInt, neu: UInt, strb: UInt): UInt =
+  def merge(old: UInt, neu: UInt, strb: UInt): UInt = {
+    val o = old.pad(32)
+    val n = neu.pad(32)
     Cat((0 until 4).reverse.map { i =>
-      Mux(strb(i), neu(8 * i + 7, 8 * i), old(8 * i + 7, 8 * i))
+      Mux(strb(i), n(8 * i + 7, 8 * i), o(8 * i + 7, 8 * i))
     })
+  }
 
   // ==========================================================================
   // Session FSM
