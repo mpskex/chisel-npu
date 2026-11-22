@@ -38,6 +38,7 @@ class HubHarness extends Module {
     val core_trace_retire = Input(Bool())
     val core_trace_pc     = Input(UInt(16.W))
     val trace_ready       = Input(Bool())
+    val bus_error         = Input(Bool())
 
     // observed
     val core_start    = Output(Bool())
@@ -81,7 +82,7 @@ class HubHarness extends Module {
   hub.io.core_trace_retire := io.core_trace_retire
   hub.io.core_trace_pc     := io.core_trace_pc
   hub.io.trace_ready       := io.trace_ready
-  hub.io.bus_error         := false.B
+  hub.io.bus_error         := io.bus_error
 
   io.core_start    := hub.io.core_start
   io.core_abort    := hub.io.core_abort
@@ -118,6 +119,7 @@ class NpuControlHubSpec extends AnyFlatSpec {
     dut.io.core_trace_retire.poke(false.B)
     dut.io.core_trace_pc.poke(0.U)
     dut.io.trace_ready.poke(false.B)
+    dut.io.bus_error.poke(false.B)
     dut.io.resp_ready.poke(true.B)
   }
 
@@ -252,6 +254,14 @@ class NpuControlHubSpec extends AnyFlatSpec {
 
       write(dut, NpuCtrlProtocol.IRQ_STATUS, 0x1L)
       assert((read(dut, NpuCtrlProtocol.IRQ_STATUS) & 0x1) == 0)
+
+      // A failed START after a successful run must clear the stale DONE.
+      write(dut, NpuCtrlProtocol.PROG_LEN, 0L)
+      write(dut, NpuCtrlProtocol.CONTROL, 1L)
+      val bad = read(dut, NpuCtrlProtocol.STATUS)
+      assert(((bad >> 1) & 1) == 0, "bad-config START must clear DONE")
+      assert(((bad >> 2) & 1) == 1, "bad-config START must set ERROR")
+      assert(read(dut, NpuCtrlProtocol.ERROR_CODE) == NpuCtrlProtocol.Error.BAD_CONFIG)
     }
   }
 
@@ -347,6 +357,48 @@ class NpuControlHubSpec extends AnyFlatSpec {
       }
       assert(found, "trace must contain a WATCHDOG event")
       assert(read(dut, NpuCtrlProtocol.ERROR_CODE) == NpuCtrlProtocol.Error.WATCHDOG)
+    }
+  }
+
+  it should "abort and report BUS_ERROR when the data plane signals an error" in {
+    simulate(new HubHarness) { dut =>
+      idleCore(dut)
+      write(dut, NpuCtrlProtocol.PROG_LEN, 3L)
+      dut.io.core_busy.poke(false.B)
+      write(dut, NpuCtrlProtocol.CONTROL, 1L)
+      dut.io.core_busy.poke(true.B)
+      dut.io.bus_error.poke(true.B)
+      dut.clock.step()
+      dut.io.bus_error.poke(false.B)
+      val st = read(dut, NpuCtrlProtocol.STATUS)
+      assert(((st >> 2) & 1) == 1, "BUS_ERROR must set ERROR")
+      assert(read(dut, NpuCtrlProtocol.ERROR_CODE) == NpuCtrlProtocol.Error.BUS_ERROR)
+      assert(dut.io.abort_count.peek().litValue == 1)
+    }
+  }
+
+  it should "preserve segment, IRQ and trace config across SOFT_RESET" in {
+    simulate(new HubHarness) { dut =>
+      idleCore(dut)
+      write(dut, NpuCtrlProtocol.PROG_LEN, 3L)
+      write(dut, NpuCtrlProtocol.segBaseLo(0), 0x1000L)
+      write(dut, NpuCtrlProtocol.segBaseHi(0), 0x1L)
+      write(dut, NpuCtrlProtocol.segLimit(0), 0x1000L)
+      write(dut, NpuCtrlProtocol.IRQ_ENABLE, 0x3L)
+      write(dut, NpuCtrlProtocol.TRACE_CTRL, 5L)
+      dut.io.core_busy.poke(false.B)
+      write(dut, NpuCtrlProtocol.CONTROL, 1L)
+      dut.io.core_busy.poke(true.B)
+      write(dut, NpuCtrlProtocol.CONTROL, 4L)
+      val st = read(dut, NpuCtrlProtocol.STATUS)
+      assert(((st >> 2) & 1) == 0, "SOFT_RESET must clear ERROR")
+      assert(((st >> 1) & 1) == 0, "SOFT_RESET must clear DONE")
+      assert(read(dut, NpuCtrlProtocol.segBaseLo(0)) == 0x1000L)
+      assert(read(dut, NpuCtrlProtocol.segBaseHi(0)) == 0x1L)
+      assert(read(dut, NpuCtrlProtocol.segLimit(0)) == 0x1000L)
+      assert(read(dut, NpuCtrlProtocol.IRQ_ENABLE) == 0x3L)
+      assert(read(dut, NpuCtrlProtocol.TRACE_CTRL) == 5L)
+      assert(dut.io.abort_count.peek().litValue == 1)
     }
   }
 

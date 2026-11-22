@@ -12,7 +12,7 @@ import org.scalatest.flatspec.AnyFlatSpec
 import testUtil._
 import isa.NpuAssembler._
 
-class CoreControlHarness extends Module {
+class CoreControlHarness(val readLatency: Int = 1) extends Module {
   val io = IO(new Bundle {
     val native_ctrl   = Input(Bool())
     val core_start    = Input(Bool())
@@ -42,7 +42,7 @@ class CoreControlHarness extends Module {
   })
 
   val fe = Module(new NpuProgramEngineFrontend(16, 8))
-  val ram = Module(new AxiRamModel())
+  val ram = Module(new AxiRamModel(readLatency = readLatency))
 
   fe.io.native_ctrl   := io.native_ctrl
   fe.io.core_start    := io.core_start
@@ -159,8 +159,8 @@ class NpuCoreControlSpec extends AnyFlatSpec {
     }
   }
 
-  it should "abort a running session and return to idle" in {
-    simulate(new CoreControlHarness) { dut =>
+  it should "abort a running session with an in-flight load and return to idle" in {
+    simulate(new CoreControlHarness(readLatency = 20)) { dut =>
       dut.io.native_ctrl.poke(true.B)
       dut.io.core_start.poke(false.B)
       dut.io.core_abort.poke(false.B)
@@ -168,6 +168,13 @@ class NpuCoreControlSpec extends AnyFlatSpec {
       dut.io.code_limit.poke("hFFFFFFFF".U)
       dut.io.core_entry_pc.poke(0.U)
       dut.io.core_prog_len.poke(64.U)
+      preloadWord(dut, NpuSections.CODE_BASE,
+        vle8(rd = 4, sect = NpuSections.SECT_A, off = 0))
+      dut.io.pre_wr_addr.poke(0.U)
+      dut.io.pre_wr_data.poke(BigInt("0123456789ABCDEF0123456789ABCDEF", 16).U)
+      dut.io.pre_wr_en.poke(true.B)
+      dut.clock.step()
+      dut.io.pre_wr_en.poke(false.B)
       dut.clock.step(22)
       dut.io.core_start.poke(true.B)
       dut.clock.step()

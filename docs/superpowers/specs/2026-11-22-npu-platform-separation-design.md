@@ -339,7 +339,11 @@ NpuAllocator                    board DDR allocator → system addresses
 - `NpuConfig` splits into `ProtocolConfig` (register offsets, segment IDs,
   local offsets) in the IP repo and `PlatformConfig` (system bases, BAR,
   aperture, IRQ) in the board repo.
-- The same `ChiselNPU.run()` works on xc7k480t and vu9p. The board package
+- The new board-agnostic API is `NpuDriverCore.run()`; it stages named
+  segments, programs the segment bases, starts a session, checks errors, and
+  reads back. The legacy `ChiselNPU`/`XDMADevice` path remains for the old
+  bitstream and will be ported or removed in Phase 4.
+- The same `NpuDriverCore` works on xc7k480t and vu9p. The board package
   constructs `XdmaTransport`, `PlatformInfo`, and the allocator.
 - The XDMA C++ backend moves to the board repo; the IP repo keeps a fake
   transport for tests.
@@ -384,8 +388,9 @@ register-map hash, and git revision.
 
 ## 14. Risks
 
-- 64-bit translation timing: register the translated AW/AR address at the hub
-  boundary; keep the data path pass-through.
+- 64-bit translation timing: v1 is combinational; register the translated
+  AW/AR address at the hub boundary if synthesis shows it on the critical
+  path. The translator unit test covers a >4 GB base.
 - DMA hardening regression: only address formation changes; keep the FSM,
   timeout/retry, and wdata-preload fixes; run the DMA specs.
 - Abort mid-burst: drain the DMA queue before reset, or add a DMA reset gated

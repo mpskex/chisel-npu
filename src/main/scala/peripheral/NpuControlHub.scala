@@ -154,12 +154,11 @@ class NpuControlHub(val K: Int = 32, val N: Int = 8, val L: Int = 32,
   val errorSticky   = RegInit(false.B)
   val abortedSticky = RegInit(false.B)
 
-  val startPulse     = reqFire && reqWrite && reqAddr === NpuCtrlProtocol.CONTROL.U &&
-                       reqWdata(NpuCtrlProtocol.CTRL_START)
-  val stopPulse      = reqFire && reqWrite && reqAddr === NpuCtrlProtocol.CONTROL.U &&
-                       reqWdata(NpuCtrlProtocol.CTRL_STOP)
-  val softResetPulse = reqFire && reqWrite && reqAddr === NpuCtrlProtocol.CONTROL.U &&
-                       reqWdata(NpuCtrlProtocol.CTRL_SOFT_RESET)
+  val ctrlWrite = reqFire && reqWrite && reqAddr === NpuCtrlProtocol.CONTROL.U &&
+                  reqWstrb(0)
+  val startPulse     = ctrlWrite && reqWdata(NpuCtrlProtocol.CTRL_START)
+  val stopPulse      = ctrlWrite && reqWdata(NpuCtrlProtocol.CTRL_STOP)
+  val softResetPulse = ctrlWrite && reqWdata(NpuCtrlProtocol.CTRL_SOFT_RESET)
 
   // Default windows for SEG_LIMIT == 0.
   val defaultLimits = VecInit(Seq(
@@ -182,7 +181,11 @@ class NpuControlHub(val K: Int = 32, val N: Int = 8, val L: Int = 32,
   val codeBytes = ((endWord +& 15.U) >> 4) << 6
   val codeFits  = codeBytes <= effLimit(NpuCtrlProtocol.Seg.CODE)
   val wordFits  = endWord <= 0xFFFF.U
-  val canStartCfg = progLen =/= 0.U && segAligned && codeFits && wordFits
+  val segNoOverflow = (0 until NUM_SEG).map { i =>
+    val sum = segBaseWord(i) +& effLimit(i)
+    !sum(64)
+  }.reduce(_ && _)
+  val canStartCfg = progLen =/= 0.U && segAligned && segNoOverflow && codeFits && wordFits
   val startAttempt = (state === HubState.IDLE || state === HubState.DONE) &&
                      !io.core_busy && startPulse
   val startAccept  = startAttempt && canStartCfg
@@ -257,6 +260,7 @@ class NpuControlHub(val K: Int = 32, val N: Int = 8, val L: Int = 32,
       state       := HubState.IDLE
       errorSticky := true.B
       errorCode   := NpuCtrlProtocol.Error.WATCHDOG.U
+      errorPc     := io.core_pc
       latchedCycles := io.core_cycles
       latchedMacs   := io.core_macs
       latchedFetch  := io.core_fetch_stats
@@ -264,11 +268,19 @@ class NpuControlHub(val K: Int = 32, val N: Int = 8, val L: Int = 32,
       state       := HubState.IDLE
       errorSticky := true.B
       errorCode   := NpuCtrlProtocol.Error.BUS_ERROR.U
+      errorPc     := io.core_pc
+      latchedCycles := io.core_cycles
+      latchedMacs   := io.core_macs
+      latchedFetch  := io.core_fetch_stats
     } .elsewhen (abortEvt) {
       state          := HubState.IDLE
       abortedSticky  := true.B
       errorSticky    := true.B
       errorCode      := NpuCtrlProtocol.Error.ABORTED.U
+      errorPc        := io.core_pc
+      latchedCycles  := io.core_cycles
+      latchedMacs    := io.core_macs
+      latchedFetch   := io.core_fetch_stats
     } .elsewhen (doneEvt) {
       state        := HubState.DONE
       doneSticky   := true.B

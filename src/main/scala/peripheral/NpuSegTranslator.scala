@@ -104,6 +104,9 @@ class NpuSegTranslator(val NUM_SEG: Int = 5) extends Module {
     (sysAddr, fits, s, rel)
   }
 
+  // v1 translates combinationally.  If the platform timing report shows the
+  // 64-bit add/compare on the AW/AR path is critical, add a register slice
+  // (with the matching AXI handshake) here.
   val (awSys, awFits, awSegSafe, awRel) = xlate(io.s_awaddr, io.s_awseg, io.s_awlen, io.s_awsize)
   val (arSys, arFits, arSegSafe, arRel) = xlate(io.s_araddr, io.s_arseg, io.s_arlen, io.s_arsize)
 
