@@ -417,6 +417,12 @@ cd ~/chisel-npu-paltform && git init && git add . && git commit -m "chore: boots
   non-hw Python tests (28), platform Verilator lint + identity smoke.
 - The board repo is bootstrapped at `~/chisel-npu-paltform` and pins
   `releases/NpuPeripheral.sv` + `releases/npu_peripheral.json`.
+- Review-driven fixes landed: broken direct-engine specs, native START cache
+  invalidation, abort-drain, trace FIFO count/half-read/event IDs, AXI4-Lite
+  serialization, local AXI error responses, code-fetch limit, data-plane
+  BRESP/RRESP errors, and driver start/wait/run semantics. See the branch
+  commits after `fc07dfe`.
 - Deferred: full `sbt test` (long simulation), deletion of the legacy
-  `ip/vivado/**` / `tool/hw/**` trees, and wiring the legacy `ChiselNPU`
-  user API onto `NpuDriverCore`.
+  `ip/vivado/**` / `tool/hw/**` trees, a registered 64-bit translation stage
+  (v1 is combinational; translator test covers >4GB), a full-session board
+  smoke, and wiring the legacy `ChiselNPU` user API onto `NpuDriverCore`.
