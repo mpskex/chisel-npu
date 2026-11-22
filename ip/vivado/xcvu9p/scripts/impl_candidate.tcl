@@ -15,7 +15,9 @@
 #   CAND_PLACE_DIRECTIVE    default ExtraTimingOpt
 #   CAND_ROUTE_DIRECTIVE    default Default
 #   CAND_PHYSOPT_DIRECTIVE  default Default
-#   CAND_ULTRATHREADS       1 = place_design -ultrathreads (UltraScale+ SSI)
+#   CAND_ULTRATHREADS       1 = place_design -ultrathreads (experimental;
+#                           crashes in HAPLFSimPLFlow::collectControlSetInfo
+#                           on this design/Vivado 2025.2; default 0)
 #   CAND_ML                 on | off | hybrid (default on)
 #   CAND_MAX_THREADS        general.maxThreads (default 8)
 #   CAND_GATE_NS            post-route WNS gate (default -1.0)

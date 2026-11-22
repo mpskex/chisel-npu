@@ -17,7 +17,9 @@
 #   --ml on|off|hybrid         ML model mode (default on)
 #   --place-directives LIST    comma-separated place directives
 #   --route-directives LIST    comma-separated route directives
-#   --no-ultrathreads          disable place_design -ultrathreads
+#   --ultrathreads             opt-in place_design -ultrathreads (experimental;
+#                              crashes in HAPLFSimPLFlow::collectControlSetInfo)
+#   --no-ultrathreads          default; plain 8-thread placement
 #   --resume                   reuse successful candidate checkpoints
 #   --dry-run                  print the plan; do not run Vivado
 #
@@ -42,7 +44,7 @@ SYNTH_JOBS=4
 ML=on
 PLACE_DIRECTIVES="ExtraTimingOpt,SSI_SpreadLogic_high,AltSpreadLogic_high"
 ROUTE_DIRECTIVES="Default"
-ULTRA=1
+ULTRA=0
 RESUME=0
 DRY_RUN=0
 
@@ -56,6 +58,7 @@ while [ $# -gt 0 ]; do
         --ml) ML=$2; shift ;;
         --place-directives) PLACE_DIRECTIVES=$2; shift ;;
         --route-directives) ROUTE_DIRECTIVES=$2; shift ;;
+        --ultrathreads) ULTRA=1 ;;
         --no-ultrathreads) ULTRA=0 ;;
         --resume) RESUME=1 ;;
         --dry-run) DRY_RUN=1 ;;

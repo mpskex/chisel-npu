@@ -139,13 +139,16 @@ ctrl-CDC build, +0.003 ns on the feed-counter build; 0 failing endpoints /
 0 unrouted nets).
 
 Implementation now uses the **parallel ML-on flow**: ML congestion/delay
-estimators are enabled, placement runs 8-threaded with `-ultrathreads` on this
-SSI part, and several place/phys_opt/route candidates run concurrently.  On the
-same post-opt checkpoint, ML-on placement is ~26 min at ~13.5 GB versus ~51 min
-for the old ML-off single-threaded placement at ~12.3 GB.  The flow checkpoints
-after placement and physical optimization, retries a crashed route from the
-checkpoint, and falls back to ML-off/2-thread routing if Vivado 2025.2
-segfaults.  The full design and sizing model are in
+estimators are enabled, placement runs 8-threaded, and several
+place/phys_opt/route candidates run concurrently.  On the same post-opt
+checkpoint, ML-on placement measured **25:05 at 13.25 GB** with post-place
+**WNS +0.272 ns**, versus ~51 min for the old ML-off single-threaded placement
+at ~12.3 GB.  `place_design -ultrathreads` was tested and is **not usable**:
+both attempts SIGSEGV in `HAPLFSimPLFlow::collectControlSetInfo` during
+Phase 2.5 Global Place Phase1 (a per-SLR thread race), so it is opt-in only.
+The flow checkpoints after placement and physical optimization, retries a
+crashed route from the checkpoint, and falls back to ML-off/2-thread routing
+if Vivado 2025.2 segfaults.  The full design and sizing model are in
 [`docs/designs/06.parallel-ml-build.md`](../designs/06.parallel-ml-build.md).
 The old ML-off single-thread recipe is tracked as
 `ip/vivado/xcvu9p/scripts/impl_1thread_noml.tcl` and remains the known-good

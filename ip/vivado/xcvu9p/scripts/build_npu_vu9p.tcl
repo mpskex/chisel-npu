@@ -99,7 +99,7 @@ if {[info exists ::env(NPU_MAX_THREADS)]} {
 }
 set stop_after_opt 0
 if {[info exists ::env(NPU_STOP_AFTER_OPT)]} { set stop_after_opt $::env(NPU_STOP_AFTER_OPT) }
-set ultra_threads 1
+set ultra_threads 0
 if {[info exists ::env(NPU_ULTRATHREADS)]} { set ultra_threads $::env(NPU_ULTRATHREADS) }
 puts "BUILD_THREADS=$max_threads SYNTH_JOBS=$jobs STOP_AFTER_OPT=$stop_after_opt ULTRATHREADS=$ultra_threads"
 

@@ -710,15 +710,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--ultrathreads",
         dest="ultrathreads",
         action="store_true",
-        help="enable place_design -ultrathreads (UltraScale+ SSI)",
+        help="enable place_design -ultrathreads (experimental; crashes in "
+        "HAPLFSimPLFlow::collectControlSetInfo on this design/Vivado 2025.2)",
     )
     ultra.add_argument(
         "--no-ultrathreads",
         dest="ultrathreads",
         action="store_false",
-        help="disable place_design -ultrathreads",
+        help="disable place_design -ultrathreads (default)",
     )
-    parser.set_defaults(ultrathreads=True)
+    parser.set_defaults(ultrathreads=False)
     return parser.parse_args(argv)
 
 
