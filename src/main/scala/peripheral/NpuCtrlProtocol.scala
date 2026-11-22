@@ -47,7 +47,7 @@ object NpuCtrlProtocol {
   val NUM_SEG    = 32
   val NUM_ACTIVE_SEG = 5
 
-  val SCRATCH    = 0x180
+  val SCRATCH    = 0x300
 
   object Seg {
     val A     = 0

@@ -18,12 +18,22 @@ class FakeTransport:
             p.STATUS: 0,
         }
         self.mem = bytearray(4096)
+        self.done_on_start = False
+        self.error_on_start = None
 
     def reg_read(self, offset: int) -> int:
         return self.regs.get(offset, 0)
 
     def reg_write(self, offset: int, value: int) -> None:
         self.regs[offset] = value & 0xFFFFFFFF
+        if offset == p.CONTROL and (value & (1 << p.CTRL_START)):
+            if self.error_on_start is not None:
+                self.regs[p.STATUS] = (1 << p.STATUS_ERROR) | (3 << 4)
+                self.regs[p.ERROR_CODE] = self.error_on_start
+            elif self.done_on_start:
+                self.regs[p.STATUS] = (1 << p.STATUS_DONE) | (2 << 4)
+                # A fake OUT write at the OUT segment base.
+                self.mem[0x200:0x210] = b"OUTDATA________"
 
     def mem_read(self, addr: int, nbytes: int) -> bytes:
         return bytes(self.mem[addr:addr + nbytes])
@@ -117,3 +127,35 @@ def test_mem_read_write_are_proxied():
     drv.open()
     drv.mem_write(0x10, b"abcd")
     assert drv.mem_read(0x10, 4) == b"abcd"
+def test_start_rejects_busy():
+    t = FakeTransport()
+    drv = NpuDriverCore(t)
+    drv.open()
+    t.regs[p.STATUS] = (1 << p.STATUS_BUSY) | (1 << 4)
+    with pytest.raises(NpuDriverError):
+        drv.start(4)
+
+
+def test_run_stages_programs_segments_and_reads_back():
+    t = FakeTransport()
+    t.done_on_start = True
+    drv = NpuDriverCore(t)
+    drv.open()
+    segments = {
+        p.SEG_A: (0x100, 0x100, b"AAAA"),
+        p.SEG_OUT: (0x200, 0x100, bytes(16)),
+    }
+    out = drv.run(prog_len=4, segments=segments)
+    assert t.mem[0x100:0x104] == b"AAAA"
+    assert out[p.SEG_A] == b"AAAA"
+    assert out[p.SEG_OUT][:7] == b"OUTDATA"
+
+
+def test_run_raises_on_device_error():
+    t = FakeTransport()
+    t.error_on_start = p.ERROR_MEM_FAULT
+    drv = NpuDriverCore(t)
+    drv.open()
+    with pytest.raises(NpuDriverError, match="MEM_FAULT"):
+        drv.run(prog_len=4, segments={p.SEG_A: (0x100, 0x100, b"")})
+

@@ -216,8 +216,8 @@ Expected: FAIL / compile error.
 - [ ] **Step 3: Implement**
 
 - `NpuDmaEngine`: latch `reqSeg`, output it with AW/AR; no change to the FSM or data path.
-- `NpuProgramEngine`: `dmaL3 = slots.off`; `reqSeg = Mux(dir === 3, 4.U, slots.sect)`.
-- `npuFrontend`: `fetch_fill_addr := fillLine << 6`.
+- `NpuProgramEngine`: `dmaL3 = NpuSections.<section> + slots.off` (flat local); `reqSeg = Mux(dir === 3, 4.U, slots.sect)`.
+- `npuFrontend`: `fetch_fill_addr := CODE_BASE + (fillLine << 6)`.
 - `NpuSections` relative constants; update comments.
 
 - [ ] **Step 4: Run the DMA spec and the frontend spec**

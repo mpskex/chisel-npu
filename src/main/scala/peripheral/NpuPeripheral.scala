@@ -16,6 +16,7 @@ import engine._
 
 class NpuPeripheral(val K: Int = 32, val N: Int = 8, val W: Int = 8,
                     val NUM_SEG: Int = 5, val TRACE_DEPTH: Int = 256) extends Module {
+  require(NUM_SEG == 5, "NpuPeripheral v1: the core exposes five segment limits")
 
   val ADDR_W = 64
   val DATA_W = 512
@@ -137,7 +138,11 @@ class NpuPeripheral(val K: Int = 32, val N: Int = 8, val W: Int = 8,
   hub.io.core_fetch_stats := core.io.core_fetch_stats
   hub.io.core_trace_retire := core.io.trace_retire
   hub.io.core_trace_pc     := core.io.trace_pc
-  hub.io.bus_error         := xlate.io.bus_error
+  // Data-plane response errors also abort the session; the core ignores
+  // BRESP/RRESP, so the hub is the only place that can observe them.
+  val axiRespError = (io.m_axi_bvalid && io.m_axi_bresp =/= 0.U) ||
+                     (io.m_axi_rvalid && io.m_axi_rresp =/= 0.U)
+  hub.io.bus_error         := xlate.io.bus_error || axiRespError
 
   hub.io.trace_ready := io.trace_ready
   io.trace_valid     := hub.io.trace_valid

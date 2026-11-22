@@ -71,10 +71,14 @@ class NpuCtrlAxiLite(val ADDR_W: Int = 12) extends Module {
 
   val writeIdle = wrState === WrState.IDLE
   val readIdle  = rdState === RdState.IDLE
+  val chBusy = !writeIdle || !readIdle || bValid || rValid
 
   // ---- write side ---------------------------------------------------------
-  io.s_axil_awready := writeIdle && !awHeld && readIdle
-  io.s_axil_wready  := writeIdle && !wHeld && readIdle
+  // Write priority: if AW and AR are presented together, the write is
+  // accepted first.  No new transaction is accepted while a response is
+  // pending, and a read is not accepted while a write is held.
+  io.s_axil_awready := !chBusy && !awHeld
+  io.s_axil_wready  := !chBusy && !wHeld
 
   when (io.s_axil_awvalid && io.s_axil_awready) {
     awHeld := true.B
@@ -87,7 +91,8 @@ class NpuCtrlAxiLite(val ADDR_W: Int = 12) extends Module {
   }
 
   // ---- read side ----------------------------------------------------------
-  io.s_axil_arready := readIdle && writeIdle && !bValid
+  io.s_axil_arready := !chBusy && !awHeld && !wHeld &&
+                       !io.s_axil_awvalid && !io.s_axil_wvalid
 
   when (io.s_axil_arvalid && io.s_axil_arready) {
     arAddr  := io.s_axil_araddr
@@ -127,6 +132,8 @@ class NpuCtrlAxiLite(val ADDR_W: Int = 12) extends Module {
 
   io.s_axil_bvalid := bValid
   io.s_axil_bresp  := bResp
+  // Clear before the RESP block so a new response in the same cycle as the
+  // previous B handshake is not lost.
   when (bValid && io.s_axil_bready) { bValid := false.B }
 
   // ---- read FSM -----------------------------------------------------------

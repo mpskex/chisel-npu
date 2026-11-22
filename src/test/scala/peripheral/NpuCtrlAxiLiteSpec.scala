@@ -169,4 +169,47 @@ class NpuCtrlAxiLiteSpec extends AnyFlatSpec {
       assert(dut.io.s_axil_rresp.peek().litValue == 2, "0x30 must return SLVERR")
     }
   }
+  it should "not accept a second write while B is pending" in {
+    simulate(new CtrlAdapterHarness) { dut =>
+      idle(dut)
+      dut.io.s_axil_bready.poke(false.B)
+      dut.io.s_axil_rready.poke(true.B)
+
+      dut.io.s_axil_awaddr.poke(0x10.U)
+      dut.io.s_axil_awvalid.poke(true.B)
+      dut.io.s_axil_wdata.poke("h11111111".U)
+      dut.io.s_axil_wstrb.poke("hF".U)
+      dut.io.s_axil_wvalid.poke(true.B)
+      var n = 0
+      while (dut.io.s_axil_bvalid.peek().litValue == 0 && n < 50) {
+        dut.clock.step(); n += 1
+      }
+      assert(dut.io.s_axil_bvalid.peek().litValue == 1)
+      dut.io.s_axil_awvalid.poke(false.B)
+      dut.io.s_axil_wvalid.poke(false.B)
+
+      // Second write while the first B is still pending.
+      dut.io.s_axil_awaddr.poke(0x14.U)
+      dut.io.s_axil_awvalid.poke(true.B)
+      dut.io.s_axil_wdata.poke("h22222222".U)
+      dut.io.s_axil_wvalid.poke(true.B)
+      dut.clock.step(2)
+      assert(dut.io.s_axil_awready.peek().litValue == 0,
+        "AW must not be accepted while B is pending")
+      assert(dut.io.s_axil_wready.peek().litValue == 0,
+        "W must not be accepted while B is pending")
+
+      dut.io.s_axil_bready.poke(true.B)
+      dut.clock.step()
+      n = 0
+      while (dut.io.s_axil_bvalid.peek().litValue == 0 && n < 50) {
+        dut.clock.step(); n += 1
+      }
+      assert(dut.io.s_axil_bvalid.peek().litValue == 1, "second write response missing")
+      assert(dut.io.seen_count.peek().litValue == 2)
+      assert(dut.io.seen_addr.peek().litValue == 0x14)
+      assert(dut.io.seen_wdata.peek().litValue == BigInt("22222222", 16))
+    }
+  }
+
 }

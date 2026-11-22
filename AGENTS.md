@@ -34,8 +34,8 @@ Confusing them is the primary source of errors in this codebase.
 | Symbol | Meaning | Default (test) | Default (top) |
 |:---:|:---|:---:|:---:|
 | **`N`** (spoken: **N(bits)**) | Base lane width in bits for a VX register. Equals MMALU's `nbits`. Always `N(bits)` in prose to avoid confusion. | 8 | 8 |
-| **`L`** | Number of base VX registers. Must be divisible by 4 for VE/VR aliasing. | 32 | 16 |
-| **`K`** | SIMD lane count per register. At the backend boundary, `K == MMALU.n` (the array side). | 8 | 16 |
+| **`L`** | Number of base VX registers. Must be divisible by 4 for VE/VR aliasing. | 32 | 32 |
+| **`K`** | SIMD lane count per register. At the backend boundary, `K == MMALU.n` (the array side). | 8 | 32 |
 
 The released FPGA top is the board-agnostic **`peripheral/NpuPeripheral`**. It wraps
 the streamed program engine (`engine/NpuProgramEngineFrontend`) in the NPUCTL
@@ -43,7 +43,7 @@ control hub and the segmented-AXI -> 64-bit system-AXI translator. The vu9p
 baseline is `NpuProgramEngineFrontend(K = 32, N = 8, W = 8)` inside
 `NpuPeripheral(K = 32, N = 8, W = 8)`; it sets `L = K = 32`, so the register
 file is `L×K×N/8 = 1 KiB`.
-Older docs may cite `K = 32`/`K = 64` — those describe the legacy `NCoreBackend`
+Older docs may cite `K = 16`/`K = 64` — those describe the legacy `NCoreBackend`
 and the superseded `npu_subsys` bitstream, not the current FPGA top.
 **`W`** (dispatch-window depth, `NpuProgramEngineFrontend`) defaults to 16; the
 vu9p baseline is W=8. (Older xc7k480t notes cite W=4; that is not the current

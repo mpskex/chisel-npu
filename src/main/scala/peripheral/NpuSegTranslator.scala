@@ -107,32 +107,70 @@ class NpuSegTranslator(val NUM_SEG: Int = 5) extends Module {
   val (awSys, awFits, awSegSafe, awRel) = xlate(io.s_awaddr, io.s_awseg, io.s_awlen, io.s_awsize)
   val (arSys, arFits, arSegSafe, arRel) = xlate(io.s_araddr, io.s_arseg, io.s_arlen, io.s_arsize)
 
-  io.m_awaddr  := Mux(awFits, awSys, io.seg_base(awSegSafe))
+  // Invalid bursts are terminated locally with an error response; they are
+  // never forwarded to the system bus (a clamped write at the base would be
+  // dangerous).  The core's DMA treats the response as a completed burst and
+  // the hub aborts the session.
+  val awInvalid = io.s_awvalid && !awFits
+  val arInvalid = io.s_arvalid && !arFits
+
+  val awErrActive = RegInit(false.B)
+  val bErrValid   = RegInit(false.B)
+  val arErrActive = RegInit(false.B)
+  val rErrValid   = RegInit(false.B)
+  val rErrCount   = RegInit(0.U(8.W))
+  val rErrLen     = RegInit(0.U(8.W))
+
+  io.m_awaddr  := awSys
   io.m_awlen   := io.s_awlen
   io.m_awsize  := io.s_awsize
   io.m_awburst := io.s_awburst
-  io.m_awvalid := io.s_awvalid
-  io.s_awready := io.m_awready
+  io.m_awvalid := io.s_awvalid && awFits
+  io.s_awready := awInvalid || (!awErrActive && io.m_awready)
 
   io.m_wdata   := io.s_wdata
   io.m_wstrb   := io.s_wstrb
   io.m_wlast   := io.s_wlast
-  io.m_wvalid  := io.s_wvalid
-  io.s_wready  := io.m_wready
-  io.s_bvalid  := io.m_bvalid
-  io.m_bready  := io.s_bready
+  io.m_wvalid  := io.s_wvalid && !awErrActive && !awInvalid
+  io.s_wready  := io.m_wready || awErrActive || awInvalid
+  io.s_bvalid  := io.m_bvalid || bErrValid
+  io.m_bready  := io.s_bready && !awErrActive && !bErrValid
 
-  io.m_araddr  := Mux(arFits, arSys, io.seg_base(arSegSafe))
+  when (awInvalid) {
+    awErrActive := true.B
+  }
+  when ((awErrActive || awInvalid) && io.s_wvalid && io.s_wlast) {
+    awErrActive := false.B
+    bErrValid   := true.B
+  }
+  when (bErrValid && io.s_bready) { bErrValid := false.B }
+
+  io.m_araddr  := arSys
   io.m_arlen   := io.s_arlen
   io.m_arsize  := io.s_arsize
   io.m_arburst := io.s_arburst
-  io.m_arvalid := io.s_arvalid
-  io.s_arready := io.m_arready
+  io.m_arvalid := io.s_arvalid && arFits
+  io.s_arready := arInvalid || (!arErrActive && io.m_arready)
 
-  io.m_rready  := io.s_rready
-  io.s_rdata   := io.m_rdata
-  io.s_rlast   := io.m_rlast
-  io.s_rvalid  := io.m_rvalid
+  io.m_rready  := io.s_rready && !arErrActive && !rErrValid
+  io.s_rdata   := Mux(arErrActive, 0.U(DATA_W.W), io.m_rdata)
+  io.s_rlast   := Mux(arErrActive, rErrCount === rErrLen, io.m_rlast)
+  io.s_rvalid  := Mux(arErrActive, rErrValid, io.m_rvalid)
+
+  when (arInvalid) {
+    arErrActive := true.B
+    rErrValid   := true.B
+    rErrCount   := 0.U
+    rErrLen     := io.s_arlen
+  }
+  when (arErrActive && rErrValid && io.s_rready) {
+    when (rErrCount === rErrLen) {
+      arErrActive := false.B
+      rErrValid   := false.B
+    } .otherwise {
+      rErrCount := rErrCount + 1.U
+    }
+  }
 
   val awError = io.s_awvalid && !awFits
   val arError = io.s_arvalid && !arFits

@@ -235,6 +235,37 @@ class NpuPeripheralSpec extends AnyFlatSpec {
       val cols = (0 until k).filter(col =>
         (0 until k).forall(i => out(i) == a(i) * b(col)))
       assert(cols.nonEmpty, s"capture is not a column of a*b: ${out.toList}")
+
+      // Let the core leave RUN_DONE before the next START.
+      var w = 0
+      while ((read(dut, NpuCtrlProtocol.STATUS) & 1) != 0 && w < 100) {
+        dut.clock.step(); w += 1
+      }
+
+      // Second session with the SAME PROG_LEN/ENTRY_PC but rewritten CODE at
+      // the same address.  Native START must invalidate the line cache.
+      val c = Array.tabulate(k)(i => 1000 + i)
+      preloadI32(dut, 0x2000L, c)
+      preloadInstrs(dut, Seq(
+        vle32(rd = 3, sect = NpuSections.SECT_ACCUM, off = 0),
+        vse32(src = 3, sect = NpuSections.SECT_OUT, off = 0),
+        0, 0, 0
+      ))
+      write(dut, NpuCtrlProtocol.PROG_LEN, 5L)
+      write(dut, NpuCtrlProtocol.CONTROL, 1L)
+      n = 0
+      status = 0L
+      while (n < 20000) {
+        status = read(dut, NpuCtrlProtocol.STATUS)
+        if (((status >> 1) & 1) == 1 || ((status >> 2) & 1) == 1) n = 20000
+        else { dut.clock.step(); n += 1 }
+      }
+      assert(((status >> 2) & 1) == 0,
+        s"second session error: status=0x${status.toHexString} code=${read(dut, NpuCtrlProtocol.ERROR_CODE)}")
+      assert(((status >> 1) & 1) == 1, s"second session did not complete: 0x${status.toHexString}")
+      val out2 = readI32(dut, 0x3000L, k)
+      assert(out2.sameElements(c),
+        s"stale instruction cache: expected the new CODE to copy ACCUM to OUT, got ${out2.toList}")
     }
   }
 }

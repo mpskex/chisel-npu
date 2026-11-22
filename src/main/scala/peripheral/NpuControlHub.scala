@@ -183,7 +183,8 @@ class NpuControlHub(val K: Int = 32, val N: Int = 8, val L: Int = 32,
   val codeFits  = codeBytes <= effLimit(NpuCtrlProtocol.Seg.CODE)
   val wordFits  = endWord <= 0xFFFF.U
   val canStartCfg = progLen =/= 0.U && segAligned && codeFits && wordFits
-  val startAttempt = (state === HubState.IDLE || state === HubState.DONE) && startPulse
+  val startAttempt = (state === HubState.IDLE || state === HubState.DONE) &&
+                     !io.core_busy && startPulse
   val startAccept  = startAttempt && canStartCfg
   val badConfigEvt = startAttempt && !canStartCfg
 
@@ -278,8 +279,10 @@ class NpuControlHub(val K: Int = 32, val N: Int = 8, val L: Int = 32,
   }
 
   when (badConfigEvt) {
-    errorSticky := true.B
-    errorCode   := NpuCtrlProtocol.Error.BAD_CONFIG.U
+    doneSticky    := false.B
+    abortedSticky := false.B
+    errorSticky   := true.B
+    errorCode     := NpuCtrlProtocol.Error.BAD_CONFIG.U
   }
 
   when (softResetPulse) {
@@ -325,7 +328,7 @@ class NpuControlHub(val K: Int = 32, val N: Int = 8, val L: Int = 32,
   val traceFull  = traceCount === TRACE_DEPTH.U
 
   val traceMode = traceCtrl(3, 1)
-  val traceEn   = traceCtrl(0)
+  val traceEn   = traceCtrl(0) && traceMode =/= 0.U
 
   val retireEvt = io.core_trace_retire && (traceMode === 2.U || traceMode === 3.U)
   val errNow = MuxCase(NpuCtrlProtocol.Error.NONE.U(4.W), Seq(
@@ -339,45 +342,53 @@ class NpuControlHub(val K: Int = 32, val N: Int = 8, val L: Int = 32,
 
   val traceEvtValid = traceEn && (startAccept || doneEvt || fsErrorEvt || retireEvt)
   val traceEvt = MuxCase(NpuCtrlProtocol.Event.RETIRE.U(8.W), Seq(
-    startAccept -> NpuCtrlProtocol.Event.START.U(8.W),
-    doneEvt     -> NpuCtrlProtocol.Event.DONE.U(8.W),
-    fsErrorEvt  -> NpuCtrlProtocol.Event.ERROR.U(8.W),
-    retireEvt   -> NpuCtrlProtocol.Event.RETIRE.U(8.W)
+    watchdogExpired -> NpuCtrlProtocol.Event.WATCHDOG.U(8.W),
+    abortEvt        -> NpuCtrlProtocol.Event.ABORT.U(8.W),
+    startAccept     -> NpuCtrlProtocol.Event.START.U(8.W),
+    doneEvt         -> NpuCtrlProtocol.Event.DONE.U(8.W),
+    fsErrorEvt      -> NpuCtrlProtocol.Event.ERROR.U(8.W),
+    retireEvt       -> NpuCtrlProtocol.Event.RETIRE.U(8.W)
   ))
   val tracePc = Mux(retireEvt, io.core_trace_pc, io.core_pc)
   val tracePayload = Mux(fsErrorEvt, errNow, Mux(startAccept, sessionId(7, 0), 0.U(8.W)))
   val traceRecord = Cat(timestamp, tracePc, traceEvt, tracePayload)
 
-  when (traceEvtValid) {
-    when (!traceFull) {
-      traceMem(traceTail) := traceRecord
-      traceTail  := traceTail + 1.U
-      traceCount := traceCount + 1.U
-    } .otherwise {
-      traceDrops := traceDrops + 1.U
-      traceOvf   := true.B
-    }
+  val traceRead = reqFire && !reqWrite && reqAddr === NpuCtrlProtocol.TRACE_DATA.U
+  val traceValid = !traceEmpty && traceEn
+  val tracePopData   = traceRead && traceHalf && !traceEmpty
+  val tracePopStream = traceValid && io.trace_ready && !traceHalf && !traceRead
+  val tracePop = tracePopData || tracePopStream
+  val tracePush = traceEvtValid && (!traceFull || tracePop)
+  val traceDrop = traceEvtValid && !tracePush
+
+  when (tracePush) {
+    traceMem(traceTail) := traceRecord
+    traceTail := traceTail + 1.U
+  }
+  when (tracePop) {
+    traceHead := traceHead + 1.U
+  }
+  when (tracePush && tracePop) {
+    traceCount := traceCount
+  } .elsewhen (tracePush) {
+    traceCount := traceCount + 1.U
+  } .elsewhen (tracePop) {
+    traceCount := traceCount - 1.U
+  }
+  when (traceDrop) {
+    traceDrops := traceDrops + 1.U
+    traceOvf   := true.B
   }
 
   when (traceOvfEvt) { traceOvfEvt := false.B }
-  when (traceEvtValid && traceFull) { traceOvfEvt := true.B }
-
-  val traceRead = reqFire && !reqWrite && reqAddr === NpuCtrlProtocol.TRACE_DATA.U
-  val tracePopData   = traceRead && !traceHalf && !traceEmpty
-  val tracePopStream = io.trace_valid && io.trace_ready && !traceHalf && !traceRead
-  val tracePop = tracePopData || tracePopStream
-
-  when (tracePop) {
-    traceHead  := traceHead + 1.U
-    traceCount := traceCount - 1.U
-  }
+  when (traceDrop)   { traceOvfEvt := true.B }
 
   when (traceRead) {
-    traceHalf := !traceHalf
     when (traceEmpty) { traceHalf := false.B }
+    .otherwise        { traceHalf := !traceHalf }
   }
 
-  io.trace_valid := !traceEmpty
+  io.trace_valid := traceValid
   io.trace_data  := traceMem(traceHead)
 
   when (reqFire && reqWrite && reqAddr === NpuCtrlProtocol.TRACE_CTRL.U) {
@@ -387,14 +398,14 @@ class NpuControlHub(val K: Int = 32, val N: Int = 8, val L: Int = 32,
   // ==========================================================================
   // Core-facing segment values
   // ==========================================================================
-  val running = state === HubState.RUN
+  val activeNow = (state === HubState.RUN) || io.core_busy
   for (i <- 0 until NUM_SEG) {
-    io.core_seg_limit(i) := Mux(running, activeLimit(i), effLimit(i))
-    io.seg_base(i)       := Mux(running, activeBase(i), segBaseWord(i))
-    io.seg_limit(i)      := Mux(running, activeLimit(i), effLimit(i))
+    io.core_seg_limit(i) := Mux(activeNow, activeLimit(i), effLimit(i))
+    io.seg_base(i)       := Mux(activeNow, activeBase(i), segBaseWord(i))
+    io.seg_limit(i)      := Mux(activeNow, activeLimit(i), effLimit(i))
   }
-  io.core_prog_len := Mux(running, activeProgLen, progLen)
-  io.core_entry_pc := Mux(running, activeEntryPc, entryPc)
+  io.core_prog_len := Mux(activeNow, activeProgLen, progLen)
+  io.core_entry_pc := Mux(activeNow, activeEntryPc, entryPc)
 
   // ==========================================================================
   // Register writes

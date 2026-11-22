@@ -20,6 +20,7 @@ class CoreControlHarness extends Module {
     val core_prog_len = Input(UInt(16.W))
     val core_entry_pc = Input(UInt(16.W))
     val a_limit       = Input(UInt(32.W))
+    val code_limit    = Input(UInt(32.W))
 
     val core_busy     = Output(Bool())
     val core_done     = Output(Bool())
@@ -31,6 +32,9 @@ class CoreControlHarness extends Module {
     val trace_retire  = Output(Bool())
     val trace_pc      = Output(UInt(16.W))
     val retire_count  = Output(UInt(16.W))
+    val dbg_drain     = Output(Bool())
+    val dbg_dmaq      = Output(UInt(4.W))
+    val dbg_wcount    = Output(UInt(5.W))
 
     val pre_wr_en   = Input(Bool())
     val pre_wr_addr = Input(UInt(12.W))
@@ -46,7 +50,7 @@ class CoreControlHarness extends Module {
   fe.io.core_prog_len := io.core_prog_len
   fe.io.core_entry_pc := io.core_entry_pc
   fe.io.seg_limit     := VecInit(Seq(
-    io.a_limit, 0xFFFFFFFFL.U, 0xFFFFFFFFL.U, 0xFFFFFFFFL.U, 0xFFFFFFFFL.U))
+    io.a_limit, 0xFFFFFFFFL.U, 0xFFFFFFFFL.U, 0xFFFFFFFFL.U, io.code_limit))
 
   fe.io.ctrl_addr  := 0.U
   fe.io.ctrl_we    := false.B
@@ -90,6 +94,9 @@ class CoreControlHarness extends Module {
   io.core_pc        := fe.io.core_pc
   io.trace_retire   := fe.io.trace_retire
   io.trace_pc       := fe.io.trace_pc
+  io.dbg_drain      := fe.io.dbg_drain
+  io.dbg_dmaq       := fe.io.dbg_dmaq
+  io.dbg_wcount     := fe.io.dbg_wcount
 
   val rc = RegInit(0.U(16.W))
   when (fe.io.trace_retire) { rc := rc + 1.U }
@@ -122,6 +129,7 @@ class NpuCoreControlSpec extends AnyFlatSpec {
       dut.io.core_start.poke(false.B)
       dut.io.core_abort.poke(false.B)
       dut.io.a_limit.poke("hFFFFFFFF".U)
+      dut.io.code_limit.poke("hFFFFFFFF".U)
       dut.io.pre_wr_en.poke(false.B)
 
       // Four zero words (NOP) starting at word 2.
@@ -157,6 +165,7 @@ class NpuCoreControlSpec extends AnyFlatSpec {
       dut.io.core_start.poke(false.B)
       dut.io.core_abort.poke(false.B)
       dut.io.a_limit.poke("hFFFFFFFF".U)
+      dut.io.code_limit.poke("hFFFFFFFF".U)
       dut.io.core_entry_pc.poke(0.U)
       dut.io.core_prog_len.poke(64.U)
       dut.clock.step(22)
@@ -168,8 +177,12 @@ class NpuCoreControlSpec extends AnyFlatSpec {
       dut.io.core_abort.poke(true.B)
       dut.clock.step()
       dut.io.core_abort.poke(false.B)
-      dut.clock.step(2)
-      assert(dut.io.core_busy.peek().litValue == 0, "core must be idle after abort")
+      var n = 0
+      while (dut.io.core_busy.peek().litValue != 0 && n < 200) {
+        dut.clock.step(); n += 1
+      }
+      assert(dut.io.core_busy.peek().litValue == 0,
+        s"core must be idle after abort (waited $n cycles, drain=${dut.io.dbg_drain.peek().litValue}, dmaq=${dut.io.dbg_dmaq.peek().litValue}, wcount=${dut.io.dbg_wcount.peek().litValue})")
     }
   }
 
@@ -179,6 +192,7 @@ class NpuCoreControlSpec extends AnyFlatSpec {
       dut.io.core_start.poke(false.B)
       dut.io.core_abort.poke(false.B)
       dut.io.a_limit.poke(0x40.U)      // A window is 64 B
+      dut.io.code_limit.poke("hFFFFFFFF".U)
       dut.io.core_entry_pc.poke(0.U)
       dut.io.core_prog_len.poke(1.U)
       preloadWord(dut, NpuSections.CODE_BASE, vle8(rd = 0, sect = NpuSections.SECT_A, off = 0x100))
@@ -195,4 +209,24 @@ class NpuCoreControlSpec extends AnyFlatSpec {
         s"fault address must carry the section offset, got 0x${dut.io.core_fault_addr.peek().litValue.toString(16)}")
     }
   }
+  it should "raise a code-fetch fault when the code window is too small" in {
+    simulate(new CoreControlHarness) { dut =>
+      dut.io.native_ctrl.poke(true.B)
+      dut.io.core_start.poke(false.B)
+      dut.io.core_abort.poke(false.B)
+      dut.io.a_limit.poke("hFFFFFFFF".U)
+      dut.io.code_limit.poke(0x20.U)   // one 64-byte line does not fit
+      dut.io.core_entry_pc.poke(0.U)
+      dut.io.core_prog_len.poke(2.U)
+      dut.clock.step(30)
+      dut.io.core_start.poke(true.B)
+      dut.clock.step()
+      dut.io.core_start.poke(false.B)
+      dut.clock.step(30)
+      assert(dut.io.core_mem_fault.peek().litValue == 1,
+        "a code fetch outside the CODE limit must fault")
+      assert(dut.io.core_fault_seg.peek().litValue == NpuSections.SEG_CODE)
+    }
+  }
+
 }

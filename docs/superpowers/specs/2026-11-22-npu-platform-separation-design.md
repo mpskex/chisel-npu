@@ -206,9 +206,9 @@ Three separate observability pieces:
 
 ```
 [63:32] timestamp
-[47:32] pc
-[55:48] event   (1 start, 2 retire, 3 done, 4 error, 5 watchdog, 6 abort, 7 overflow)
-[63:56] payload (error code / session id low byte)
+[31:16] pc
+[15:8]  event   (1 start, 2 retire, 3 done, 4 error, 5 watchdog, 6 abort)
+[7:0]   payload (error code / session id low byte)
 ```
 
 Modes: 0 off, 1 events only, 2 events + retire PC (default), 3 events +
@@ -282,11 +282,12 @@ master is standard and carries only the translated 64-bit system address.
 - `NpuDmaEngine` gains `req_seg[2:0]`, `m_axi_awseg[2:0]`,
   `m_axi_arseg[2:0]`; the AXI address remains the segment-relative offset.
   Fetch requests use segment 4.
-- `NpuProgramEngine` forms `dmaL3 = slots.off` (relative), passes
+- `NpuProgramEngine` forms `dmaL3 = NpuSections.<section> + slots.off`
+  (flat local offset; the hub subtracts `LOCAL_BASE`), passes
   `seg = slots.sect`, adds the segment-limit check and `mem_fault` /
   `fault_seg` / `fault_addr` outputs.
 - `NpuProgramEngineFrontend`:
-  - code fetch offset `fillLine * 64`, segment 4;
+  - code fetch offset `CODE_BASE + fillLine * 64`, segment 4;
   - direct `core_start`, `core_abort`, `core_prog_len`, `core_entry_pc`,
     `seg_limit[5]`, `mem_fault` inputs;
   - direct `core_busy`, `core_done`, `core_illegal`, `core_pc`,

@@ -118,6 +118,10 @@ class NpuDriverCore:
 
     def start(self, prog_len: int, entry_pc: int = 0, session_id: int = 0,
               watchdog: int = 0, irq_enable: int = 0xF) -> None:
+        st = self.status()
+        if st & (1 << p.STATUS_BUSY):
+            raise NpuDriverError(
+                f"NPU is busy (STATUS=0x{st:08x}); wait for DONE/ERROR or stop it")
         if prog_len <= 0:
             raise ValueError("prog_len must be positive")
         if entry_pc < 0 or entry_pc + prog_len > 0xFFFF:
@@ -156,8 +160,10 @@ class NpuDriverCore:
         deadline = time.monotonic() + timeout
         while True:
             st = self.status()
-            if st & ((1 << p.STATUS_DONE) | (1 << p.STATUS_ERROR) |
-                     (1 << p.STATUS_ABORTED)):
+            # Error/abort wins over a stale DONE from a previous session.
+            if st & ((1 << p.STATUS_ERROR) | (1 << p.STATUS_ABORTED)):
+                return st
+            if st & (1 << p.STATUS_DONE):
                 return st
             if time.monotonic() >= deadline:
                 raise NpuTimeout(
@@ -186,6 +192,36 @@ class NpuDriverCore:
             macs=self._reg(p.MACS),
             fetch_stats=self._reg(p.FETCH_STATS),
         )
+
+    # ---- high-level job ---------------------------------------------------
+
+    def run(self, prog_len: int,
+            segments: Mapping[int, tuple[int, int, bytes]],
+            entry_pc: int = 0, session_id: int = 0, watchdog: int = 0,
+            irq_enable: int = 0xF, readback: bool = True) -> dict[int, bytes]:
+        """Stage *segments* (seg -> (system_base, limit, bytes)), run, and read back.
+
+        The platform owns the system bases; this core only programs them and
+        moves the bytes.  Raises NpuDriverError on an illegal/mem/bus error.
+        """
+        for seg, (base, limit, data) in segments.items():
+            if data:
+                self.mem_write(base, data)
+            self.program_segment(seg, base, limit)
+        self.start(prog_len, entry_pc, session_id, watchdog, irq_enable)
+        st = self.wait_done()
+        err = self.error_info()
+        if (st & ((1 << p.STATUS_ERROR) | (1 << p.STATUS_ABORTED))) or \
+                err.code != p.ERROR_NONE:
+            raise NpuDriverError(
+                f"NPU job failed: STATUS=0x{st:08x} {err.name} "
+                f"pc={err.pc} addr=0x{err.addr:08x}")
+        if not readback:
+            return {}
+        return {
+            seg: self.mem_read(base, len(data))
+            for seg, (base, _limit, data) in segments.items()
+        }
 
     # ---- data plane ------------------------------------------------------
 

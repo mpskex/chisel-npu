@@ -217,8 +217,9 @@ class NpuControlHubSpec extends AnyFlatSpec {
       write(dut, NpuCtrlProtocol.segBaseHi(0), 0x0L)
       write(dut, NpuCtrlProtocol.segLimit(0), 0x1000L)
 
-      dut.io.core_busy.poke(true.B)
+      dut.io.core_busy.poke(false.B)
       write(dut, NpuCtrlProtocol.CONTROL, 1L)
+      dut.io.core_busy.poke(true.B)
       val runSt = read(dut, NpuCtrlProtocol.STATUS)
       assert(((runSt >> 1) & 1) == 0, "DONE must not be set yet")
       assert(((runSt >> 4) & 0xF) == NpuCtrlProtocol.State.RUN)
@@ -258,8 +259,9 @@ class NpuControlHubSpec extends AnyFlatSpec {
     simulate(new HubHarness) { dut =>
       idleCore(dut)
       write(dut, NpuCtrlProtocol.PROG_LEN, 3L)
-      dut.io.core_busy.poke(true.B)
+      dut.io.core_busy.poke(false.B)
       write(dut, NpuCtrlProtocol.CONTROL, 1L)
+      dut.io.core_busy.poke(true.B)
       write(dut, NpuCtrlProtocol.CONTROL, 2L)
       val st = read(dut, NpuCtrlProtocol.STATUS)
       assert(((st >> 3) & 1) == 1, "ABORTED must be set")
@@ -275,8 +277,9 @@ class NpuControlHubSpec extends AnyFlatSpec {
       idleCore(dut)
       write(dut, NpuCtrlProtocol.PROG_LEN, 3L)
       write(dut, NpuCtrlProtocol.WATCHDOG, 5L)
-      dut.io.core_busy.poke(true.B)
+      dut.io.core_busy.poke(false.B)
       write(dut, NpuCtrlProtocol.CONTROL, 1L)
+      dut.io.core_busy.poke(true.B)
       dut.clock.step(10)
       val st = read(dut, NpuCtrlProtocol.STATUS)
       assert(((st >> 2) & 1) == 1, "ERROR must be set after watchdog")
@@ -290,8 +293,9 @@ class NpuControlHubSpec extends AnyFlatSpec {
       idleCore(dut)
       write(dut, NpuCtrlProtocol.PROG_LEN, 2L)
       write(dut, NpuCtrlProtocol.TRACE_CTRL, 5L) // enable, mode 2 = events + retire
-      dut.io.core_busy.poke(true.B)
+      dut.io.core_busy.poke(false.B)
       write(dut, NpuCtrlProtocol.CONTROL, 1L)
+      dut.io.core_busy.poke(true.B)
       dut.io.core_trace_retire.poke(true.B)
       dut.io.core_trace_pc.poke(0x10.U)
       dut.clock.step()
@@ -312,6 +316,38 @@ class NpuControlHubSpec extends AnyFlatSpec {
       val rec = (hi << 32) | (lo & 0xFFFFFFFFL)
       val evt = ((rec >> 8) & 0xFF).toInt
       assert(evt == NpuCtrlProtocol.Event.START, s"first trace event must be START, got $evt")
+
+      val lo2 = read(dut, NpuCtrlProtocol.TRACE_DATA)
+      val hi2 = read(dut, NpuCtrlProtocol.TRACE_DATA)
+      val rec2 = (hi2 << 32) | (lo2 & 0xFFFFFFFFL)
+      val evt2 = ((rec2 >> 8) & 0xFF).toInt
+      val pc2 = ((rec2 >> 16) & 0xFFFF).toInt
+      assert(evt2 == NpuCtrlProtocol.Event.RETIRE, s"second record must be RETIRE, got $evt2")
+      assert(pc2 == 0x10, s"retire PC must be 0x10, got 0x${pc2.toHexString}")
     }
   }
+  it should "record a watchdog event with its own event id" in {
+    simulate(new HubHarness) { dut =>
+      idleCore(dut)
+      write(dut, NpuCtrlProtocol.PROG_LEN, 2L)
+      write(dut, NpuCtrlProtocol.WATCHDOG, 5L)
+      write(dut, NpuCtrlProtocol.TRACE_CTRL, 3L) // enable, mode 1 = events only
+      dut.io.core_busy.poke(false.B)
+      write(dut, NpuCtrlProtocol.CONTROL, 1L)
+      dut.io.core_busy.poke(true.B)
+      dut.clock.step(10)
+      val ts = read(dut, NpuCtrlProtocol.TRACE_STATUS)
+      assert((ts & 0xFFFF) >= 2, s"expected START + WATCHDOG records, got $ts")
+      var found = false
+      for (_ <- 0 until ((ts & 0xFFFF).toInt)) {
+        val lo = read(dut, NpuCtrlProtocol.TRACE_DATA)
+        val hi = read(dut, NpuCtrlProtocol.TRACE_DATA)
+        val rec = (hi << 32) | (lo & 0xFFFFFFFFL)
+        if (((rec >> 8) & 0xFF) == NpuCtrlProtocol.Event.WATCHDOG) found = true
+      }
+      assert(found, "trace must contain a WATCHDOG event")
+      assert(read(dut, NpuCtrlProtocol.ERROR_CODE) == NpuCtrlProtocol.Error.WATCHDOG)
+    }
+  }
+
 }
