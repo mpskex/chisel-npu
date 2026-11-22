@@ -148,7 +148,7 @@ at ~12.3 GB.  In the ML-on flow, routing the ML-on placement took **36:15** and 
 **+0.056 ns**.  The default parallel set includes an ML-off safety placement
 intended to preserve that QoR (the 2-thread variant is under validation; use
 `ExtraTimingOpt:off:1` for the exact known-good placement path).  The fast
-ML-on-only path is ~1h27 end-to-end; the three-candidate QoR path is ~1h49–1:57.
+ML-on-only path is ~1h30 end-to-end; the two-candidate QoR path is ~1h50–2:03.
 `place_design -ultrathreads` was tested and is **not usable**: both attempts
 SIGSEGV in `HAPLFSimPLFlow::collectControlSetInfo` during Phase 2.5 Global
 Place Phase1 (a per-SLR thread race), so it is opt-in only.  The flow
@@ -217,7 +217,7 @@ tool/fpga/build_vu9p_parallel.sh --skip-chisel --skip-synth
 The default candidate set is one ML-on placement plus an ML-off 2-thread
 safety placement, so the flow can choose between the faster ML-on route
 (−0.055 ns) and the known-good QoR route (+0.056 ns).  For the fastest single
-bitstream, use `--jobs 1 --place-specs ExtraTimingOpt:on:8` (≈1h27
+bitstream, use `--jobs 1 --place-specs ExtraTimingOpt:on:8` (≈1h30
 synth-to-bitstream; WNS −0.055 ns).
 
 `build_npu_vu9p.tcl` is the project synth/opt/single-shot driver.  It now
