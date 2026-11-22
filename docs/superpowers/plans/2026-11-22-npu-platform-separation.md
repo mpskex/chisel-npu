@@ -406,3 +406,17 @@ cd ~/chisel-npu-paltform && git init && git add . && git commit -m "chore: boots
 - No task adds a memory controller to `NpuPeripheral`.
 - The platform repo path uses the user-supplied spelling.
 - Out-of-scope instruction reach scaling is not implemented.
+
+## Execution status (2026-11-22)
+
+- Tasks 1-9 completed on branch `fangrui/platform-cleanup`.
+- Relevant regression: `peripheral.NpuCtrlAxiLiteSpec` (2), `peripheral.NpuControlHubSpec` (7),
+  `dma.NpuDmaEngineSpec` (13), `engine.NpuProgramEngineFrontendSpec` (14),
+  `engine.NpuCoreControlSpec` (3), `peripheral.NpuPeripheralSpec` (1),
+  `engine.StreamedChainedSpec` (1), `engine.FrontendPerfCounterSpec` (1),
+  non-hw Python tests (28), platform Verilator lint + identity smoke.
+- The board repo is bootstrapped at `~/chisel-npu-paltform` and pins
+  `releases/NpuPeripheral.sv` + `releases/npu_peripheral.json`.
+- Deferred: full `sbt test` (long simulation), deletion of the legacy
+  `ip/vivado/**` / `tool/hw/**` trees, and wiring the legacy `ChiselNPU`
+  user API onto `NpuDriverCore`.
