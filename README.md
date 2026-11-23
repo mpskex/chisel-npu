@@ -41,7 +41,7 @@ This is a chisel workbench designed for someone who like docker containers and v
 - **Board-centric split**: the XDMA/PCIe configuration, DDR3/DDR4 controllers
   and their memory models, clocking, ILA and board testbenches live in the
   separate `npu-platform` repository (bootstrapped at
-  `~/chisel-npu-paltform`). The same `NpuPeripheral` release is pinned there.
+  `~/chisel-npu-platform`). The same `NpuPeripheral` release is pinned there.
 - **Legacy board flow**: Kintex-7 `xc7k480tffg1156-2` (PCIe + dual DDR3) and
   Virtex UltraScale+ `xcvu9p-flgb2104-2-e` (XDMA + 4× DDR4 MIG). The old
   `ip/vivado/**` trees remain for bring-up history and are scheduled to move

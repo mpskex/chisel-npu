@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Ship the NPU as a board-agnostic `NpuPeripheral` with NPUCTL v1 control, programmable segment bases, IRQ, watchdog, and trace, and split the board testbench into `~/chisel-npu-paltform`.
+**Goal:** Ship the NPU as a board-agnostic `NpuPeripheral` with NPUCTL v1 control, programmable segment bases, IRQ, watchdog, and trace, and split the board testbench into `~/chisel-npu-platform`.
 
 **Architecture:** A Chisel `NpuControlHub` wraps the existing `NpuProgramEngineFrontend`. The core keeps its instruction model and emits a segmented AXI master (segment sideband + segment-relative offset); the hub translates to a 64-bit system AXI master using five active segment base/limit registers. The board repo instantiates the same `NpuPeripheral` with board memory models, XDMA, and DDR controllers.
 
@@ -21,7 +21,7 @@
 - **Alignment:** segment bases 64-byte aligned; limits multiples of 64.
 - **Control protocol:** transport-agnostic valid/ready bus; AXI4-Lite adapter at the peripheral boundary. 32-bit registers, 4-byte aligned.
 - **No memory controllers in `NpuPeripheral`.** DDR/MIG/XDMA/PCIe/clock/reset/ILA/pins live in the board repo.
-- **Platform repo path:** `~/chisel-npu-paltform` (as requested; exact spelling).
+- **Platform repo path:** `~/chisel-npu-platform` (as requested; exact spelling).
 - **Tests:** every task adds a spec and runs it via `tool/test-specific-spec.sh <fully.qualified.Spec>`; the full suite runs via `make test`.
 - **Commits:** one commit per task, conventional messages.
 
@@ -351,7 +351,7 @@ git commit -m "docs: add NPUCTL v1 spec and release metadata"
 
 ---
 
-### Task 8: Platform repo `~/chisel-npu-paltform` and testbench skeletons
+### Task 8: Platform repo `~/chisel-npu-platform` and testbench skeletons
 
 **Files (new repo):**
 - `README.md`
@@ -368,7 +368,7 @@ git commit -m "docs: add NPUCTL v1 spec and release metadata"
 - [ ] **Step 4: Commit**
 
 ```bash
-cd ~/chisel-npu-paltform && git init && git add . && git commit -m "chore: bootstrap board testbench repo"
+cd ~/chisel-npu-platform && git init && git add . && git commit -m "chore: bootstrap board testbench repo"
 ```
 
 ---
@@ -415,7 +415,7 @@ cd ~/chisel-npu-paltform && git init && git add . && git commit -m "chore: boots
   `engine.NpuCoreControlSpec` (3), `peripheral.NpuPeripheralSpec` (1),
   `engine.StreamedChainedSpec` (1), `engine.FrontendPerfCounterSpec` (1),
   non-hw Python tests (28), platform Verilator lint + identity smoke.
-- The board repo is bootstrapped at `~/chisel-npu-paltform` and pins
+- The board repo is bootstrapped at `~/chisel-npu-platform` and pins
   `releases/NpuPeripheral.sv` + `releases/npu_peripheral.json`.
 - Review-driven fixes landed: broken direct-engine specs, native START cache
   invalidation, abort-drain, trace FIFO count/half-read/event IDs, AXI4-Lite

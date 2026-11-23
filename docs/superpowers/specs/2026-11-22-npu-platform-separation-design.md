@@ -382,7 +382,7 @@ register-map hash, and git revision.
    trace. No ISA change. Existing engine specs pass.
 3. `NpuPeripheral` + translation + integration tests + release artifact.
 4. Driver core + transport + `PlatformInfo` + allocator; fake transport.
-5. Platform repo (`~/chisel-npu-paltform`): board tops, memory-controller
+5. Platform repo (`~/chisel-npu-platform`): board tops, memory-controller
    models, XDMA transport, board tests, hardware bring-up.
 6. Future (out of scope): instruction reach scaling.
 

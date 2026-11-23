@@ -68,7 +68,7 @@ so the counts are **VX 32 / VE 16 / VR 8** (aliasing is unchanged).
   five active segment base/limit registers, local→system AXI translation,
   IRQ, watchdog, trace), the NPU engine, the IP-level driver core, and the
   generic simulation memory model.
-- **Board-centric (separate repo, bootstrapped at `~/chisel-npu-paltform`):**
+- **Board-centric (separate repo, bootstrapped at `~/chisel-npu-platform`):**
   XDMA/PCIe configuration, DDR3/DDR4 controllers and their AXI models,
   interconnect, clocking/reset, ILA, board constraints, bitstreams, and the
   host transport/allocator.
