@@ -176,6 +176,14 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   })
 
   // ==========================================================================
+  // Segment limits, registered on the core side as belt-and-braces (the hub
+  // already drives them from its START-latched active shadows).  The per-slot
+  // address fit is computed from this registered copy at window ENTRY, so the
+  // 13-bit comparator never sits in the issue / store-data-enable cycle.
+  // ==========================================================================
+  val segLimitR = RegNext(io.seg_limit)
+
+  // ==========================================================================
   // Decoder (combinational, for the incoming instruction)
   // ==========================================================================
   val decoder = Module(new InstrDecoder)
@@ -202,6 +210,9 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     val off        = UInt(12.W)
     val isStore    = Bool()
     val isMmaLast  = Bool()
+    // Address fit `(off + vecBytes) <= segLimitR(sect)`, computed once at
+    // entry (LD/ST only; always true otherwise) so the issue cycle is clean.
+    val fits       = Bool()
     val illegal    = Bool()
     val issued     = Bool()
     val done       = Bool()
@@ -729,9 +740,9 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
         issueVrStore   := isVrStore
         issueVrStoreVd := slots(s).rd
         val dmaSeg = Cat(0.U(1.W), slots(s).sect)
-        val vecBytes = MuxLookup(slots(s).memWidth, K.U(32.W))(Seq(
-          0.U -> K.U(32.W), 1.U -> (2 * K).U(32.W), 2.U -> (4 * K).U(32.W)))
-        val dmaFits = slots(s).off + vecBytes <= io.seg_limit(slots(s).sect)
+        // Registered at window entry: the 13-bit segment-fit compare is out of
+        // the issue / VR-store-data-enable cycle.
+        val dmaFits = slots(s).fits
         val dmaL3 = MuxLookup(slots(s).sect, 0.U(32.W))(Seq(
           NpuSections.SECT_A.U(2.W)     -> NpuSections.A.U(32.W),
           NpuSections.SECT_B.U(2.W)     -> NpuSections.B.U(32.W),
@@ -741,6 +752,12 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
         // Snapshot the vse's VX read mask for the tag-reader clear at done.
         val dmaMask = readSlotsL(slots(s).family, slots(s).rd,
           slots(s).rs1, slots(s).rs2, slots(s).memWidth, slots(s).vs3)
+        // The 1024-flop VR-store data bank is written with a LOCAL enable (the
+        // issue select + isVrStore), never with the fit/valid cone: the
+        // segment-fit compare must not reach its clock enable.
+        when (isVrStore) {
+          for (lane <- 0 until K) vrPending.storeData(lane) := rf.io.vr_r_data(0)(lane)
+        }
         when (!dmaFits) {
           dmaFault := true.B
           faultSegR := dmaSeg
@@ -762,7 +779,6 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
           vrPending.storeDataValid := true.B
           vrPending.dataReady := true.B
           vrPending.beats := 0.U
-          for (lane <- 0 until K) vrPending.storeData(lane) := rf.io.vr_r_data(0)(lane)
           vrPendingValid := true.B
         } .otherwise {
           dmaQ(dmaQTail).valid := true.B
@@ -990,6 +1006,12 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     slots(t).off        := dec.mem_off
     slots(t).isStore    := dec.family === OpFamily.ST
     slots(t).isMmaLast  := dec.family === OpFamily.MMA && dec.mma_last
+    // Address fit is decided once, at entry, from the registered limit.
+    val entIsMem = dec.family === OpFamily.LD || dec.family === OpFamily.ST
+    val entVecBytes = MuxLookup(dec.mem_width(1, 0), K.U(32.W))(Seq(
+      0.U -> K.U(32.W), 1.U -> (2 * K).U(32.W), 2.U -> (4 * K).U(32.W)))
+    slots(t).fits       := !entIsMem ||
+      (dec.mem_off + entVecBytes <= segLimitR(dec.rs1(1, 0)))
     slots(t).illegal    := illegalCond
     slots(t).issued     := false.B
     slots(t).done       := dec.family === OpFamily.NOP
@@ -1125,6 +1147,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
       slots(s).sect       := 0.U
       slots(s).off        := 0.U
       slots(s).isStore    := false.B
+      slots(s).fits       := false.B
       slots(s).illegal    := false.B
       slots(s).initPending := false.B
       for (j <- 0 until 6) {
@@ -1273,7 +1296,11 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   //      dir=3/fetch exclusion is preserved.  All sources are folded into one
   //      update per counter so a same-cycle entry + completion net correctly
   //      (up to 2 increments).
-  val mmaDoneWmask = (0xF.U << (capVd << 2))(L - 1, 0)
+  // Registered write mask for the per-completion VR write: (0xF << vd*4) is a
+  // dynamic 5->32 decoder, so it is registered at compValid (same completion as
+  // capVd/outBuf) instead of sitting on the per-mma wrDone update path.
+  val capMask = RegInit(0.U(L.W))
+  when (compValid) { capMask := (0xF.U << (compVd << 2))(L - 1, 0) }
   val mmaFeedRmask = readSlotsL(OpFamily.MMA.asUInt, feedRd, feedRs1, feedRs2, 0.U,
     feedVs3)
   // A vle of VE/VR writes SEVERAL VX slots (writeSlotsL expands by the load
@@ -1287,7 +1314,7 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
     for (i <- 0 until L) {
       // The mma capture write is visible on the RF write tick (clctPrev),
       // NOT on the delayed completion (compValid) one cycle earlier.
-      val wrIncMma = clctPrev && mmaDoneWmask(i)
+      val wrIncMma = clctPrev && capMask(i)
       val wrIncDma = dmaDoneHead && dmaHead.dir === 0.U && dmaVleWmask(i)
       val wrInc    = wrIncMma.asUInt +& wrIncDma.asUInt
       when (wrInc =/= 0.U) { wrDone(i) := wrDone(i) + wrInc }

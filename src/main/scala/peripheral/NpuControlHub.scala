@@ -409,12 +409,21 @@ class NpuControlHub(val K: Int = 32, val N: Int = 8, val L: Int = 32,
 
   // ==========================================================================
   // Core-facing segment values
+  //
+  // These come from the START-latched active shadows, never from the
+  // combinational `effLimit` mux: `segLimit -> effLimit -> Mux -> core` sat in
+  // the same cycle as the core's 13-bit address-fit compare and the 1024-flop
+  // VR-store data enable (the 100 MHz intra-fabric limiter).  The core only
+  // consumes them while it runs (they are registered by the startAccept edge;
+  // no translated AXI request exists before that).  The START-time
+  // codeFits/segAligned/segNoOverflow checks above still use the live
+  // configuration.
   // ==========================================================================
   val activeNow = (state === HubState.RUN) || io.core_busy
   for (i <- 0 until NUM_SEG) {
-    io.core_seg_limit(i) := Mux(activeNow, activeLimit(i), effLimit(i))
-    io.seg_base(i)       := Mux(activeNow, activeBase(i), segBaseWord(i))
-    io.seg_limit(i)      := Mux(activeNow, activeLimit(i), effLimit(i))
+    io.core_seg_limit(i) := activeLimit(i)
+    io.seg_base(i)       := activeBase(i)
+    io.seg_limit(i)      := activeLimit(i)
   }
   io.core_prog_len := Mux(activeNow, activeProgLen, progLen)
   io.core_entry_pc := Mux(activeNow, activeEntryPc, entryPc)
