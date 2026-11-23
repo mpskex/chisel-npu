@@ -33,8 +33,9 @@ class StreamedNSessionSpec extends AnyFlatSpec {
       for (m <- 0 until n) {
         StreamSpecUtil.issue(dut, vle8(4, NpuSections.SECT_A, m * k))
         StreamSpecUtil.issue(dut, vle8(8, NpuSections.SECT_B, m * k))
-        for (_ <- 0 until k) StreamSpecUtil.issue(dut, mma(0, 4, 8, 0))
-        StreamSpecUtil.issue(dut, mmaLast(0, 0, 0, 0))
+        // mma.last is a REAL feed: K-1 mma + the mma.last term = K terms.
+        for (_ <- 0 until k - 1) StreamSpecUtil.issue(dut, mma(0, 4, 8, 0))
+        StreamSpecUtil.issue(dut, mmaLast(0, 4, 8, 0))
         StreamSpecUtil.issue(dut, vse32(0, NpuSections.SECT_OUT, m * 4 * k))
       }
       StreamSpecUtil.runToDrain(dut)
@@ -86,8 +87,8 @@ class StreamedNSessionSpec extends AnyFlatSpec {
       StreamSpecUtil.issue(dut, vle8(4, NpuSections.SECT_A, 0))
       StreamSpecUtil.issue(dut, vle8(8, NpuSections.SECT_B, 0))
       StreamSpecUtil.issue(dut, vle32(3, NpuSections.SECT_ACCUM, 0))
-      StreamSpecUtil.issue(dut, mma(2, 4, 8, 3))
-      StreamSpecUtil.issue(dut, mmaLast(2, 0, 0, 3))
+      // ISA one-shot: ONE real mma.last carrying A, B and C.
+      StreamSpecUtil.issue(dut, mmaLast(2, 4, 8, 3))
       StreamSpecUtil.issue(dut, vse32(2, NpuSections.SECT_OUT, 0))
       StreamSpecUtil.runToDrain(dut)
       val out = StreamSpecUtil.readI32(dut, NpuSections.OUT, k)

@@ -2,8 +2,8 @@
 // -----------------------------------------------------------------------------
 //  CrossMatmulPipelineSpec.scala — consecutive matmul rounds must PIPELINE.
 //
-//  Each round is K accumulate feeds + mma.last (capture) + vse32 (store) in
-//  reduce mode.  Every round loads its OWN A/B row from its OWN slot, so a
+//  Each round is K real `mma` feeds + one real `mma.last` feed (so K+1 terms;
+//  mma.last is a real (A,B) feed, not a zero terminator) + vse32 (store).  Every round loads its OWN A/B row from its OWN slot, so a
 //  capture that stalled on another round's snapshot cannot pass.
 //
 //  The binding product metric is DRAIN-INCLUSIVE: 100 * feeds / total, where
@@ -44,11 +44,12 @@ class CrossMatmulPipelineSpec extends AnyFlatSpec {
   def bRow(r: Int, K: Int): Array[Int] =
     Array.tabulate(K)(j => (1 + ((r * 7 + j * 5) % 29)) & 0xFF)
 
-  /** Expected capture of round r: K identical A_r x B_r feeds, so the stored
-    * column is K * a_r(i) * b_r(j). */
+  /** Expected capture of round r: K identical `mma` feeds plus the round-ending
+    * real `mma.last` feed = K+1 identical A_r x B_r terms, so the stored column
+    * is (K+1) * a_r(i) * b_r(j). */
   def expected(r: Int, K: Int): Array[Array[Int]] = {
     val a8 = aRow(r, K).map(s8); val b8 = bRow(r, K).map(s8)
-    Array.tabulate(K, K)((i, j) => K * a8(i) * b8(j))
+    Array.tabulate(K, K)((i, j) => (K + 1) * a8(i) * b8(j))
   }
 
   def checkRound(out: Array[Int], slot: Int, r: Int, K: Int): Unit = {
@@ -57,13 +58,19 @@ class CrossMatmulPipelineSpec extends AnyFlatSpec {
       s"K=$K round $r capture is not its own running-sum column: got=${got.take(8).toList}")
   }
 
-  /** Capture-VR rotation depth.  A deferred store reads VR[capVr(round)]
-    * later than its capture, so the capture must still be resident: defer
-    * must be < capRot.  K=32 keeps 4 operand VRs (VR4..7) disjoint from the 4
-    * rotating capture VRs (VR0..3). */
-  def capRotOf(K: Int): Int = if (K >= 32) 4 else 1
+  /** Capture-VR rotation depth.  A store reads VR[capVr(round)] when it
+    * reaches the DMA head, ~one capture latency after its round, so the
+    * capture must survive a few rounds: capRot must exceed the store's issue
+    * delay in rounds.  Every feed now writes its capture VR (hybrid per-mma
+    * writes), so a single capture VR (K=16's old capRot=1) cannot be retained
+    * across the DMA latency.  K=32 keeps 4 operand VRs (VR4..7) disjoint from
+    * the 4 rotating capture VRs (VR0..3); K=16 has 4 VRs total, so 3 capture
+    * VRs + 1 operand VR. */
+  def capRotOf(K: Int): Int = if (K >= 32) 4 else 3
   /** Operand batches prefetched with one vle32 each. */
-  def prefetchOf(K: Int): Int = if (K >= 32) 3 else 2
+  /** Prefetch depth must not exceed the operand-VR rotation depth (opVrs), or
+    * a prefetch would land in the VR the current round is still reading. */
+  def prefetchOf(K: Int): Int = if (K >= 32) 3 else 0
   /** Rounds between a capture and its store. */
   def storeDeferOf(K: Int): Int = if (K >= 32) 3 else 0
 
@@ -96,9 +103,9 @@ class CrossMatmulPipelineSpec extends AnyFlatSpec {
         val r0 = 2 * b; val r1 = r0 + 1
         load(b + prefetch) ++
           (0 until K).map(_ => mma(capVr(r0), 4 * vr, 4 * vr + 1, 0)) ++
-          Seq(mmaLast(capVr(r0), 0, 0, 0)) ++ store(r0 - storeDefer) ++
+          Seq(mmaLast(capVr(r0), 4 * vr, 4 * vr + 1, 0)) ++ store(r0 - storeDefer) ++
           (0 until K).map(_ => mma(capVr(r1), 4 * vr + 2, 4 * vr + 3, 0)) ++
-          Seq(mmaLast(capVr(r1), 0, 0, 0)) ++ store(r1 - storeDefer)
+          Seq(mmaLast(capVr(r1), 4 * vr + 2, 4 * vr + 3, 0)) ++ store(r1 - storeDefer)
       } ++
       (math.max(0, rounds - storeDefer) until rounds).flatMap(store)
   }

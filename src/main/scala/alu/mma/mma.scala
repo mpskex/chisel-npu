@@ -72,13 +72,16 @@ import chisel3._
     dclct.io.dat_clct  := pipe_dat_clct
     dclct.io.use_accum := pipe_use_accum
     dclct.io.session_reset := io.session_reset
-    // PE(0,0)-aligned keep: the 1->0 edge is the diagonal reset wave that ends
-    // a round.  The collector uses it to snapshot the round's running-sum
-    // column before the next round's first feed clears the PEs.  This is the
-    // existing ctrl-bundle keep bit (no new ISA field), tapped at PE(0,0)
-    // because the ControlUnit pipelines it and the collector has no other view
-    // of the reset wave.
-    dclct.io.keep_d    := pipe_ctrl(0).keep
+    // Round-end reset-wave start, PE(0,0)-aligned: the mma.last feed drives
+    // busy=1/keep=0 into the ControlUnit, and the PE(0,0) control is that pair
+    // delayed by 2 (ControlUnit reg(0) + pipe_ctrl) - exactly the cycle the
+    // diagonal PE reset wave starts.  Driving this from the control itself
+    // (rather than a keep 1->0 edge) also covers a session whose FIRST feed is
+    // the mma.last: there the idle keep=0 merges into the round's keep=0 and
+    // the falling edge never happens, which silently skipped the one-shot
+    // round-final snapshot.  (Two explicit RegNexts rather than
+    // ShiftRegister(_, 2, false.B), which elaborates to a constant here.)
+    dclct.io.round_end := RegNext(RegNext(io.ctrl.busy && !io.ctrl.keep, false.B), false.B)
     io.clct            := pipe_clct
 
     val sarray = Module(new sa.SystolicArray2D(n, nbits))
