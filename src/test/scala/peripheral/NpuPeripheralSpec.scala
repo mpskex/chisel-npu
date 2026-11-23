@@ -48,7 +48,7 @@ class PeripheralHarness extends Module {
     val irq = Output(Bool())
   })
 
-  val dut = Module(new NpuPeripheral(K = 16, N = 8, W = 4))
+  val dut = Module(new NpuPeripheral(K = 16, N = 8, W = 8))
   val ram = Module(new AxiRamModel())
 
   dut.io.s_axil_awaddr  := io.s_axil_awaddr
@@ -205,15 +205,19 @@ class NpuPeripheralSpec extends AnyFlatSpec {
       val k = 16
       val a = Array.tabulate(k)(j => j + 1)
       val b = Array.tabulate(k)(i => 100 + i)
+      val c = Array.tabulate(k)(i => 1000 + i)
+      // ISA one-shot: ONE real mma.last carrying A, B and C.  The deterministic
+      // round-final capture is the ISA column B[K-1]: out(i) = A[i]*B[K-1] + C[i].
       val prog = Seq(
         vle8(rd = 4, sect = NpuSections.SECT_A, off = 0),
         vle8(rd = 8, sect = NpuSections.SECT_B, off = 0),
-        mma(rd = 2, vs1 = 4, vs2 = 8, vs3 = 0),
-        mmaLast(rd = 2, vs1 = 0, vs2 = 0, vs3 = 0),
+        vle32(rd = 3, sect = NpuSections.SECT_ACCUM, off = 0),
+        mmaLast(rd = 2, vs1 = 4, vs2 = 8, vs3 = 3),
         vse32(src = 2, sect = NpuSections.SECT_OUT, off = 0)
       )
       preloadI8(dut, 0x0000L, a)
       preloadI8(dut, 0x1000L, b)
+      preloadI32(dut, 0x2000L, c)
       preloadI32(dut, 0x3000L, Seq.fill(k)(0))
       preloadInstrs(dut, prog)
 
@@ -232,9 +236,11 @@ class NpuPeripheralSpec extends AnyFlatSpec {
       assert(((status >> 1) & 1) == 1, s"session did not complete: status=0x${status.toHexString}")
 
       val out = readI32(dut, 0x3000L, k)
-      val cols = (0 until k).filter(col =>
-        (0 until k).forall(i => out(i) == a(i) * b(col)))
-      assert(cols.nonEmpty, s"capture is not a column of a*b: ${out.toList}")
+      for (i <- 0 until k) {
+        assert(out(i) == a(i) * b(k - 1) + c(i),
+          s"one-shot lane $i: got ${out(i)}, want ${a(i)}*${b(k - 1)}+${c(i)} " +
+          s"= ${a(i) * b(k - 1) + c(i)}: ${out.toList}")
+      }
 
       // Let the core leave RUN_DONE before the next START.
       var w = 0
@@ -244,7 +250,6 @@ class NpuPeripheralSpec extends AnyFlatSpec {
 
       // Second session with the SAME PROG_LEN/ENTRY_PC but rewritten CODE at
       // the same address.  Native START must invalidate the line cache.
-      val c = Array.tabulate(k)(i => 1000 + i)
       preloadI32(dut, 0x2000L, c)
       preloadInstrs(dut, Seq(
         vle32(rd = 3, sect = NpuSections.SECT_ACCUM, off = 0),
