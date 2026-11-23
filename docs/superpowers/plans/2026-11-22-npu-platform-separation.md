@@ -437,8 +437,11 @@ cd ~/chisel-npu-platform && git init && git add . && git commit -m "chore: boots
   `releases/NpuPeripheral_K16.sv` (K=16/L=16, same ports, NPUCTL map and ISA).
   Final image: WNS **+0.030 ns**, WHS **+0.015 ns**, 0 failing endpoints,
   115,364 LUTs (38.6%), 156,058 FF (26.1%), 54 BRAM (5.7%), 18.7 MB bitstream.
-- **vu9p**: K=32 release, 200 MHz fabric; build launched after the xc7k image
-  was programmed. Results are recorded in the platform repo.
+- **vu9p**: verified and programmed. K=32 release, 200 MHz fabric:
+  WNS **+0.003 ns**, WHS **+0.010 ns**, 0 failing endpoints (998,756 setup /
+  995,644 hold); 326,402 LUTs (27.6%), 393,993 FF (16.7%), 192.5 BRAM,
+  12 DSP; 80,159,239-byte bitstream. Programmed through `10.16.0.35:3121`
+  (`End of startup status: HIGH`, 4 MIG cores).
 - **K=16 release**: `top.MainK16` + `make release-k16` produce
   `build/NpuPeripheral_K16.sv` and `build/npu_peripheral_k16.json`
   (`K=16, N=8, L=16, W=8`). RTL hash
@@ -454,8 +457,9 @@ cd ~/chisel-npu-platform && git init && git add . && git commit -m "chore: boots
 3. Drive the NPU reset through a `BUFG` — `phys_opt_design` segfaults in
    `HAPSFanOpt::cellDupForEachBin` replicating the high-fanout
    `calib_sync[1]` reset.
-4. Run implementation on one thread — the post-route bus-skew timing update
-   segfaults in a timing worker thread at >1.
+4. Run xc7k480t implementation on one thread — the post-route bus-skew timing
+   update segfaults in a timing worker thread at >1. The vu9p image routed at
+   8 threads with WNS +0.003 ns.
 
 ### Regression
 
@@ -470,5 +474,15 @@ cd ~/chisel-npu-platform && git init && git add . && git commit -m "chore: boots
 - Board full-session smoke (NPUCTL segment programming + IRQ/trace on silicon).
 - Porting the legacy `ChiselNPU` user API onto `NpuDriverCore`.
 - Registered 64-bit translation stage.
-- Deletion of `ip/vivado/**` / `tool/hw/**` from this repo, pending the vu9p
-  build.
+- PCIe enumeration on both lab hosts after JTAG programming requires a host
+  warm reboot; SBR/rescan alone did not train the link. The boards are
+  programmed (startup HIGH); the host reboot is intentionally left to the user.
+
+### Cleanup (done)
+
+- The legacy `ip/vivado/**`, `tool/hw/**`, board `FPGA_*.md` docs and the three
+  board skills were removed from the IP repository in commit `b2a5dd2`, after
+  both bitstreams were verified. The platform repo is the sole owner of board
+  Vivado flows, constraints, bitstreams, docs and hardware tests.
+- The IP repo now carries only the IP, driver core, ISA/design docs and the
+  release targets (`make release`, `make release-k16`).
