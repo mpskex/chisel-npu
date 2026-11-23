@@ -127,6 +127,8 @@ class MMALUStreamReduceSpec extends AnyFlatSpec {
       val keepHigh = (iTick < M) && !injectReset.contains(iTick)
       dut.io.ctrl.keep.poke(keepHigh)
       dut.io.ctrl.busy.poke(iTick < M)
+      // Raw feed stream only: no round-capture strobe.
+      dut.io.round_end.poke(false.B)
       dut.io.ctrl.use_accum.poke(false)
 
       dut.clock.step()

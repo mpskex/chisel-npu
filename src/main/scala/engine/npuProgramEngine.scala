@@ -862,6 +862,12 @@ class NpuProgramEngine(val K: Int = 32, val N: Int = 8, val W: Int = 16) extends
   mmalu.io.ctrl.busy      := feedValid
   mmalu.io.ctrl.use_accum := feedValid
   mmalu.io.session_reset  := io.session_reset
+  // Round-end reset-wave strobe, PE(0,0)-aligned: the mma.last feed's control
+  // pair (busy=1/keep=0) delayed by the ControlUnit reg + pipe_ctrl, i.e. the
+  // cycle the diagonal PE reset wave starts.  This is the same 2-cycle
+  // alignment the collector used to derive internally; the collector takes it
+  // as an explicit input so direct MMALU users can tie it off.
+  mmalu.io.round_end      := RegNext(RegNext(feedValid && feedMmaLast, false.B), false.B)
 
   for (lane <- 0 until K) {
     // in_a / in_b: read VX[vs1]/VX[vs2] on EVERY feed, including the round-end

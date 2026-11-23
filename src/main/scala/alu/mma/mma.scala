@@ -28,6 +28,12 @@ import chisel3._
         val in_accum    = Input(Vec(n, SInt(accum_nbits.W)))
         val ctrl        = Input(new NCoreMMALUCtrlBundle())
         val session_reset = Input(Bool())   // flush the collector snapshot FIFO
+        // Round-end reset-wave strobe, PE(0,0)-aligned: asserted on the cycle
+        // the diagonal PE reset wave of a round starts (the mma.last feed's
+        // control delayed by ControlUnit reg + pipe_ctrl).  Explicit input, not
+        // derived from ctrl: a direct MMALU user drives feed streams with
+        // mid-stream keep=0 resets too, and those are not round ends.
+        val round_end   = Input(Bool())
         val out         = Output(Vec(n, SInt(accum_nbits.W)))
         val clct        = Output(Bool())
         val dbg_cnt     = Output(UInt(log2Ceil(n).W))   // collector phase
@@ -72,16 +78,11 @@ import chisel3._
     dclct.io.dat_clct  := pipe_dat_clct
     dclct.io.use_accum := pipe_use_accum
     dclct.io.session_reset := io.session_reset
-    // Round-end reset-wave start, PE(0,0)-aligned: the mma.last feed drives
-    // busy=1/keep=0 into the ControlUnit, and the PE(0,0) control is that pair
-    // delayed by 2 (ControlUnit reg(0) + pipe_ctrl) - exactly the cycle the
-    // diagonal PE reset wave starts.  Driving this from the control itself
-    // (rather than a keep 1->0 edge) also covers a session whose FIRST feed is
-    // the mma.last: there the idle keep=0 merges into the round's keep=0 and
-    // the falling edge never happens, which silently skipped the one-shot
-    // round-final snapshot.  (Two explicit RegNexts rather than
-    // ShiftRegister(_, 2, false.B), which elaborates to a constant here.)
-    dclct.io.round_end := RegNext(RegNext(io.ctrl.busy && !io.ctrl.keep, false.B), false.B)
+    // Round-end reset-wave start, PE(0,0)-aligned.  The engine derives it from
+    // the mma.last feed (busy=1/keep=0 delayed by ControlUnit reg(0) +
+    // pipe_ctrl, i.e. exactly the cycle the diagonal PE reset wave starts);
+    // other users tie it low when they do not use round capture.
+    dclct.io.round_end := io.round_end
     io.clct            := pipe_clct
 
     val sarray = Module(new sa.SystolicArray2D(n, nbits))
