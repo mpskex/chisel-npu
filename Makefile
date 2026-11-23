@@ -82,7 +82,7 @@ docs:
 	python3 -m mkdocs serve
 
 clean:
-	rm -rf project/target project/project/target target *.v *.anno.json top.sv top_k16.sv $(VIVADO_LOGDIR)
+	rm -rf project/target project/project/target target *.v *.anno.json top.sv top_k16.sv
 
 clean-cache:
 	rm -rf .cache
