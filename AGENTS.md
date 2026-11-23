@@ -75,9 +75,9 @@ so the counts are **VX 32 / VE 16 / VR 8** (aliasing is unchanged).
 
 The released artifact is `NpuPeripheral.sv` plus `build/npu_peripheral.json`
 (see `make release`). The platform repo pins that release; it must not patch
-the NPU RTL per board. The board flows have been migrated to
-`~/chisel-npu-platform`; the in-repo `ip/vivado/**` and `tool/hw/**` copies are
-scheduled for deletion once the migrated board builds are verified.
+the NPU RTL per board. The board flows live in `~/chisel-npu-platform` (board scripts, constraints,
+bitstreams, `docs/FPGA_*.md`, hardware tests).  This IP repository carries no
+Vivado project or board-test tree.
 
 The normative control protocol is `docs/designs/07.npuctl-v1.md`. The NPU ISA
 and instruction program model are frozen; segment base registers relocate the
@@ -147,8 +147,7 @@ as saturate. See `src/main/scala/isa/instrFormat.scala` for the full `CvtFunct7`
 - `isa/` — `instrFormat.scala`, `instSetArch.scala`, `InstrTable.scala` (authoritative decode map), `NpuAssembler.scala`, `instrDecoder.scala`, `NpuDisassembler.scala`, `dataType.scala`, `micro_op/` (VALUMicroCode, MMALUMicroCode, memMicroCode).
 - `sram/register.scala` — legacy `RegisterBlock` (still used by old tests).
 - `sram/multiWidthRegister.scala` — `MultiWidthRegisterBlock` (VX/VE/VR aliased RF, used by both `NCoreBackend` and `NpuProgramEngine`).
-- `utils/gates.scala`, `top/top.scala` (elaborates `NpuPeripheral(K=32, N=8, W=8)` → `top.sv`).
-- `ip/vivado/` — packaged Vivado project. Not part of sbt build.
+- `utils/gates.scala`, `top/top.scala` (`Main` elaborates `NpuPeripheral(K=32, N=8, W=8)` → `top.sv`; `MainK16` emits `top_k16.sv`).
 
 ## Testing
 

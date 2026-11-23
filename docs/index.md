@@ -59,13 +59,9 @@ Confusing them causes hard-to-debug hardware elaboration errors.
     - [Vector ALU (VALU)](implementations/VectorALU.md) — K-lane, FP32/BF16/BF8, multi-width arithmetic (used by `NCoreBackend`, not the FPGA top)
     - [Register Files](implementations/Registers.md) — `MultiWidthRegisterBlock`, VX/VE/VR aliasing
 
-- [Program Engine](designs/04.streamed-issuing.md) — `NpuProgramEngineFrontend` (the FPGA top, K=16, W=4): fetch frontend + dispatch window + scoreboard + MMA capture/chaining + 2-stage feed pipeline
+- [Program Engine](designs/04.streamed-issuing.md) — `NpuProgramEngineFrontend` (K=32 on vu9p, K=16 on xc7k480t): fetch frontend + dispatch window + scoreboard + MMA capture/chaining + 2-stage feed pipeline
 
 - [Quantization Pipeline](implementations/Quantization.md) — worked example: MMA → vcvt → vfma → vcvt INT8 requantization
-
-- [FPGA Verification Platform (xc7k480t)](implementations/FPGA_XC7K480T.md) — PCIe Gen2×8 + dual DDR3 + K=16 program engine at 100 MHz; legacy V10 topology history
-
-- [FPGA Bring-up (xcvu9p)](implementations/FPGA_VU9P.md) — Virtex UltraScale+ (`xcvu9p-flgb2104-2-e`): PCIe Gen3×8 + 4× DDR4, engine timing-closed at 200 MHz, remote `hw_server` programming
 
 - [Silicon Bring-up Log](implementations/SiliconBringup.md) — program-engine determinism fixes found on the xc7k480t
 

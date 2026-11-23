@@ -47,8 +47,8 @@ This is a chisel workbench designed for someone who like docker containers and v
 - **Board flows**: Kintex-7 `xc7k480tffg1156-2` (PCIe + dual DDR3) and
   Virtex UltraScale+ `xcvu9p-flgb2104-2-e` (XDMA + 4× DDR4 MIG) now live in the
   separate `~/chisel-npu-platform` repository (Vivado projects, constraints,
-  bitstreams, board tests). The old in-repo `ip/vivado/**` and `tool/hw/**`
-  copies are being removed from this IP repository.
+  bitstreams, board tests). This IP repository no longer carries the old
+  `ip/vivado/**` or `tool/hw/**` trees.
 
 ## Usage
 

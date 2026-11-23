@@ -97,6 +97,6 @@ FIFO.
 # simulation regression
 sbt "testOnly engine.CaptureDeterminismSpec engine.StreamedChainedSpec"
 
-# hardware (after flashing ip/vivado/xc7k480t/top_npu_engine.bit, 100 MHz)
+# hardware (after flashing ~/chisel-npu-platform/boards/xc7k480t/vivado/top_npu_engine.bit, 100 MHz)
 .venv/bin/python -m pytest tests/test_program_engine.py -v
 ```

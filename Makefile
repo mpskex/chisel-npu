@@ -1,4 +1,4 @@
-.PHONY: docs build release k16 release-k16 build-fpga build-fpga-debug build-fpga-clean test-hw py-build py-deploy py-test-unit py-test-hw
+.PHONY: docs build release k16 release-k16 py-build py-deploy py-test-unit py-test-hw
 
 export ARCH=`uname -m`
 # Currently the image does not support arm64, 
@@ -42,37 +42,8 @@ k16:
 release-k16: k16
 	K=16 SV=top_k16.sv OUT_SV=NpuPeripheral_K16.sv OUT_JSON=npu_peripheral_k16.json bash tool/release_manifest.sh
 
-build-sc: top.v
-	if [ ${ARCH} = "arm64" ]; then docker run -u $(id -u):$(id -g) --rm -i -v ${PWD}:/workspace/ fangruil/chisel-dev:arm64 verilator top.v -sc -Mdir systemc; else docker run -u $(id -u):$(id -g) --rm -i -v ${PWD}:/workspace/ fangruil/chisel-dev:amd64 verilator top.v -sc -Mdir systemc; fi
-
-# Vivado FPGA build (host tool, not Docker)
-VIVADO        ?= $(HOME)/Xilinx/2025.2/Vivado/bin/vivado
-CHIP          ?= xc7k480t
-VIVADO_LOGDIR ?= build
-
-build-fpga: top.v
-	mkdir -p $(VIVADO_LOGDIR)
-	$(VIVADO) -mode batch \
-		-source ip/vivado/$(CHIP)/scripts/build_npu.tcl \
-		-log $(VIVADO_LOGDIR)/build_npu_$(CHIP).log \
-		-journal $(VIVADO_LOGDIR)/build_npu_$(CHIP).jou
-
-build-fpga-debug: top.v
-	mkdir -p $(VIVADO_LOGDIR)
-	$(VIVADO) -mode batch \
-		-source ip/vivado/$(CHIP)/scripts/build_npu_with_ila.tcl \
-		-log $(VIVADO_LOGDIR)/build_npu_$(CHIP)_debug.log \
-		-journal $(VIVADO_LOGDIR)/build_npu_$(CHIP)_debug.jou
-
-build-fpga-clean:
-	rm -rf ip/vivado/$(CHIP)/proj
-
-# FPGA hardware tests (run against live FPGA host via SSH)
-FPGA_HOST ?= fpga
-
-test-hw:
-	python3 -m pytest tool/hw/tests/ -v -m hw \
-		--fpga-host $(FPGA_HOST) --skip-program
+build-sc: build
+	if [ ${ARCH} = "arm64" ]; then docker run -u $(id -u):$(id -g) --rm -i -v ${PWD}:/workspace/ fangruil/chisel-dev:arm64 verilator top.sv -sc -Mdir systemc; else docker run -u $(id -u):$(id -g) --rm -i -v ${PWD}:/workspace/ fangruil/chisel-dev:amd64 verilator top.sv -sc -Mdir systemc; fi
 
 # Python userspace driver (drivers/chisel_npu_py)
 PY_DIR      := drivers/chisel_npu_py
