@@ -504,10 +504,12 @@ The same `NpuDriverCore` plus the platform `XdmaTransport` (bypass-BAR
 
 - NPUCTL 1.0; xc7k `K=16 N=8 L=16 W=8`, vu9p `K=32 N=8 L=32 W=8`.
 - `vle8 A -> vse8 OUT` round trip: **PASS** on both (16/32 bytes).
-- `mma` + `mma.last` executes the accumulator and one feed (`C+1` observed);
-  the full K×1/GEMM group collect is the next board validation.  The old
-  single-`mma.last` one-shot from `engine_smoke4` test 1 is W=4-era behavior,
-  not the W=8 group semantics.
+- `mma` + `mma.last` executes the accumulator, but the A·B term is wrong
+  (`C+1` for the one-shot).  The grouped GEMM (`mma`/`mma.last` per k,
+  chained C) fails on every lane on both boards.  Load/store is bit-exact,
+  so this is the W=8 MMA feed/C-chaining path, not DMA or NPUCTL.
+  `engine_smoke4` is W=4-era; the current Chisel suite does not exercise a
+  W=8 GEMM.  A W=8 MMA regression test/fix is an IP-level follow-up.
 
 A clean 100 MHz vu9p rebuild (clock IP reset + 10 ns assertion) is in progress;
 the current 100 MHz image remains programmed and smoke-tested.  The IP branch
