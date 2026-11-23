@@ -426,3 +426,49 @@ cd ~/chisel-npu-platform && git init && git add . && git commit -m "chore: boots
   `ip/vivado/**` / `tool/hw/**` trees, a registered 64-bit translation stage
   (v1 is combinational; translator test covers >4GB), a full-session board
   smoke, and wiring the legacy `ChiselNPU` user API onto `NpuDriverCore`.
+
+## Execution status update (2026-11-23)
+
+### Board build verification
+
+- **xc7k480t**: verified and programmed. The K=32 image is unroutable on this
+  part (NPU 175,734 LUT / 58.9%; total 240,921/298,600 = 80.7%; router reports
+  global congestion level 6). The board now pins
+  `releases/NpuPeripheral_K16.sv` (K=16/L=16, same ports, NPUCTL map and ISA).
+  Final image: WNS **+0.030 ns**, WHS **+0.015 ns**, 0 failing endpoints,
+  115,364 LUTs (38.6%), 156,058 FF (26.1%), 54 BRAM (5.7%), 18.7 MB bitstream.
+- **vu9p**: K=32 release, 200 MHz fabric; build launched after the xc7k image
+  was programmed. Results are recorded in the platform repo.
+- **K=16 release**: `top.MainK16` + `make release-k16` produce
+  `build/NpuPeripheral_K16.sv` and `build/npu_peripheral_k16.json`
+  (`K=16, N=8, L=16, W=8`). RTL hash
+  `ee3e0b93a2e624584ffc1ebabe1fb14c1c0797b19addd95eb8046fe11cb0f872`.
+
+### Vivado 2025.2 workarounds (recorded in the platform scripts)
+
+1. `FLATTEN_HIERARCHY full` on the NPU OOC and top synthesis runs — the
+   partition merge/timing-genome pass hangs (4 h, no progress) or segfaults.
+2. Launch synth runs with `-jobs 1` — the file-integrity registry false-positive
+   ("libxv_*.so is corrupt") aborts when several synthesis processes start
+   together.
+3. Drive the NPU reset through a `BUFG` — `phys_opt_design` segfaults in
+   `HAPSFanOpt::cellDupForEachBin` replicating the high-fanout
+   `calib_sync[1]` reset.
+4. Run implementation on one thread — the post-route bus-skew timing update
+   segfaults in a timing worker thread at >1.
+
+### Regression
+
+- Full `sbt test`: 175/176 passed. The single failure
+  (`engine.FrontendThroughputSpec`) was a Verilator internal compiler fault;
+  the spec passes 1/1 when rerun alone (4m43s).
+- Platform Python tests: 3/3 passed. Targeted Chisel suites and the non-HW
+  driver tests remain green.
+
+### Deferred (unchanged)
+
+- Board full-session smoke (NPUCTL segment programming + IRQ/trace on silicon).
+- Porting the legacy `ChiselNPU` user API onto `NpuDriverCore`.
+- Registered 64-bit translation stage.
+- Deletion of `ip/vivado/**` / `tool/hw/**` from this repo, pending the vu9p
+  build.
