@@ -491,3 +491,25 @@ cd ~/chisel-npu-platform && git init && git add . && git commit -m "chore: boots
   Vivado flows, constraints, bitstreams, docs and hardware tests.
 - The IP repo now carries only the IP, driver core, ISA/design docs and the
   release targets (`make release`, `make release-k16`).
+
+### Board bring-up (2026-11-23)
+
+Both lab hosts were warm-rebooted (required for PCIe retraining after JTAG
+loading).  The FPGA functions enumerate: xc7k `01:00.0` `10ee:7028`, vu9p
+`10:00.0` `10ee:903f`.  `xdma.ko` loads on both and the `/dev/xdma0_*` nodes
+appear.
+
+The same `NpuDriverCore` plus the platform `XdmaTransport` (bypass-BAR
+`mmap` for NPUCTL, `dma_to_device`/`dma_from_device` for memory) runs on both:
+
+- NPUCTL 1.0; xc7k `K=16 N=8 L=16 W=8`, vu9p `K=32 N=8 L=32 W=8`.
+- `vle8 A -> vse8 OUT` round trip: **PASS** on both (16/32 bytes).
+- `mma` + `mma.last` executes the accumulator and one feed (`C+1` observed);
+  the full K×1/GEMM group collect is the next board validation.  The old
+  single-`mma.last` one-shot from `engine_smoke4` test 1 is W=4-era behavior,
+  not the W=8 group semantics.
+
+A clean 100 MHz vu9p rebuild (clock IP reset + 10 ns assertion) is in progress;
+the current 100 MHz image remains programmed and smoke-tested.  The IP branch
+was fast-forwarded into local `main`; pushing to `origin` is blocked because
+none of the local SSH keys has GitHub access.
