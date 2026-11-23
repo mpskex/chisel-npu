@@ -441,10 +441,12 @@ cd ~/chisel-npu-platform && git init && git add . && git commit -m "chore: boots
   image: `build_npu_vu9p.tcl` linked a stale `clk_wiz_fabric` OOC DCP (100 MHz)
   even though the XCI/RTL requested 200 MHz. The reported WNS +0.003 / WHS
   +0.010 and 326,402 LUTs (27.6%) are therefore a 100 MHz build, not 200 MHz
-  signoff. The 100 MHz image is functional on the board (`End of startup
-  status: HIGH`, 4 MIG cores), but it is not the baseline. The flow now resets
-  the clock IP run and asserts a 5.000 ns fabric period; a full 200 MHz
-  rebuild is in progress.
+  signoff. The 100 MHz image is the **correct K=32 operating
+  point**: the worst intra-fabric path is 9.624 ns (~104 MHz). A 200 MHz K=32
+  build would need an NPU pipeline stage (out of scope here); the earlier
+  200 MHz claim came from the K16 design. The 100 MHz image is programmed
+  (`End of startup status: HIGH`, 4 MIG cores); the flow now pins the clock IP
+  to 100 MHz and asserts a 10.000 ns fabric period before implementation.
 - **K=16 release**: `top.MainK16` + `make release-k16` produce
   `build/NpuPeripheral_K16.sv` and `build/npu_peripheral_k16.json`
   (`K=16, N=8, L=16, W=8`). RTL hash
