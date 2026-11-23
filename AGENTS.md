@@ -75,8 +75,9 @@ so the counts are **VX 32 / VE 16 / VR 8** (aliasing is unchanged).
 
 The released artifact is `NpuPeripheral.sv` plus `build/npu_peripheral.json`
 (see `make release`). The platform repo pins that release; it must not patch
-the NPU RTL per board. Existing `ip/vivado/**` and `tool/hw/**` are the
-legacy in-repo board flow and are scheduled to move to the platform repo.
+the NPU RTL per board. The board flows have been migrated to
+`~/chisel-npu-platform`; the in-repo `ip/vivado/**` and `tool/hw/**` copies are
+scheduled for deletion once the migrated board builds are verified.
 
 The normative control protocol is `docs/designs/07.npuctl-v1.md`. The NPU ISA
 and instruction program model are frozen; segment base registers relocate the

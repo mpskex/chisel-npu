@@ -42,12 +42,11 @@ This is a chisel workbench designed for someone who like docker containers and v
   and their memory models, clocking, ILA and board testbenches live in the
   separate `npu-platform` repository (bootstrapped at
   `~/chisel-npu-platform`). The same `NpuPeripheral` release is pinned there.
-- **Legacy board flow**: Kintex-7 `xc7k480tffg1156-2` (PCIe + dual DDR3) and
-  Virtex UltraScale+ `xcvu9p-flgb2104-2-e` (XDMA + 4× DDR4 MIG). The old
-  `ip/vivado/**` trees remain for bring-up history and are scheduled to move
-  to the platform repo. See
-  [docs/implementations/FPGA_XC7K480T.md](docs/implementations/FPGA_XC7K480T.md)
-  and [docs/implementations/FPGA_VU9P.md](docs/implementations/FPGA_VU9P.md).
+- **Board flows**: Kintex-7 `xc7k480tffg1156-2` (PCIe + dual DDR3) and
+  Virtex UltraScale+ `xcvu9p-flgb2104-2-e` (XDMA + 4× DDR4 MIG) now live in the
+  separate `~/chisel-npu-platform` repository (Vivado projects, constraints,
+  bitstreams, board tests). The old in-repo `ip/vivado/**` and `tool/hw/**`
+  copies are being removed from this IP repository.
 
 ## Usage
 
