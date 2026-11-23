@@ -437,11 +437,14 @@ cd ~/chisel-npu-platform && git init && git add . && git commit -m "chore: boots
   `releases/NpuPeripheral_K16.sv` (K=16/L=16, same ports, NPUCTL map and ISA).
   Final image: WNS **+0.030 ns**, WHS **+0.015 ns**, 0 failing endpoints,
   115,364 LUTs (38.6%), 156,058 FF (26.1%), 54 BRAM (5.7%), 18.7 MB bitstream.
-- **vu9p**: verified and programmed. K=32 release, 200 MHz fabric:
-  WNS **+0.003 ns**, WHS **+0.010 ns**, 0 failing endpoints (998,756 setup /
-  995,644 hold); 326,402 LUTs (27.6%), 393,993 FF (16.7%), 192.5 BRAM,
-  12 DSP; 80,159,239-byte bitstream. Programmed through `10.16.0.35:3121`
-  (`End of startup status: HIGH`, 4 MIG cores).
+- **vu9p**: first build completed and programmed, but it is a **100 MHz**
+  image: `build_npu_vu9p.tcl` linked a stale `clk_wiz_fabric` OOC DCP (100 MHz)
+  even though the XCI/RTL requested 200 MHz. The reported WNS +0.003 / WHS
+  +0.010 and 326,402 LUTs (27.6%) are therefore a 100 MHz build, not 200 MHz
+  signoff. The 100 MHz image is functional on the board (`End of startup
+  status: HIGH`, 4 MIG cores), but it is not the baseline. The flow now resets
+  the clock IP run and asserts a 5.000 ns fabric period; a full 200 MHz
+  rebuild is in progress.
 - **K=16 release**: `top.MainK16` + `make release-k16` produce
   `build/NpuPeripheral_K16.sv` and `build/npu_peripheral_k16.json`
   (`K=16, N=8, L=16, W=8`). RTL hash
