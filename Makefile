@@ -1,4 +1,4 @@
-.PHONY: docs build release build-fpga build-fpga-debug build-fpga-clean test-hw py-build py-deploy py-test-unit py-test-hw
+.PHONY: docs build release k16 release-k16 build-fpga build-fpga-debug build-fpga-clean test-hw py-build py-deploy py-test-unit py-test-hw
 
 export ARCH=`uname -m`
 # Currently the image does not support arm64, 
@@ -34,6 +34,13 @@ build: top.v
 
 release: build
 	bash tool/release_manifest.sh
+
+# xc7k480t release: same NpuPeripheral, K=16 (fits the 7-series part)
+k16:
+	if [ ${ARCH} = "arm64" ]; then docker run -u $(id -u):$(id -g) --rm -i -v ${PWD}:/workspace/ fangruil/chisel-dev:arm64 sbt "runMain top.MainK16"; else docker run -u $(id -u):$(id -g) --rm -i -v ${PWD}:/workspace/ fangruil/chisel-dev:amd64 sbt "runMain top.MainK16"; fi
+
+release-k16: k16
+	K=16 SV=top_k16.sv OUT_SV=NpuPeripheral_K16.sv OUT_JSON=npu_peripheral_k16.json bash tool/release_manifest.sh
 
 build-sc: top.v
 	if [ ${ARCH} = "arm64" ]; then docker run -u $(id -u):$(id -g) --rm -i -v ${PWD}:/workspace/ fangruil/chisel-dev:arm64 verilator top.v -sc -Mdir systemc; else docker run -u $(id -u):$(id -g) --rm -i -v ${PWD}:/workspace/ fangruil/chisel-dev:amd64 verilator top.v -sc -Mdir systemc; fi
@@ -104,7 +111,7 @@ docs:
 	python3 -m mkdocs serve
 
 clean:
-	rm -rf project/target project/project/target target *.v *.anno.json $(VIVADO_LOGDIR)
+	rm -rf project/target project/project/target target *.v *.anno.json top.sv top_k16.sv $(VIVADO_LOGDIR)
 
 clean-cache:
 	rm -rf .cache

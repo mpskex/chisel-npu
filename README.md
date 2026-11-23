@@ -35,13 +35,15 @@ This is a chisel workbench designed for someone who like docker containers and v
 - **Board-agnostic peripheral**: `peripheral/NpuPeripheral` wraps the engine
   in the NPUCTL v1 control hub (start/stop/reset, IRQ, watchdog, trace,
   five programmable segment bases) and translates the core's segmented AXI
-  master to a standard 64-bit system AXI master. The IP release is
-  `build/NpuPeripheral.sv` plus `build/npu_peripheral.json` (`make release`).
-  See [docs/designs/07.npuctl-v1.md](docs/designs/07.npuctl-v1.md).
+  master to a standard 64-bit system AXI master. The K=32 release is
+  `build/NpuPeripheral.sv` plus `build/npu_peripheral.json` (`make release`);
+  the xc7k480t uses the K=16 parameterization
+  (`build/NpuPeripheral_K16.sv`, `make release-k16`). Both have the same ports,
+  NPUCTL map and ISA. See [docs/designs/07.npuctl-v1.md](docs/designs/07.npuctl-v1.md).
 - **Board-centric split**: the XDMA/PCIe configuration, DDR3/DDR4 controllers
   and their memory models, clocking, ILA and board testbenches live in the
   separate `npu-platform` repository (bootstrapped at
-  `~/chisel-npu-platform`). The same `NpuPeripheral` release is pinned there.
+  `~/chisel-npu-platform`). `NpuPeripheral` is pinned there (K=32 for vu9p, K=16 for xc7k480t).
 - **Board flows**: Kintex-7 `xc7k480tffg1156-2` (PCIe + dual DDR3) and
   Virtex UltraScale+ `xcvu9p-flgb2104-2-e` (XDMA + 4× DDR4 MIG) now live in the
   separate `~/chisel-npu-platform` repository (Vivado projects, constraints,
@@ -59,8 +61,10 @@ make container
 make test
 # Build verilog design from chisel
 make build
-# Build the board-facing NpuPeripheral release + manifest
+# Build the board-facing NpuPeripheral release + manifest (K=32)
 make release
+# Build the K=16 release for the xc7k480t
+make release-k16
 # Build systemc
 make build-sc
 # Build docs, visit http://localhost:8000 to see the documentation
