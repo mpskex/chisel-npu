@@ -27,11 +27,10 @@ import isa.micro_op._
  * reaches PE(i,n-1) = snapStart + (n-1) + i.  We therefore wait `n-1` cycles
  * after the wave starts, then latch column n-1 row-by-row as the wave sweeps
  * down, and present the completed column at the engine's delayed capture
- * point (clct + CAPTURE_DELAY).  Column 0 is latched at the same wave (row i
- * at snapStart + i) and presented during the cycles before the round-final
- * tick, so the round's non-last (per-mma) completions capture a settled
- * pre-reduce running-sum column.  The normal chainsaw output is used at all
- * other cycles.
+ * point (clct + CAPTURE_DELAY).  At all other cycles, including the non-last
+ * per-mma completions, the normal FIFO-aligned chainsaw output is used; the
+ * compiler orders the MMA sequence, and only the round-final column is
+ * ISA-defined, so no extra column is latched.
  */
 class DataCollector(val n: Int = 8, val nbits: Int = 8,
                     val captureDelay: Int = 16) extends Module {
@@ -118,18 +117,11 @@ class DataCollector(val n: Int = 8, val nbits: Int = 8,
     //   * column n-1 (the ISA B[K-1] lane) is the round-final capture: it is
     //     presented at the engine's delayed capture tick (clct+CAPTURE_DELAY)
     //     and is consumed by the mma.last's completion -> VR[vd].
-    //   * column 0 is the legacy pre-reduce running-sum column: it is latched
-    //     at the same wave and presented for the cycles between the latch
-    //     completion and the round-final tick.  Every non-last mma completion
-    //     samples in that window, so each per-mma VR write carries a settled
-    //     running-sum column (the pre-reduce behaviour) rather than a zeroed
-    //     PE array.  Its column index is deliberately NOT part of the ISA
-    //     contract - only the round-final mma.last write is (B[K-1]).
     //
-    // Only one full column can be read out per round: the wave reaches
-    // PE(i,j) at snapStart+i+j, so a per-feed whole-column read is physically
-    // impossible at 1 feed/cycle.  That is why the per-feed partials are
-    // round-level columns and the round-final one is the ISA-exact column.
+    // The non-last per-mma completions use the normal FIFO-aligned chainsaw
+    // output (one full column per cycle).  Their column is issue-timing
+    // dependent and not part of the ISA contract; the compiler orders the MMA
+    // sequence, and only the round-final mma.last write is ISA-defined.
     //
     // The row latches run *concurrently* for consecutive pipelined rounds:
     // round r reads its column n-1 rows over [snapStart_r+n-1, snapStart_r+2n-2]
@@ -158,7 +150,6 @@ class DataCollector(val n: Int = 8, val nbits: Int = 8,
     // filled row-by-row, validated when the fill completes, held for SNAP_DLY
     // cycles and popped at the head (qHead) when it is presented.
     val qData  = Reg(Vec(SNAP_DEPTH, Vec(n, SInt(nbits.W))))
-    val qPre   = Reg(Vec(SNAP_DEPTH, Vec(n, SInt(nbits.W))))
     val qDly   = RegInit(VecInit(Seq.fill(SNAP_DEPTH)(0.U(QDLY_BITS.W))))
     val qValid = RegInit(VecInit(Seq.fill(SNAP_DEPTH)(false.B)))
     val qHead  = RegInit(0.U(log2Ceil(SNAP_DEPTH).W))
@@ -166,12 +157,10 @@ class DataCollector(val n: Int = 8, val nbits: Int = 8,
     val qCount = RegInit(0.U((log2Ceil(SNAP_DEPTH) + 1).W))
 
     // Row-latch phase, in cycles from the wave start:
-    //   ph in [0, n-1]      -> column 0 row ph is final at snapStart+ph
-    //   ph in [n-1, 2n-2]   -> column n-1 row (ph-(n-1)) is final
-    // Both column reads are combinational PE outputs, so one row of each can
-    // land in the same cycle into their own queue entry.  The latch takes
-    // 2n-1 cycles while the next round's wave can arrive n cycles later, so
-    // TWO ping-pong latch engines run concurrently (rounds alternate).
+    //   ph in [n-1, 2n-2]   -> column n-1 row (ph-(n-1)) is final at
+    //                          snapStart+ph (the reset wave reaches PE(row,n-1)).
+    // The latch takes n cycles while the next round's wave can arrive n cycles
+    // later, so TWO ping-pong latch engines run concurrently (rounds alternate).
     val NENG      = 2
     val lastPh    = (2 * n - 2).U
     val preLastPh = (n - 1).U
@@ -190,7 +179,6 @@ class DataCollector(val n: Int = 8, val nbits: Int = 8,
         latchPh(latchSel)   := 0.U
         latchSlot(latchSel) := qTail
         qTail               := qTail + 1.U
-        qPre(qTail)(0)      := io.reg_in(0)   // cycle 0: column 0, row 0
         latchSel            := latchSel + 1.U
     }
     for (e <- 0 until NENG) {
@@ -200,9 +188,6 @@ class DataCollector(val n: Int = 8, val nbits: Int = 8,
             // io.reg_in(row*n + col) is the PE register output, which still
             // holds the round's running sum on the cycle the reset wave
             // reaches it (the reset result appears on the next cycle).
-            when (ph <= preLastPh) {
-                qPre(latchSlot(e))(ph) := io.reg_in(ph * n.U)
-            }
             when (ph >= preLastPh) {
                 val row = ph - preLastPh
                 qData(latchSlot(e))(row) := io.reg_in(row * n.U + lastCol)
@@ -231,7 +216,6 @@ class DataCollector(val n: Int = 8, val nbits: Int = 8,
     // still counting down) the pre-reduce column 0 is presented so the round's
     // non-last completions latch a settled running-sum column.
     val snapOut = qValid(qHead) && qDly(qHead) === 0.U
-    val preOut  = qValid(qHead) && qDly(qHead) =/= 0.U
 
 
     // Safety net: a session that aborts before its capture point pops would
@@ -252,8 +236,7 @@ class DataCollector(val n: Int = 8, val nbits: Int = 8,
     }
 
     for (lane <- 0 until n) {
-        io.reg_out(lane) := Mux(snapOut, qData(qHead)(lane),
-                            Mux(preOut,  qPre(qHead)(lane), normalOut(lane)))
+        io.reg_out(lane) := Mux(snapOut, qData(qHead)(lane), normalOut(lane))
     }
 
 }
