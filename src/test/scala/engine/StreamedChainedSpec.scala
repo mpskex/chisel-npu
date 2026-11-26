@@ -36,8 +36,9 @@ class StreamedChainedSpec extends AnyFlatSpec {
       def round(r: Int): Unit = {
         StreamSpecUtil.issue(dut, vle8(4, NpuSections.SECT_A, r * k))
         StreamSpecUtil.issue(dut, vle8(8, NpuSections.SECT_B, r * k))
-        for (_ <- 0 until k) StreamSpecUtil.issue(dut, mma(0, 4, 8, 0))
-        StreamSpecUtil.issue(dut, mmaLast(0, 0, 0, 0))
+        // mma.last is a REAL feed: K-1 mma + the mma.last term = K terms.
+        for (_ <- 0 until k - 1) StreamSpecUtil.issue(dut, mma(0, 4, 8, 0))
+        StreamSpecUtil.issue(dut, mmaLast(0, 4, 8, 0))
         StreamSpecUtil.issue(dut, vse32(0, NpuSections.SECT_OUT, r * 4 * k))
       }
 

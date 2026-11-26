@@ -27,20 +27,28 @@ This is a chisel workbench designed for someone who like docker containers and v
 - **End-to-end post-MMA quantization pipeline** verified bit-accurately against
   a Scala `java.lang.Float` reference (`NCoreBackendQuantSpec`,
   `NCoreBackendGemmSoftmaxSpec`).
-- **Streamed program engine** (`engine/NpuProgramEngineFrontend`, K=16, N=8,
-  dispatch window `W`): a pipelined frontend (fetch engine → instruction FIFO →
-  issue, ~1 word/cycle) feeding an issue window with a mask-based scoreboard,
-  unit queues, MMA capture/chaining and a 2-stage MMALU feed pipeline. This is
-  the FPGA top (`src/main/scala/top/top.scala`, `W=4`).
-- **FPGA reference platform**: Kintex-7 `xc7k480tffg1156-2` with PCIe Gen2×8 +
-  dual DDR3 + the K=16 streamed program engine at 100 MHz fabric. See
-  [docs/implementations/FPGA_XC7K480T.md](docs/implementations/FPGA_XC7K480T.md).
-- **FPGA bring-up on Virtex UltraScale+**: `xcvu9p-flgb2104-2-e` (Alivu9p) with
-  PCIe Gen3×8 XDMA + 4× DDR4 MIG + the K=16 program engine (W=4), timing-closed
-  at 200 MHz, built with local Vivado and programmed remotely via `hw_server`.
-  The `chisel_npu_py` HW suite passes 7/7. See
-  [docs/implementations/FPGA_VU9P.md](docs/implementations/FPGA_VU9P.md) and
-  [`ip/vivado/xcvu9p/README.md`](ip/vivado/xcvu9p/README.md).
+- **Streamed program engine** (`engine/NpuProgramEngineFrontend`, vu9p
+  baseline K=32, N=8, W=8): a pipelined frontend (fetch engine → instruction
+  FIFO → issue, ~1 word/cycle) feeding an issue window with a mask-based
+  scoreboard, unit queues, MMA capture/chaining and a 2-stage MMALU feed
+  pipeline.
+- **Board-agnostic peripheral**: `peripheral/NpuPeripheral` wraps the engine
+  in the NPUCTL v1 control hub (start/stop/reset, IRQ, watchdog, trace,
+  five programmable segment bases) and translates the core's segmented AXI
+  master to a standard 64-bit system AXI master. The K=32 release is
+  `build/NpuPeripheral.sv` plus `build/npu_peripheral.json` (`make release`);
+  the xc7k480t uses the K=16 parameterization
+  (`build/NpuPeripheral_K16.sv`, `make release-k16`). Both have the same ports,
+  NPUCTL map and ISA. See [docs/designs/07.npuctl-v1.md](docs/designs/07.npuctl-v1.md).
+- **Board-centric split**: the XDMA/PCIe configuration, DDR3/DDR4 controllers
+  and their memory models, clocking, ILA and board testbenches live in the
+  separate `npu-platform` repository (bootstrapped at
+  `~/chisel-npu-platform`). `NpuPeripheral` is pinned there (K=32 for vu9p, K=16 for xc7k480t).
+- **Board flows**: Kintex-7 `xc7k480tffg1156-2` (PCIe + dual DDR3) and
+  Virtex UltraScale+ `xcvu9p-flgb2104-2-e` (XDMA + 4× DDR4 MIG) now live in the
+  separate `~/chisel-npu-platform` repository (Vivado projects, constraints,
+  bitstreams, board tests). This IP repository no longer carries the old
+  `ip/vivado/**` or `tool/hw/**` trees.
 
 ## Usage
 
@@ -53,6 +61,10 @@ make container
 make test
 # Build verilog design from chisel
 make build
+# Build the board-facing NpuPeripheral release + manifest (K=32)
+make release
+# Build the K=16 release for the xc7k480t
+make release-k16
 # Build systemc
 make build-sc
 # Build docs, visit http://localhost:8000 to see the documentation
@@ -67,7 +79,7 @@ Then you can use [vscode dev container plugin](https://marketplace.visualstudio.
 ├── docker
 │   └── dockerfile      // build env docker file
 ├── docs                // documentation
-├── ip                  // IP integration with different EDAs
+├── ip                  // legacy board integration (scheduled to move)
 │   └── vivado          // xilinx vivado
 ├── Makefile            // top level make file
 ├── mkdocs.yml          // readthedocs yaml

@@ -22,6 +22,7 @@ class EngineThroughputSpec extends AnyFlatSpec {
       }
       for (m <- 0 until M) {
         dut.io.ctrl.keep.poke(true.B); dut.io.ctrl.busy.poke(true.B)
+        dut.io.round_end.poke(false.B)
         for (i <- 0 until K) {
           dut.io.in_a(i).poke(1.S(8.W))
           dut.io.in_b(i).poke(1.S(8.W))
@@ -32,6 +33,7 @@ class EngineThroughputSpec extends AnyFlatSpec {
         observe()
       }
       dut.io.ctrl.busy.poke(false.B); dut.io.ctrl.keep.poke(false.B)
+      dut.io.round_end.poke(false.B)
       // Drain/settling steps (not counted in the nominal feed-phase rate):
       // the array latency is ~3n-1, so the collection pulses only land after
       // the feed loop ends. Keep observing so we can assert the array ran.

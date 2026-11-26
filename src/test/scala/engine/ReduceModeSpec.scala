@@ -24,12 +24,13 @@ class ReduceModeSpec extends AnyFlatSpec {
 
   val K = 32
 
-  /** One reduction round: resident operands, R accumulating mmas (no per-mma
-    * store), one mma.last, one vse storing the final accumulated capture. */
+  /** One reduction round: resident operands, R REAL feeds (R-1 accumulate
+    * mmas + the round-ending mma.last, which is itself a real feed), one vse
+    * storing the final accumulated capture. */
   def program(R: Int): Seq[Int] =
     Seq(vle8(4, NpuSections.SECT_A, 0), vle8(8, NpuSections.SECT_B, 0)) ++
-      (0 until R).map(_ => mma(0, 4, 8, 0)) ++
-      Seq(mmaLast(0, 0, 0, 0), vse32(0, NpuSections.SECT_OUT, 0))
+      (0 until R - 1).map(_ => mma(0, 4, 8, 0)) ++
+      Seq(mmaLast(0, 4, 8, 0), vse32(0, NpuSections.SECT_OUT, 0))
 
   def check(W: Int): Unit = {
     val R = 128
@@ -42,7 +43,7 @@ class ReduceModeSpec extends AnyFlatSpec {
       StreamSpecUtil.printPhases(s"reduce W=$W R=$R", ph)
 
       val out = StreamSpecUtil.readI32(dut, NpuSections.OUT, K)
-      // The final running sum after R useful feeds (mma.last injects zeros):
+      // The final running sum after R real feeds:
       //   PE(i,j) = Σ_m A_m,i·B_m,j = R · a_i · b_j = R · 3 · 5
       // The stored 128 B capture is one column of that matrix.
       val pe = Array.tabulate(K, K)((_, _) => R * 3 * 5)

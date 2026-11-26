@@ -20,7 +20,7 @@ class DataCollectorSpec extends AnyFlatSpec{
             val _in_t = new Array[Int](_n)
             var valid_cnt = 0
 
-            dut.io.keep_d.poke(true.B)
+            dut.io.round_end.poke(false.B)
             dut.io.session_reset.poke(false.B)
 
             // random initialize the

@@ -18,7 +18,7 @@ All `make` targets shell out to `docker run -v $PWD:/workspace fangruil/chisel-d
 - `make build` — runs `sbt run`, which elaborates `top.Main` and writes `top.sv` at repo root.
 - `make build-sc` — verilator SystemC backend. Note: the target reads `top.v` but `top.Main` emits `top.sv` (`Makefile:29,34` vs `src/main/scala/top/top.scala:18`). Rename or patch before invoking.
 - `make docs` — `pip3 install -r docs/requirements.txt && mkdocs serve` on the host (not in Docker).
-- `make clean` — removes `target`, `*.v`, `*.anno.json`. Does **not** delete `top.sv` (~1.1 MB; a git-ignored build artifact emitted by `sbt run`, top module `NpuProgramEngineFrontend`).
+- `make clean` — removes `target`, `*.v`, `*.anno.json`. Does **not** delete `top.sv` (~1.1 MB; a git-ignored build artifact emitted by `sbt run`, top module `NpuPeripheral`).
 - `make clean-cache` — wipes `.cache/` (the mounted Coursier cache; see env below).
 
 ### Single-test shortcut
@@ -34,16 +34,20 @@ Confusing them is the primary source of errors in this codebase.
 | Symbol | Meaning | Default (test) | Default (top) |
 |:---:|:---|:---:|:---:|
 | **`N`** (spoken: **N(bits)**) | Base lane width in bits for a VX register. Equals MMALU's `nbits`. Always `N(bits)` in prose to avoid confusion. | 8 | 8 |
-| **`L`** | Number of base VX registers. Must be divisible by 4 for VE/VR aliasing. | 32 | 16 |
-| **`K`** | SIMD lane count per register. At the backend boundary, `K == MMALU.n` (the array side). | 8 | 16 |
+| **`L`** | Number of base VX registers. Must be divisible by 4 for VE/VR aliasing. | 32 | 32 |
+| **`K`** | SIMD lane count per register. At the backend boundary, `K == MMALU.n` (the array side). | 8 | 32 |
 
-The FPGA top is the streamed **program engine** (`engine/NpuProgramEngineFrontend`),
-instantiated in `src/main/scala/top/top.scala` as `(K = 16, N = 8, W = 4)` for the
-xcvu9p / xc7k480t builds; it sets `L = K`, so its register file is `L×K×N/8 = 256 B`.
-Older docs may cite `K = 32`/`K = 64` — those describe the legacy `NCoreBackend`
+The released FPGA top is the board-agnostic **`peripheral/NpuPeripheral`**. It wraps
+the streamed program engine (`engine/NpuProgramEngineFrontend`) in the NPUCTL
+control hub and the segmented-AXI -> 64-bit system-AXI translator. The vu9p
+baseline is `NpuProgramEngineFrontend(K = 32, N = 8, W = 8)` inside
+`NpuPeripheral(K = 32, N = 8, W = 8)`; it sets `L = K = 32`, so the register
+file is `L×K×N/8 = 1 KiB`.
+Older docs may cite `K = 16`/`K = 64` — those describe the legacy `NCoreBackend`
 and the superseded `npu_subsys` bitstream, not the current FPGA top.
-**`W`** (dispatch-window depth, `NpuProgramEngineFrontend`) defaults to 16 and is
-set to 4 for the FPGA builds (W=8 did not close timing at 200 MHz).
+**`W`** (dispatch-window depth, `NpuProgramEngineFrontend`) defaults to 16; the
+vu9p baseline is W=8. (Older xc7k480t notes cite W=4; that is not the current
+vu9p release.)
 
 Register-class aliasing over a shared physical byte array (`L × K × N/8` bytes total):
 
@@ -53,10 +57,31 @@ Register-class aliasing over a shared physical byte array (`L × K × N/8` bytes
 | VE[0..L/2-1] | 16 | 2N bits | `VE[i] ≡ VX[2i] ∥ VX[2i+1]` |
 | VR[0..L/4-1] | 8 | 4N bits | `VR[i] ≡ VX[4i..4i+3]` |
 
-The counts above are the `L=32` test default. At the FPGA top, `L = K = 16`,
-so the counts are **VX 16 / VE 8 / VR 4** (aliasing is unchanged).
+The counts above are the `L=32` default. At the current vu9p top, `L = K = 32`,
+so the counts are **VX 32 / VE 16 / VR 8** (aliasing is unchanged).
 
 **MMALU `n` vs VALU/backend `K`**: MMALU's `n` is the *systolic array side length*, not a lane count. `NCoreBackend` enforces `K == mmalu.n` at instantiation. Do not conflate them.
+
+## IP-centric / board-centric split
+
+- **IP-centric (this repo):** `peripheral/NpuPeripheral` (NPUCTL control hub,
+  five active segment base/limit registers, local→system AXI translation,
+  IRQ, watchdog, trace), the NPU engine, the IP-level driver core, and the
+  generic simulation memory model.
+- **Board-centric (separate repo, bootstrapped at `~/chisel-npu-platform`):**
+  XDMA/PCIe configuration, DDR3/DDR4 controllers and their AXI models,
+  interconnect, clocking/reset, ILA, board constraints, bitstreams, and the
+  host transport/allocator.
+
+The released artifact is `NpuPeripheral.sv` plus `build/npu_peripheral.json`
+(see `make release`). The platform repo pins that release; it must not patch
+the NPU RTL per board. The board flows live in `~/chisel-npu-platform` (board scripts, constraints,
+bitstreams, `docs/FPGA_*.md`, hardware tests).  This IP repository carries no
+Vivado project or board-test tree.
+
+The normative control protocol is `docs/designs/07.npuctl-v1.md`. The NPU ISA
+and instruction program model are frozen; segment base registers relocate the
+existing sections but do not change the per-instruction reach.
 
 ## ISA encoding (RISC-V-style 32-bit instruction word)
 
@@ -122,8 +147,7 @@ as saturate. See `src/main/scala/isa/instrFormat.scala` for the full `CvtFunct7`
 - `isa/` — `instrFormat.scala`, `instSetArch.scala`, `InstrTable.scala` (authoritative decode map), `NpuAssembler.scala`, `instrDecoder.scala`, `NpuDisassembler.scala`, `dataType.scala`, `micro_op/` (VALUMicroCode, MMALUMicroCode, memMicroCode).
 - `sram/register.scala` — legacy `RegisterBlock` (still used by old tests).
 - `sram/multiWidthRegister.scala` — `MultiWidthRegisterBlock` (VX/VE/VR aliased RF, used by both `NCoreBackend` and `NpuProgramEngine`).
-- `utils/gates.scala`, `top/top.scala` (elaborates `NpuProgramEngineFrontend(K=16, N=8, W=4)` → `top.sv`).
-- `ip/vivado/` — packaged Vivado project. Not part of sbt build.
+- `utils/gates.scala`, `top/top.scala` (`Main` elaborates `NpuPeripheral(K=32, N=8, W=8)` → `top.sv`; `MainK16` emits `top_k16.sv`).
 
 ## Testing
 

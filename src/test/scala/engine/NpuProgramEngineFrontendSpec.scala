@@ -11,7 +11,8 @@ import testUtil._
 import isa.NpuAssembler._
 
 class FrontendSpecHarness(val K: Int = 32, val readLatency: Int = 1,
-                          val readJitter: Int = 0, val bDelay: Int = 0) extends Module {
+                          val readJitter: Int = 0, val bDelay: Int = 0,
+                          val W: Int = 16) extends Module {
   val io = IO(new Bundle {
     val ctrl_addr  = Input(UInt(7.W))
     val ctrl_we    = Input(Bool())
@@ -49,7 +50,7 @@ class FrontendSpecHarness(val K: Int = 32, val readLatency: Int = 1,
     val dbg_s2_last  = Output(Bool())
   })
 
-  val fe = Module(new NpuProgramEngineFrontend(K, 8))
+  val fe = Module(new NpuProgramEngineFrontend(K, 8, W))
   val ram = Module(new AxiRamModel(readLatency = readLatency,
     readJitter = readJitter, bDelay = bDelay))
 
@@ -57,6 +58,14 @@ class FrontendSpecHarness(val K: Int = 32, val readLatency: Int = 1,
   fe.io.ctrl_we    := io.ctrl_we
   fe.io.ctrl_wdata := io.ctrl_wdata
   io.ctrl_rdata    := fe.io.ctrl_rdata
+
+  // This harness uses the legacy ctrl port; the native hub path is off.
+  fe.io.native_ctrl   := false.B
+  fe.io.core_start    := false.B
+  fe.io.core_abort    := false.B
+  fe.io.core_prog_len := 0.U
+  fe.io.core_entry_pc := 0.U
+  fe.io.seg_limit     := VecInit(Seq.fill(5)(0xFFFFFFFFL.U))
 
   ram.io.s_axi_awaddr  := fe.io.m_axi_awaddr
   ram.io.s_axi_awlen   := fe.io.m_axi_awlen
@@ -198,7 +207,7 @@ class NpuProgramEngineFrontendSpec extends AnyFlatSpec {
   // ==========================================================================
 
   "NpuProgramEngineFrontend" should "run a one-shot mma session end-to-end" in {
-    simulate(new FrontendSpecHarness(K = 16)) { dut =>
+    simulate(new FrontendSpecHarness(K = 16, W = 8)) { dut =>
       val k = 16
       val a = Array.tabulate(k)(j => j + 1)
       val b = Array.tabulate(k)(i => 100 + i)
@@ -206,13 +215,14 @@ class NpuProgramEngineFrontendSpec extends AnyFlatSpec {
       preloadI8(dut, NpuSections.A, a)
       preloadI8(dut, NpuSections.B, b)
       preloadI32(dut, NpuSections.ACCUM, c)
-      // C in VR[3] (VX[12..15]); vd = VR[2] (VX[8..11]); A = VX[4], B = VX[8]
+      // C in VR[3] (VX[12..15]); vd = VR[2] (VX[8..11]); A = VX[4], B = VX[8].
+      // ISA one-shot = ONE real mma.last carrying A, B and C; the deterministic
+      // round-final capture is the ISA column B[K-1].
       val prog = Seq(
         vle8(rd = 4, sect = NpuSections.SECT_A, off = 0),
         vle8(rd = 8, sect = NpuSections.SECT_B, off = 0),
         vle32(rd = 3, sect = NpuSections.SECT_ACCUM, off = 0),
-        mma(rd = 2, vs1 = 4, vs2 = 8, vs3 = 3),
-        mmaLast(rd = 2, vs1 = 0, vs2 = 0, vs3 = 3),
+        mmaLast(rd = 2, vs1 = 4, vs2 = 8, vs3 = 3),
         vse32(src = 2, sect = NpuSections.SECT_OUT, off = 0),
       )
       preloadInstrs(dut, prog)
@@ -222,11 +232,12 @@ class NpuProgramEngineFrontendSpec extends AnyFlatSpec {
 
 
       val out = readI32(dut, NpuSections.OUT, k)
-      // streamed: the capture is a column of a·b + C — locate it by search
-      val cols = (0 until k).filter(col =>
-        (0 until k).forall(i => out(i) == a(i) * s8(b(col)) + c(i)))
-      assert(cols.nonEmpty, s"one-shot capture is not a column of a·b+C: ${out.toList}")
-      println(s"[frontend] one-shot capture column: ${cols.head}")
+      for (i <- 0 until k) {
+        assert(out(i) == a(i) * s8(b(k - 1)) + c(i),
+          s"one-shot lane $i: got ${out(i)}, want ${a(i)}*${s8(b(k - 1))}+${c(i)} " +
+          s"= ${a(i) * s8(b(k - 1)) + c(i)}: ${out.toList}")
+      }
+      println(s"[frontend] one-shot capture = A*B[${k - 1}] + C")
       val status = ctrlRead(dut, 0x8)
       assert(((status >> 31) & 1) == 0, "no illegal expected")
       assert((status & 0xFFFF) == prog.length - 1, s"pc should be the last word")
@@ -235,19 +246,21 @@ class NpuProgramEngineFrontendSpec extends AnyFlatSpec {
   }
 
   "NpuProgramEngineFrontend" should "run three back-to-back reduce matmul rounds" in {
-    simulate(new FrontendSpecHarness(K = 16)) { dut =>
+    simulate(new FrontendSpecHarness(K = 16, W = 8)) { dut =>
       val k = 16
       val aVals = Array.tabulate(3, k)((m, j) => s8(m * 7 + j + 1))
       val bVals = Array.tabulate(3, k)((m, i) => s8(100 + m * 5 + i))
       preload(dut, NpuSections.A, aVals.flatten.map(_ & 0xFF))
       preload(dut, NpuSections.B, bVals.flatten.map(_ & 0xFF))
 
-      // reduce round = K accumulate feeds + mma.last (capture VR[0]) + one vse
+      // A round = (K-1) real mma feeds + ONE real mma.last feed, C = 0.  The
+      // PEs accumulate all K terms, so the deterministic round-final capture is
+      // K * A[i] * B[K-1].
       val prog = (0 until 3).flatMap { m =>
         Seq(vle8(rd = 4, sect = NpuSections.SECT_A, off = m * k),
             vle8(rd = 8, sect = NpuSections.SECT_B, off = m * k)) ++
-          (0 until k).map(_ => mma(rd = 0, vs1 = 4, vs2 = 8, vs3 = 0)) ++
-          Seq(mmaLast(rd = 0, vs1 = 0, vs2 = 0, vs3 = 0),
+          (0 until k - 1).map(_ => mma(rd = 0, vs1 = 4, vs2 = 8, vs3 = 0)) ++
+          Seq(mmaLast(rd = 0, vs1 = 4, vs2 = 8, vs3 = 0),
               vse32(src = 0, sect = NpuSections.SECT_OUT, off = m * 4 * k))
       }
       preloadInstrs(dut, prog.toSeq)
@@ -258,9 +271,11 @@ class NpuProgramEngineFrontendSpec extends AnyFlatSpec {
       val out = readI32(dut, NpuSections.OUT, 3 * k)
       for (m <- 0 until 3) {
         val g = out.slice(m * k, (m + 1) * k)
-        val pe = Array.tabulate(k, k)((i, j) => k * aVals(m)(i) * bVals(m)(j))
-        val found = (0 until k).filter(c => (0 until k).forall(i => g(i) == pe(i)(c)))
-        assert(found.nonEmpty, s"round $m capture is not K*a*b: ${g.toList}")
+        for (i <- 0 until k) {
+          val want = k * aVals(m)(i) * bVals(m)(k - 1)
+          assert(g(i) == want,
+            s"round $m lane $i: got ${g(i)}, want K*A[i]*B[K-1] = $want: ${g.toList}")
+        }
       }
       val status = ctrlRead(dut, 0x8)
       assert(((status >> 31) & 1) == 0, "no illegal expected")

@@ -44,8 +44,30 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
     val ctrl_wdata = Input(UInt(32.W))
     val ctrl_rdata = Output(UInt(32.W))
 
+    // ---- Native core control/status (used by NpuControlHub) -------------
+    val native_ctrl   = Input(Bool())   // true: hub drives the native inputs
+    val core_start    = Input(Bool())
+    val core_abort    = Input(Bool())
+    val core_prog_len = Input(UInt(16.W))
+    val core_entry_pc = Input(UInt(16.W))
+    val seg_limit     = Input(Vec(5, UInt(32.W)))
+    val core_busy     = Output(Bool())
+    val core_done     = Output(Bool())
+    val core_illegal  = Output(Bool())
+    val core_mem_fault = Output(Bool())
+    val core_fault_seg = Output(UInt(3.W))
+    val core_fault_addr = Output(UInt(32.W))
+    val core_pc        = Output(UInt(16.W))
+    val core_err_instr = Output(UInt(32.W))
+    val core_cycles    = Output(UInt(32.W))
+    val core_macs      = Output(UInt(32.W))
+    val core_fetch_stats = Output(UInt(32.W))
+    val trace_retire   = Output(Bool())
+    val trace_pc       = Output(UInt(16.W))
+
     // ---- AXI4 master (via the execution core's DMA) ----
     val m_axi_awaddr  = Output(UInt(32.W))
+    val m_axi_awseg   = Output(UInt(3.W))
     val m_axi_awlen   = Output(UInt(8.W))
     val m_axi_awsize  = Output(UInt(3.W))
     val m_axi_awburst = Output(UInt(2.W))
@@ -59,6 +81,7 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
     val m_axi_bvalid  = Input(Bool())
     val m_axi_bready  = Output(Bool())
     val m_axi_araddr  = Output(UInt(32.W))
+    val m_axi_arseg   = Output(UInt(3.W))
     val m_axi_arlen   = Output(UInt(8.W))
     val m_axi_arsize  = Output(UInt(3.W))
     val m_axi_arburst = Output(UInt(2.W))
@@ -105,6 +128,7 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
   val core = Module(new NpuProgramEngine(K, N, W))
 
   io.m_axi_awaddr  := core.io.m_axi_awaddr
+  io.m_axi_awseg   := core.io.m_axi_awseg
   io.m_axi_awlen   := core.io.m_axi_awlen
   io.m_axi_awsize  := core.io.m_axi_awsize
   io.m_axi_awburst := core.io.m_axi_awburst
@@ -118,6 +142,7 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
   core.io.m_axi_bvalid := io.m_axi_bvalid
   io.m_axi_bready  := core.io.m_axi_bready
   io.m_axi_araddr  := core.io.m_axi_araddr
+  io.m_axi_arseg   := core.io.m_axi_arseg
   io.m_axi_arlen   := core.io.m_axi_arlen
   io.m_axi_arsize  := core.io.m_axi_arsize
   io.m_axi_arburst := core.io.m_axi_arburst
@@ -129,6 +154,7 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
   io.m_axi_rready  := core.io.m_axi_rready
 
   core.io.dbg_vx_addr := 4.U
+  core.io.seg_limit := io.seg_limit
 
   // ==========================================================================
   // ctrl_lite registers
@@ -149,6 +175,7 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
   val perfMacs    = RegInit(0.U(32.W))
   val startPrev = RegNext(startReg, init = false.B)
   val startEdge = startReg && !startPrev
+  val startReq  = Mux(io.native_ctrl, io.core_start, startEdge)
 
   // First-burst pre-warm (Phase P): writing PROG_LEN (0x14) arms a warm fetch
   // of the first burst during the host's PROG_LEN→START gap, so the first
@@ -157,19 +184,32 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
   // warmValid) and the session demand-fills as usual.
   val warmValid = RegInit(false.B)
   val warmLine  = RegInit(0.U(12.W))
-  val progLenWrite = io.ctrl_we && io.ctrl_addr === 0x14.U
+  val entryPcReg = RegInit(0.U(16.W))
 
-  // clear the core's streaming state at every session start
-  core.io.session_reset := startEdge
+  val ctrlProgLenWrite = io.ctrl_we && io.ctrl_addr === 0x14.U
+  val ctrlEntryWrite   = io.ctrl_we && io.ctrl_addr === 0x48.U
+  val coreProgLenChanged = io.core_prog_len =/= progLenReg
+  val progLenWrite = Mux(io.native_ctrl, coreProgLenChanged, ctrlProgLenWrite)
+  val progLenNext  = Mux(io.native_ctrl, io.core_prog_len, io.ctrl_wdata(15, 0))
+  val coreEntryChanged = io.core_entry_pc =/= entryPcReg
+  val entryWrite   = Mux(io.native_ctrl, coreEntryChanged, ctrlEntryWrite)
+  val entryNext    = Mux(io.native_ctrl, io.core_entry_pc, io.ctrl_wdata(15, 0))
+  val endPc        = entryPcReg +& progLenReg
+
 
   when (io.ctrl_we && io.ctrl_addr === 0x0.U)  { startReg := io.ctrl_wdata(0) }
   when (io.ctrl_we && io.ctrl_addr === 0x4.U)  { framesReg := io.ctrl_wdata(15, 0) }
   when (progLenWrite) {
-    progLenReg := io.ctrl_wdata(15, 0)
+    progLenReg := progLenNext
     warmValid  := true.B
-    warmLine   := 0.U
+    warmLine   := entryPcReg >> 4
   }
-  when (startEdge) { doneReg := false.B; perfCycles := 0.U; perfMacs := 0.U }
+  when (entryWrite) {
+    entryPcReg := entryNext
+    warmValid  := true.B
+    warmLine   := entryNext >> 4
+  }
+  when (startReq) { doneReg := false.B; perfCycles := 0.U; perfMacs := 0.U }
 
   // ==========================================================================
   // Program counter + frames-done counter
@@ -218,17 +258,31 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
 
   // lastLine is the one-past-the-end line index (13 bits, 0..4096); compare the
   // line index directly so the 16-bit line-index arithmetic can never overflow.
-  val lastLine = ((progLenReg +& 15.U) >> 4)(12, 0)
+  val lastLine = ((endPc +& 15.U) >> 4)(12, 0)
 
   // ==========================================================================
   // Run state
   // ==========================================================================
   object RunState extends ChiselEnum {
-    val RUN_IDLE, RUN_RUN, RUN_DONE = Value
+    val RUN_IDLE, RUN_RUN, RUN_ABORT, RUN_DONE = Value
   }
   val runState = RegInit(RunState.RUN_IDLE)
   val busy = runState =/= RunState.RUN_IDLE
   val running = runState === RunState.RUN_RUN
+  val aborting = runState === RunState.RUN_ABORT
+
+  // Abort drain: stop issuing, wait for the DMA queue/window to drain, then
+  // pulse session_reset.  A timeout prevents a wedged session from blocking
+  // the next one forever.
+  val abortTimeout = RegInit(0.U(20.W))
+  when (aborting) { abortTimeout := abortTimeout + 1.U }
+  .otherwise      { abortTimeout := 0.U }
+  val abortDone  = aborting && core.io.drain
+  val abortForce = aborting && abortTimeout === ((1 << 20) - 1).U
+  val abortFinish = abortDone || abortForce
+
+  // clear the core's streaming state at every session start or drained abort
+  core.io.session_reset := startReq || abortFinish
 
   // ==========================================================================
   // Fill FSM (demand fills win; prefetches run while the fetch engine has room).
@@ -249,7 +303,8 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
   // Warm burst length: the first burst is min(4, lastLine) lines — 0 for an
   // empty program (the warm must never issue a 0-beat DMA request, which would
   // underflow the burst count in the DMA engine and loop forever).
-  val warmBeats = Mux(lastLine >= 4.U, 4.U(3.W), lastLine(2, 0))
+  val warmRemaining = Mux(warmLine < lastLine, lastLine - warmLine, 0.U)
+  val warmBeats = Mux(warmRemaining >= 4.U, 4.U(3.W), warmRemaining(2, 0))
   // The beats actually issued this burst: warm fills use warmBeats, the
   // demand/prefetch path uses fillBeats (both are 1..4, never 0).
   val curBeats = Mux(warmValid, warmBeats, fillBeats)
@@ -259,7 +314,7 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
     (lineValid(fillNext(2, 0) ## 0.U(1.W)) && lineTag(fillNext(2, 0) ## 0.U(1.W)) === fillNext(11, 3)) ||
     (lineValid(fillNext(2, 0) ## 1.U(1.W)) && lineTag(fillNext(2, 0) ## 1.U(1.W)) === fillNext(11, 3)))
 
-  val fetchActive = running && fpc < progLenReg
+  val fetchActive = running && fpc < endPc
   val demandFill  = running && fetchActive && !fLineHit
   // Bounded sliding window: prefetch only while the fill head stays within
   // 8 lines of the fetch pc (fL == fpc >> 4).
@@ -273,8 +328,22 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
   // prefetches use the post-burst fillNext.
   val fillTarget = Mux(demandFill, fL, Mux(warmReady, warmLine, fillNext(11, 0)))
 
-  val startFill = (fillState === FillState.IDLE) &&
+  val startFillRaw = (fillState === FillState.IDLE) &&
     (demandFill || doPrefetch || warmReady)
+  // Defense in depth: the hub validates the code window at START, but the
+  // core also refuses a fetch that would run past the CODE segment limit.
+  val fetchFits = ((fillLine << 6) + (curBeats << 6)) <= io.seg_limit(NpuSections.SEG_CODE)
+  val startFill = startFillRaw && fetchFits
+  val fetchFault = RegInit(false.B)
+  val fetchFaultAddr = RegInit(0.U(32.W))
+  when (startFillRaw && !fetchFits) {
+    fetchFault := true.B
+    fetchFaultAddr := (fillLine << 6).pad(32)
+  }
+  when (startReq || abortFinish) {
+    fetchFault := false.B
+    fetchFaultAddr := 0.U
+  }
 
   // Config writes invalidate the cache.  A CTRL (0x0) START write must NOT
   // invalidate: the cache survives the start edge so a warmed first burst is
@@ -282,11 +351,12 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
   // line commit — an isolated `when (...) := false` next to the commit's
   // `:= true` was merged by firtool into a set-only OR, silently dropping the
   // invalidation from top.sv (stale-line execution on silicon).
-  val cacheInvalidate = io.ctrl_we &&
-    (io.ctrl_addr === 0x4.U || io.ctrl_addr === 0x14.U)
+  val cacheInvalidate = (io.ctrl_we &&
+    (io.ctrl_addr === 0x4.U || io.ctrl_addr === 0x14.U || io.ctrl_addr === 0x48.U)) ||
+    progLenWrite || entryWrite || (io.native_ctrl && startReq)
 
-  // Abort any in-flight fill when the host re-programs PROG_LEN.
-  when (progLenWrite) {
+  // Abort any in-flight fill when the host re-programs PROG_LEN or ENTRY_PC.
+  when (progLenWrite || entryWrite) {
     fillState := FillState.IDLE
     fillBeat  := 0.U
   }
@@ -375,9 +445,9 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
   // ==========================================================================
   switch (runState) {
     is (RunState.RUN_IDLE) {
-      when (startEdge) {
-        pc            := 0.U
-        fpc           := 0.U
+      when (startReq) {
+        pc            := entryPcReg
+        fpc           := entryPcReg
         framesDone    := 0.U
         statusIllegal := false.B
         ifqHead       := 0.U
@@ -400,7 +470,7 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
         perfMacs      := core.io.dbg_mac
         fillState     := FillState.IDLE
         runState      := RunState.RUN_DONE
-      } .elsewhen (fpc === progLenReg && ifqEmpty && core.io.drain) {
+      } .elsewhen (fpc === endPc && ifqEmpty && core.io.drain) {
         // all words issued and the engine pipeline fully drained
         // (window empty + DMA + captures + boundary countdown)
         doneReg    := true.B
@@ -416,8 +486,67 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
   }
 
   // ==========================================================================
+  // Abort: stop issuing and drain the DMA pipeline before session_reset.
+  // This prevents a stale load/store from an aborted session from landing in
+  // the next session.  The hub keeps BUSY asserted until core_busy drops.
+  // ==========================================================================
+  when (io.core_abort) {
+    when (runState === RunState.RUN_RUN) {
+      runState  := RunState.RUN_ABORT
+      ifqHead   := 0.U
+      ifqTail   := 0.U
+      ifqCount  := 0.U
+      fillState := FillState.IDLE
+      fillBeat  := 0.U
+      warmValid := false.B
+    } .otherwise {
+      runState      := RunState.RUN_IDLE
+      doneReg       := false.B
+      statusIllegal := false.B
+      pc            := 0.U
+      fpc           := 0.U
+      framesDone    := 0.U
+      ifqHead       := 0.U
+      ifqTail       := 0.U
+      ifqCount      := 0.U
+      fillState     := FillState.IDLE
+      fillBeat      := 0.U
+      warmValid     := false.B
+    }
+  }
+
+  when (abortFinish) {
+    runState      := RunState.RUN_IDLE
+    doneReg       := false.B
+    statusIllegal := false.B
+    pc            := 0.U
+    fpc           := 0.U
+    framesDone    := 0.U
+    ifqHead       := 0.U
+    ifqTail       := 0.U
+    ifqCount      := 0.U
+    fillState     := FillState.IDLE
+    fillBeat      := 0.U
+    warmValid     := false.B
+  }
+
+  // ==========================================================================
   // Register file readback (word-addressable)
   // ==========================================================================
+  io.core_busy        := busy
+  io.core_done        := doneReg
+  io.core_illegal     := statusIllegal
+  io.core_mem_fault   := core.io.mem_fault || fetchFault
+  io.core_fault_seg   := Mux(fetchFault, NpuSections.SEG_CODE.U(3.W), core.io.fault_seg)
+  io.core_fault_addr  := Mux(fetchFault, fetchFaultAddr, core.io.fault_addr)
+  io.core_pc          := pc
+  io.core_err_instr   := errInstr
+  io.core_cycles      := perfCycles
+  io.core_macs        := perfMacs
+  io.core_fetch_stats := Cat(prefetchCnt, missCnt)
+  io.trace_retire     := deqFire
+  io.trace_pc         := ifqHeadPc
+
   io.dbg_pc   := pc
   io.dbg_word := issuedWord
   io.dbg_run  := runState.asUInt
@@ -488,5 +617,6 @@ class NpuProgramEngineFrontend(val K: Int = 32, val N: Int = 8, val W: Int = 16)
     // latched at session completion.
     0x40.U -> perfCycles,
     0x44.U -> perfMacs,
+    0x48.U -> Cat(0.U(16.W), entryPcReg),
   ))
 }

@@ -32,6 +32,7 @@ class FetchAbortHarness extends Module {
   eng.io.instr := 0.U
   eng.io.instr_valid := false.B
   eng.io.session_reset := io.session_reset
+  eng.io.seg_limit := VecInit(Seq.fill(5)(0xFFFFFFFFL.U))
   eng.io.dbg_vx_addr := 0.U
 
   // Direct instruction-line fill interface (frontend is not instantiated).

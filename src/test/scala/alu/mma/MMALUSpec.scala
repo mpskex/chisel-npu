@@ -78,6 +78,10 @@ class MMALUSpec extends AnyFlatSpec {
                     dut.io.ctrl.busy.poke(true)
                 else
                     dut.io.ctrl.busy.poke(false)
+                // This spec drives the raw feed stream (mid-stream keep=0
+                // resets are NOT round ends), so the round-capture strobe is
+                // tied off.
+                dut.io.round_end.poke(false)
                 dut.io.ctrl.use_accum.poke(false)
 
                 // ideally, the array will give _n (diagnal) results per tick
@@ -189,6 +193,10 @@ class MMALUSpec extends AnyFlatSpec {
                     dut.io.ctrl.busy.poke(true)
                 else
                     dut.io.ctrl.busy.poke(false)
+                // This spec drives the raw feed stream (mid-stream keep=0
+                // resets are NOT round ends), so the round-capture strobe is
+                // tied off.
+                dut.io.round_end.poke(false)
                 dut.io.ctrl.use_accum.poke(false)
 
                 // ideally, the array will give _n (diagnal) results per tick
@@ -296,6 +304,10 @@ class MMALUSpec extends AnyFlatSpec {
                 }
                 else {
                     dut.io.ctrl.busy.poke(false)
+                // This spec drives the raw feed stream (mid-stream keep=0
+                // resets are NOT round ends), so the round-capture strobe is
+                // tied off.
+                dut.io.round_end.poke(false)
                     dut.io.ctrl.use_accum.poke(false)
                 }
 
@@ -417,6 +429,10 @@ class MMALUSpec extends AnyFlatSpec {
                     dut.io.ctrl.busy.poke(true)
                 else
                     dut.io.ctrl.busy.poke(false)
+                // This spec drives the raw feed stream (mid-stream keep=0
+                // resets are NOT round ends), so the round-capture strobe is
+                // tied off.
+                dut.io.round_end.poke(false)
                 dut.io.ctrl.use_accum.poke(true)
 
                 // ideally, the array will give _n (diagnal) results per tick
